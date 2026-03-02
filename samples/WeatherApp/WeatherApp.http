@@ -122,7 +122,7 @@ Authorization: Bearer {{token}}
 
 # FOR JSON — server-side JSON (mirrors JsonStreamForjson.razor)
 # SQL must include FOR JSON PATH or FOR JSON AUTO
-GET {{baseUrl}}/sql/for-json?sql=SELECT TOP 200 * FROM Products FOR JSON PATH
+GET {{baseUrl}}/sql/for-json?sql=SELECT TOP 200 * FROM Stock FOR JSON PATH
 Authorization: Bearer {{token}}
 
 ###

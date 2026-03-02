@@ -1,21 +1,22 @@
 using CosmoApiServer.Core.Hosting;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using WeatherApp.Services;
 
-const string connectionString =
-    "Server=randa.iserveus.com;Database=Randa1;User Id=sa;Password=aBCD111;TrustServerCertificate=true";
+var config = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .Build();
+
+var port = config.GetValue<int>("Server:Port", 8080);
+var connectionString = config.GetConnectionString("MsSql")
+    ?? throw new InvalidOperationException("ConnectionStrings:MsSql is missing from appsettings.json");
 
 var builder = CosmoWebApplicationBuilder.Create()
-    .ListenOn(8080)
+    .ListenOn(port)
     .UseLogging()
     .UseCors()
-    .UseJwtAuthentication(opts =>
-    {
-        opts.Secret = "super-secret-key-change-in-production-32chars!";
-        opts.Issuer = "WeatherApp";
-        opts.Audience = "WeatherApp";
-        opts.ExpiryMinutes = 60;
-    })
+    .UseJwtAuthentication(opts => config.GetSection("Jwt").Bind(opts))
     .AddControllers();
 
 builder.Services.AddSingleton<IWeatherService, WeatherService>();
