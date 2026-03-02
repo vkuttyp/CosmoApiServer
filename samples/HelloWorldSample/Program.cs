@@ -1,7 +1,7 @@
 using CosmoApiServer.Core.Hosting;
 
 var app = CosmoWebApplicationBuilder.Create()
-    .ListenOn(5000)
+    .ListenOn(8080)
     .UseLogging()
     .UseCors()
     .AddControllers()          // scans this assembly for controllers
