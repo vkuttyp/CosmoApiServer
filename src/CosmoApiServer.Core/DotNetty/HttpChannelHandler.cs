@@ -50,7 +50,14 @@ internal sealed class HttpChannelHandler : SimpleChannelInboundHandler<IFullHttp
             response.WriteText($"Internal Server Error: {ex.Message}");
         }
 
-        // Write DotNetty response
+        // Chunked streaming response (IAsyncEnumerable<T> actions)
+        if (httpContext.ChunkedBodyWriter is not null)
+        {
+            await httpContext.ChunkedBodyWriter(ctx);
+            return;
+        }
+
+        // Buffered response (standard actions)
         var body = Unpooled.WrappedBuffer(response.Body);
         var nettyResponse = new DefaultFullHttpResponse(
             HttpVersion.Http11,

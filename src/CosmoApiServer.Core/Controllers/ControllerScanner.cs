@@ -76,15 +76,27 @@ public static class ControllerScanner
                 // Invoke action
                 var result = capturedMethod.Invoke(controller, parameters);
 
-                // Await if Task/Task<T>
+                // Await Task / unwrap Task<T> result
+                object? returnedResult = result;
                 if (result is Task task)
+                {
                     await task;
+                    var taskType = task.GetType();
+                    returnedResult = taskType.IsGenericType
+                        ? taskType.GetProperty("Result")!.GetValue(task)
+                        : null;
+                }
 
-                // Execute IActionResult if returned
-                var returnedResult = result;
-                if (result is Task<IActionResult> taskOfResult)
-                    returnedResult = await taskOfResult;
+                // IAsyncEnumerable<T> → chunked streaming response
+                var streamWriter = DotNetty.ChunkedResponseHelper.TryCreateStreamWriter(
+                    returnedResult, ctx.Response.StatusCode);
+                if (streamWriter is not null)
+                {
+                    ctx.ChunkedBodyWriter = streamWriter;
+                    return;
+                }
 
+                // IActionResult → buffered response
                 if (returnedResult is IActionResult actionResult)
                     await actionResult.ExecuteAsync(ctx.Response);
             };

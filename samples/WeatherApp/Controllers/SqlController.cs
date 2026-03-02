@@ -10,10 +10,10 @@ namespace WeatherApp.Controllers;
 [Authorize]
 public class SqlController(SqlService sqlService) : ControllerBase
 {
-    // ── GET /sql/query?sql=SELECT TOP 10 * FROM sys.objects ───────────────
+    // -- GET /sql/query?sql=SELECT TOP 10 * FROM sys.objects --
     /// <summary>
-    /// Executes any SELECT and returns results as a JSON array of objects.
-    /// Mirrors Query.razor — uses QueryStreamAsync row-by-row.
+    /// Executes any SELECT and returns all rows buffered as a JSON array.
+    /// Suitable for small result sets that need a row count.
     /// </summary>
     [HttpGet("query")]
     public async Task<IActionResult> Query([FromQuery] string sql)
@@ -35,61 +35,44 @@ public class SqlController(SqlService sqlService) : ControllerBase
         return Ok(new { rowCount = rows.Count, rows });
     }
 
-    // ── GET /sql/json-stream?sql=SELECT TOP 200 * FROM AccountTrans ──────
+    // -- GET /sql/stream?sql=SELECT * FROM AccountTrans --
     /// <summary>
-    /// Executes a SELECT and serializes each row to a JSON object (client-side).
-    /// Mirrors JsonStream.razor — plain SELECT, no FOR JSON needed.
+    /// Streams each row as a JSON chunk the instant it arrives from SQL Server.
+    /// HTTP chunked transfer encoding -- zero buffering. Ideal for large result sets.
     /// </summary>
-    [HttpGet("json-stream")]
-    public async Task<IActionResult> JsonStream([FromQuery] string sql)
+    [HttpGet("stream")]
+    public IAsyncEnumerable<Dictionary<string, object?>> Stream([FromQuery] string sql)
+        => StreamRowsAsync(sql);
+
+    private async IAsyncEnumerable<Dictionary<string, object?>> StreamRowsAsync(string sql)
     {
-        if (string.IsNullOrWhiteSpace(sql))
-            return BadRequest("Query parameter 'sql' is required.");
-
         await using var conn = await sqlService.OpenAsync();
-
-        var rows = new List<Dictionary<string, object?>>();
-        bool columnsWritten = false;
-        string[]? columns = null;
-
         await foreach (var row in conn.QueryStreamAsync(sql))
         {
-            if (!columnsWritten)
-            {
-                columns = row.Columns.Select(c => c.Name).ToArray();
-                columnsWritten = true;
-            }
-
             var obj = new Dictionary<string, object?>(row.ColumnCount);
             for (int i = 0; i < row.ColumnCount; i++)
-                obj[columns![i]] = SqlValueToClr(row.Values[i]);
-            rows.Add(obj);
+                obj[row.Columns[i].Name] = SqlValueToClr(row.Values[i]);
+            yield return obj;
         }
-
-        return Ok(new { rowCount = rows.Count, rows });
     }
 
-    // ── GET /sql/for-json?sql=SELECT TOP 200 * FROM Products FOR JSON PATH ─
+    // -- GET /sql/for-json?sql=SELECT * FROM Products FOR JSON PATH --
     /// <summary>
-    /// Executes a FOR JSON query and streams pre-serialized JSON objects.
-    /// Mirrors JsonStreamForjson.razor — SQL must include FOR JSON PATH/AUTO.
+    /// Executes a FOR JSON query and streams pre-serialized JSON objects as they arrive.
+    /// HTTP chunked transfer encoding. SQL must include FOR JSON PATH or FOR JSON AUTO.
     /// </summary>
     [HttpGet("for-json")]
-    public async Task<IActionResult> ForJson([FromQuery] string sql)
+    public IAsyncEnumerable<JsonElement> ForJson([FromQuery] string sql)
+        => ForJsonStreamAsync(sql);
+
+    private async IAsyncEnumerable<JsonElement> ForJsonStreamAsync(string sql)
     {
-        if (string.IsNullOrWhiteSpace(sql))
-            return BadRequest("Query parameter 'sql' is required. Include FOR JSON PATH or FOR JSON AUTO.");
-
         await using var conn = await sqlService.OpenAsync();
-
-        var elements = new List<JsonElement>();
         await foreach (var element in conn.QueryJsonStreamAsync(sql))
-            elements.Add(element.Clone());
-
-        return Ok(new { rowCount = elements.Count, rows = elements });
+            yield return element;
     }
 
-    // ── Helpers ────────────────────────────────────────────────────────────
+    // -- Helpers --
 
     private static object? SqlValueToClr(SqlValue v) => v switch
     {
