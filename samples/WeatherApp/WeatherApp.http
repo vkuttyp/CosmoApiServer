@@ -1,22 +1,14 @@
-### WeatherApp — CosmoApiServer
-### Works with: VS Code REST Client, JetBrains Rider/IntelliJ, Visual Studio
-###
-### Quick start:
-###   1. Start the server: dotnet run --project samples/WeatherApp
-###   2. Send "Login (admin)" — copy the token from the response
-###   3. Paste it into @token below
-###   4. Send any other request
+### WeatherApp — REST Client file (VS Code, Rider, Visual Studio)
 
 @baseUrl = http://localhost:8080
 @contentType = application/json
+@token = <paste-token-here>
 
-# After running Login, paste the returned token here:
-@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoiYWRtaW4iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBZG1pbiIsInN1YiI6ImFkbWluIiwibmJmIjoxNzcyNDg2MTcyLCJleHAiOjE3NzI0ODk3NzIsImlzcyI6IldlYXRoZXJBcHAiLCJhdWQiOiJXZWF0aGVyQXBwIn0.OswtgHS52Qt-6Sk9CFZ38r2UXm0kd1eeE42qoo2OHfk
+# ─────────────────────────────────────────────────────────────
+# AUTH
+# ─────────────────────────────────────────────────────────────
 
-
-### ─── AUTH ──────────────────────────────────────────────────────────────────
-
-# @name login
+### Login — returns JWT token
 POST {{baseUrl}}/auth/login
 Content-Type: {{contentType}}
 
@@ -27,114 +19,86 @@ Content-Type: {{contentType}}
 
 ###
 
-# @name loginViewer
-POST {{baseUrl}}/auth/login
-Content-Type: {{contentType}}
-
-{
-  "username": "viewer",
-  "password": "viewer123"
-}
-
-###
-
-# Login — invalid credentials (expect 401)
-POST {{baseUrl}}/auth/login
-Content-Type: {{contentType}}
-
-{
-  "username": "admin",
-  "password": "wrongpassword"
-}
-
-###
-
-# Get current authenticated user
+### Current user
 GET {{baseUrl}}/auth/me
 Authorization: Bearer {{token}}
 
-###
+# ─────────────────────────────────────────────────────────────
+# WEATHER
+# ─────────────────────────────────────────────────────────────
 
-### ─── WEATHER ────────────────────────────────────────────────────────────────
-
-# Get all forecasts
+### All forecasts
 GET {{baseUrl}}/weather
 Authorization: Bearer {{token}}
 
 ###
 
-# Get forecast by ID
+### Single forecast
 GET {{baseUrl}}/weather/1
 Authorization: Bearer {{token}}
 
 ###
 
-# Get forecast by ID — not found (expect 404)
-GET {{baseUrl}}/weather/9999
-Authorization: Bearer {{token}}
-
-###
-
-# Create a new forecast
+### Create forecast
 POST {{baseUrl}}/weather
 Content-Type: {{contentType}}
 Authorization: Bearer {{token}}
 
 {
-  "date": "2026-06-01",
-  "temperatureC": 28,
-  "summary": "Sunny"
+  "date": "2026-03-10",
+  "temperatureC": 22,
+  "summary": "Warm and sunny"
 }
 
 ###
 
-# Delete a forecast
+### Delete forecast
 DELETE {{baseUrl}}/weather/1
 Authorization: Bearer {{token}}
 
-###
+# ─────────────────────────────────────────────────────────────
+# PRODUCTS  (IAsyncEnumerable — HTTP chunked transfer)
+# ─────────────────────────────────────────────────────────────
 
-# Get all forecasts — no token (expect 401)
-GET {{baseUrl}}/weather
-
-###
-
-### ─── SQL (mirrors Blazor test pages) ───────────────────────────────────────
-
-# Query — stream rows as JSON (mirrors Query.razor)
-# Uses sys.objects (built-in SQL Server table, always available)
-GET {{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM sys.objects
+### Stream all products
+GET {{baseUrl}}/products
 Authorization: Bearer {{token}}
 
 ###
 
-# Query — AccountTrans table (mirrors Query.razor)
-GET {{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM AccountTrans
+### Stream products by category
+GET {{baseUrl}}/products/category/1
 Authorization: Bearer {{token}}
 
 ###
 
-# JSON Stream — serialize rows client-side (mirrors JsonStream.razor)
-GET {{baseUrl}}/sql/json-stream?sql=SELECT TOP 200 * FROM AccountTrans
+### Stream enriched products (10% discount applied server-side)
+GET {{baseUrl}}/products/enriched
+Authorization: Bearer {{token}}
+
+# ─────────────────────────────────────────────────────────────
+# ACCOUNT TRANSACTIONS  (IAsyncEnumerable — HTTP chunked transfer)
+# ─────────────────────────────────────────────────────────────
+
+### Stream all transactions (TOP 200)
+GET {{baseUrl}}/account-trans
 Authorization: Bearer {{token}}
 
 ###
 
-# FOR JSON — server-side JSON (mirrors JsonStreamForjson.razor)
-# SQL must include FOR JSON PATH or FOR JSON AUTO
-GET {{baseUrl}}/sql/for-json?sql=SELECT TOP 200 * FROM Stock FOR JSON PATH
+### Stream transactions by account number
+GET {{baseUrl}}/account-trans/account/ACC001
 Authorization: Bearer {{token}}
 
 ###
 
-# SQL — no token (expect 401)
-GET {{baseUrl}}/sql/query?sql=SELECT TOP 10 * FROM sys.objects
+### Stream transactions with running total (enriched)
+GET {{baseUrl}}/account-trans/enriched
+Authorization: Bearer {{token}}
 
-###
+# ─────────────────────────────────────────────────────────────
+# HEALTH
+# ─────────────────────────────────────────────────────────────
 
-### ─── HEALTH ─────────────────────────────────────────────────────────────────
-
-# Health check (no token required)
+### Health check
 GET {{baseUrl}}/health
-
-###
