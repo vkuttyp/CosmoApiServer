@@ -1,0 +1,107 @@
+### WeatherApp — CosmoApiServer
+### Works with: VS Code REST Client, JetBrains Rider/IntelliJ, Visual Studio
+###
+### Quick start:
+###   1. Start the server: dotnet run --project samples/WeatherApp
+###   2. Send "Login (admin)" — copy the token from the response
+###   3. Paste it into @token below
+###   4. Send any other request
+
+@baseUrl = http://localhost:8080
+@contentType = application/json
+
+# After running Login, paste the returned token here:
+@token = 
+
+
+### ─── AUTH ──────────────────────────────────────────────────────────────────
+
+# @name login
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "admin",
+  "password": "admin123"
+}
+
+###
+
+# @name loginViewer
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "viewer",
+  "password": "viewer123"
+}
+
+###
+
+# Login — invalid credentials (expect 401)
+POST {{baseUrl}}/auth/login
+Content-Type: {{contentType}}
+
+{
+  "username": "admin",
+  "password": "wrongpassword"
+}
+
+###
+
+# Get current authenticated user
+GET {{baseUrl}}/auth/me
+Authorization: Bearer {{token}}
+
+###
+
+### ─── WEATHER ────────────────────────────────────────────────────────────────
+
+# Get all forecasts
+GET {{baseUrl}}/weather
+Authorization: Bearer {{token}}
+
+###
+
+# Get forecast by ID
+GET {{baseUrl}}/weather/1
+Authorization: Bearer {{token}}
+
+###
+
+# Get forecast by ID — not found (expect 404)
+GET {{baseUrl}}/weather/9999
+Authorization: Bearer {{token}}
+
+###
+
+# Create a new forecast
+POST {{baseUrl}}/weather
+Content-Type: {{contentType}}
+Authorization: Bearer {{token}}
+
+{
+  "date": "2026-06-01",
+  "temperatureC": 28,
+  "summary": "Sunny"
+}
+
+###
+
+# Delete a forecast
+DELETE {{baseUrl}}/weather/1
+Authorization: Bearer {{token}}
+
+###
+
+# Get all forecasts — no token (expect 401)
+GET {{baseUrl}}/weather
+
+###
+
+### ─── HEALTH ─────────────────────────────────────────────────────────────────
+
+# Health check (no token required)
+GET {{baseUrl}}/health
+
+###
