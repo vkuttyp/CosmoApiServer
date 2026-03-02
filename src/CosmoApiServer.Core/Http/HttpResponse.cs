@@ -5,6 +5,10 @@ namespace CosmoApiServer.Core.Http;
 
 public sealed class HttpResponse
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+    };
     public int StatusCode { get; set; } = 200;
     public string ReasonPhrase { get; set; } = "OK";
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
@@ -29,7 +33,7 @@ public sealed class HttpResponse
     public void WriteJson<T>(T value)
     {
         Headers["Content-Type"] = "application/json; charset=utf-8";
-        Write(JsonSerializer.SerializeToUtf8Bytes(value));
+        Write(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions));
     }
 
     public bool IsStarted => _body is not null;

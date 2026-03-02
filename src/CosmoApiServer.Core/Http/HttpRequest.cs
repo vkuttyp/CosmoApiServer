@@ -1,7 +1,13 @@
+using System.Text.Json;
+
 namespace CosmoApiServer.Core.Http;
 
 public sealed class HttpRequest
 {
+    private static readonly JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
     public HttpMethod Method { get; init; }
     public string Path { get; init; } = "/";
     public string QueryString { get; init; } = string.Empty;
@@ -14,6 +20,6 @@ public sealed class HttpRequest
 
     public T? ReadJson<T>() =>
         Body.Length > 0
-            ? System.Text.Json.JsonSerializer.Deserialize<T>(Body)
+            ? System.Text.Json.JsonSerializer.Deserialize<T>(Body, JsonOptions)
             : default;
 }

@@ -166,8 +166,13 @@ public static class ControllerScanner
 // Extension on HttpRequest for deserializing to a runtime type
 internal static class HttpRequestExtensions
 {
+    private static readonly System.Text.Json.JsonSerializerOptions JsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true
+    };
+
     public static object? ReadJson(this HttpRequest req, Type type) =>
         req.Body.Length > 0
-            ? System.Text.Json.JsonSerializer.Deserialize(req.Body, type)
+            ? System.Text.Json.JsonSerializer.Deserialize(req.Body, type, JsonOptions)
             : null;
 }
