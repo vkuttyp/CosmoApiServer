@@ -8,14 +8,14 @@ using WeatherApp.Models;
 namespace WeatherApp.Controllers;
 
 [Route("products")]
-[Authorize]
+// [Authorize]
 public class ProductsController(MsSqlConnectionPool pool) : ControllerBase
 {
     // Each product streams to the client the instant its FOR JSON PATH chunk arrives
     [HttpGet]
     public IAsyncEnumerable<Product> GetAll() =>
         pool.QueryJsonStreamAsync<Product>(
-            "SELECT Id, Name, Price FROM Products FOR JSON PATH");
+            "SELECT ItemID as Id, ItemName as Name, SalesPrice as Price FROM Stock FOR JSON PATH");
 
     // With parameters
     [HttpGet("category/{id}")]
