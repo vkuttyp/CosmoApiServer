@@ -6,6 +6,7 @@ using WeatherApp.Services;
 namespace WeatherApp.Controllers;
 
 [Route("weather")]
+[Authorize]
 public class WeatherController(IWeatherService weatherService) : ControllerBase
 {
     /// GET /weather — list all forecasts

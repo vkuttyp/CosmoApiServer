@@ -1,4 +1,5 @@
 using System.Reflection;
+using CosmoApiServer.Core.Auth;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -51,6 +52,23 @@ public sealed class CosmoWebApplicationBuilder
     {
         _middlewarePipeline.UseInstance(middleware);
         return this;
+    }
+
+    // ── Authentication ─────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseJwtAuthentication(JwtOptions options)
+    {
+        _services.AddSingleton(options);
+        _services.AddSingleton<JwtService>();
+        _middlewarePipeline.UseInstance(new JwtMiddleware());
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseJwtAuthentication(Action<JwtOptions> configure)
+    {
+        var options = new JwtOptions();
+        configure(options);
+        return UseJwtAuthentication(options);
     }
 
     // ── Controllers ────────────────────────────────────────────────────────

@@ -54,6 +54,18 @@ public static class ControllerScanner
             var capturedMethod = method;
             RequestDelegate handler = async ctx =>
             {
+                // Authorization check: [Authorize] on controller or method, unless [AllowAnonymous] on method
+                bool requiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null
+                                    || capturedMethod.GetCustomAttribute<AuthorizeAttribute>() is not null;
+                bool allowAnonymous = capturedMethod.GetCustomAttribute<AllowAnonymousAttribute>() is not null;
+
+                if (requiresAuth && !allowAnonymous && ctx.User is null)
+                {
+                    ctx.Response.StatusCode = 401;
+                    ctx.Response.WriteJson(new { error = "Unauthorized", message = "A valid Bearer token is required." });
+                    return;
+                }
+
                 // Resolve controller from DI scope
                 var controller = (ControllerBase)ActivatorUtilities.CreateInstance(ctx.RequestServices, controllerType);
                 controller.HttpContext = ctx;
