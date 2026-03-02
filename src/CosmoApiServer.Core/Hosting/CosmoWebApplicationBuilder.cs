@@ -1,0 +1,99 @@
+using System.Reflection;
+using CosmoApiServer.Core.Middleware;
+using CosmoApiServer.Core.Routing;
+using Microsoft.Extensions.DependencyInjection;
+
+namespace CosmoApiServer.Core.Hosting;
+
+/// <summary>
+/// Builder for CosmoWebApplication. Analogous to WebApplicationBuilder in ASP.NET.
+/// </summary>
+public sealed class CosmoWebApplicationBuilder
+{
+    private readonly IServiceCollection _services = new ServiceCollection();
+    private readonly MiddlewarePipeline _middlewarePipeline = new();
+    private readonly List<Assembly> _controllerAssemblies = [];
+    private readonly ServerOptions _options = new();
+
+    public IServiceCollection Services => _services;
+    public ServerOptions ServerOptions => _options;
+
+    public static CosmoWebApplicationBuilder Create() => new();
+
+    // ── Middleware ─────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseLogging()
+    {
+        _middlewarePipeline.UseInstance(new LoggingMiddleware());
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseCors(Action<CorsOptions>? configure = null)
+    {
+        var opts = new CorsOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new CorsMiddleware(opts));
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
+    {
+        _services.AddTransient(typeof(T));
+        _middlewarePipeline.Use(next => ctx =>
+        {
+            var instance = (T)ctx.RequestServices.GetRequiredService(typeof(T));
+            return instance.InvokeAsync(ctx, next);
+        });
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseMiddleware(IMiddleware middleware)
+    {
+        _middlewarePipeline.UseInstance(middleware);
+        return this;
+    }
+
+    // ── Controllers ────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddControllers()
+    {
+        // Scan the calling assembly (entry point) automatically
+        var callingAssembly = Assembly.GetCallingAssembly();
+        if (!_controllerAssemblies.Contains(callingAssembly))
+            _controllerAssemblies.Add(callingAssembly);
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddControllersFromAssembly(Assembly assembly)
+    {
+        if (!_controllerAssemblies.Contains(assembly))
+            _controllerAssemblies.Add(assembly);
+        return this;
+    }
+
+    // ── Server config ──────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder ListenOn(int port)
+    {
+        _options.Port = port;
+        return this;
+    }
+
+    // ── Build ──────────────────────────────────────────────────────────────
+
+    public CosmoWebApplication Build()
+    {
+        // Register RouteTable in DI
+        var routeTable = new RouteTable();
+        _services.AddSingleton(routeTable);
+
+        var provider = _services.BuildServiceProvider();
+
+        return new CosmoWebApplication(
+            provider,
+            _middlewarePipeline,
+            routeTable,
+            _controllerAssemblies,
+            _options);
+    }
+}
