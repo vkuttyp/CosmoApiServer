@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
@@ -18,6 +19,11 @@ internal static class ChunkedResponseHelper
         PropertyNamingPolicy = JsonNamingPolicy.CamelCase
     };
 
+    // Cache MakeGenericMethod per element type — MakeGenericMethod is expensive on first call
+    private static readonly MethodInfo CreateTypedWriterDef =
+        typeof(ChunkedResponseHelper).GetMethod(nameof(CreateTypedWriter), BindingFlags.NonPublic | BindingFlags.Static)!;
+    private static readonly ConcurrentDictionary<Type, MethodInfo> MethodCache = new();
+
     /// <summary>
     /// If <paramref name="result"/> implements IAsyncEnumerable&lt;T&gt;, returns a writer delegate
     /// that streams it as a JSON array using HTTP chunked transfer encoding.
@@ -30,10 +36,7 @@ internal static class ChunkedResponseHelper
         if (!TryGetAsyncEnumerableElementType(result.GetType(), out var elemType))
             return null;
 
-        var factory = typeof(ChunkedResponseHelper)
-            .GetMethod(nameof(CreateTypedWriter), BindingFlags.NonPublic | BindingFlags.Static)!
-            .MakeGenericMethod(elemType!);
-
+        var factory = MethodCache.GetOrAdd(elemType!, t => CreateTypedWriterDef.MakeGenericMethod(t));
         return (Func<object, Task>)factory.Invoke(null, [result, statusCode])!;
     }
 

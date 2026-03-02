@@ -1,3 +1,4 @@
+using System.Linq.Expressions;
 using System.Reflection;
 using CosmoApiServer.Core.Controllers.Attributes;
 using CosmoApiServer.Core.Http;
@@ -28,10 +29,30 @@ public static class ControllerScanner
         }
     }
 
+    // ── Per-action precomputed descriptor (built once at startup) ────────────
+
+    private sealed class ActionDescriptor
+    {
+        /// <summary>Compiled delegate: avoids MethodInfo.Invoke per request.</summary>
+        public required Func<object, object?[], object?> Invoker { get; init; }
+
+        /// <summary>Per-parameter resolvers built from binding attributes — no reflection at request time.</summary>
+        public required Func<HttpContext, object?>[] Resolvers { get; init; }
+
+        /// <summary>Compiled Task&lt;T&gt;.Result extractor, or null for non-generic Task / sync methods.</summary>
+        public required Func<Task, object?>? TaskResultExtractor { get; init; }
+
+        /// <summary>Precomputed auth requirements.</summary>
+        public required bool RequiresAuth { get; init; }
+        public required bool AllowAnonymous { get; init; }
+    }
+
+    // ── Registration ─────────────────────────────────────────────────────────
+
     private static void RegisterController(Type controllerType, RouteTable routeTable, IServiceProvider services)
     {
-        // Controller-level route prefix (optional)
         var routePrefix = controllerType.GetCustomAttribute<RouteAttribute>()?.Template ?? string.Empty;
+        bool controllerRequiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null;
 
         foreach (var method in controllerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -48,18 +69,22 @@ public static class ControllerScanner
                 _                   => Http.HttpMethod.GET
             };
 
-            // Combine prefix + verb template
             var template = CombineTemplates(routePrefix, verbAttr.Template ?? string.Empty);
 
-            var capturedMethod = method;
+            // ── Build descriptor ONCE at startup (all reflection happens here) ──
+            var desc = new ActionDescriptor
+            {
+                Invoker             = CompileInvoker(method),
+                Resolvers           = method.GetParameters().Select(BuildResolver).ToArray(),
+                TaskResultExtractor = BuildTaskResultExtractor(method.ReturnType),
+                RequiresAuth        = controllerRequiresAuth || method.GetCustomAttribute<AuthorizeAttribute>() is not null,
+                AllowAnonymous      = method.GetCustomAttribute<AllowAnonymousAttribute>() is not null,
+            };
+
             RequestDelegate handler = async ctx =>
             {
-                // Authorization check: [Authorize] on controller or method, unless [AllowAnonymous] on method
-                bool requiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null
-                                    || capturedMethod.GetCustomAttribute<AuthorizeAttribute>() is not null;
-                bool allowAnonymous = capturedMethod.GetCustomAttribute<AllowAnonymousAttribute>() is not null;
-
-                if (requiresAuth && !allowAnonymous && ctx.User is null)
+                // Auth check — no reflection, flags precomputed
+                if (desc.RequiresAuth && !desc.AllowAnonymous && ctx.User is null)
                 {
                     ctx.Response.StatusCode = 401;
                     ctx.Response.WriteJson(new { error = "Unauthorized", message = "A valid Bearer token is required." });
@@ -70,21 +95,20 @@ public static class ControllerScanner
                 var controller = (ControllerBase)ActivatorUtilities.CreateInstance(ctx.RequestServices, controllerType);
                 controller.HttpContext = ctx;
 
-                // Bind parameters
-                var parameters = BindParameters(capturedMethod, ctx);
+                // Bind parameters — precomputed resolvers, no attribute reflection
+                var args = new object?[desc.Resolvers.Length];
+                for (int i = 0; i < desc.Resolvers.Length; i++)
+                    args[i] = desc.Resolvers[i](ctx);
 
-                // Invoke action
-                var result = capturedMethod.Invoke(controller, parameters);
+                // Invoke action — compiled delegate, no MethodInfo.Invoke
+                var result = desc.Invoker(controller, args);
 
-                // Await Task / unwrap Task<T> result
+                // Unwrap Task / Task<T> — compiled extractor, no GetProperty reflection
                 object? returnedResult = result;
                 if (result is Task task)
                 {
                     await task;
-                    var taskType = task.GetType();
-                    returnedResult = taskType.IsGenericType
-                        ? taskType.GetProperty("Result")!.GetValue(task)
-                        : null;
+                    returnedResult = desc.TaskResultExtractor?.Invoke(task);
                 }
 
                 // IAsyncEnumerable<T> → chunked streaming response
@@ -105,6 +129,92 @@ public static class ControllerScanner
         }
     }
 
+    // ── Startup-time compilation helpers ─────────────────────────────────────
+
+    /// <summary>
+    /// Compiles a strongly-typed delegate for the action method.
+    /// ~50x faster than MethodInfo.Invoke at request time.
+    /// </summary>
+    private static Func<object, object?[], object?> CompileInvoker(MethodInfo method)
+    {
+        var instanceParam = Expression.Parameter(typeof(object), "instance");
+        var argsParam     = Expression.Parameter(typeof(object?[]), "args");
+
+        var argExprs = method.GetParameters().Select((p, i) =>
+            (Expression)Expression.Convert(
+                Expression.ArrayIndex(argsParam, Expression.Constant(i)),
+                p.ParameterType)).ToArray();
+
+        var call = Expression.Call(
+            Expression.Convert(instanceParam, method.DeclaringType!),
+            method,
+            argExprs);
+
+        // Void methods need a null return so the delegate signature is uniform
+        Expression body = method.ReturnType == typeof(void)
+            ? Expression.Block(call, Expression.Constant(null, typeof(object)))
+            : Expression.Convert(call, typeof(object));
+
+        return Expression.Lambda<Func<object, object?[], object?>>(body, instanceParam, argsParam).Compile();
+    }
+
+    /// <summary>
+    /// Compiles a Task&lt;T&gt;.Result extractor so we never call GetProperty/GetValue per request.
+    /// Returns null for non-generic Task or synchronous return types.
+    /// </summary>
+    private static Func<Task, object?>? BuildTaskResultExtractor(Type returnType)
+    {
+        if (!returnType.IsGenericType) return null;
+        if (returnType.GetGenericTypeDefinition() != typeof(Task<>)) return null;
+
+        var taskParam  = Expression.Parameter(typeof(Task), "task");
+        var resultProp = returnType.GetProperty("Result")!;
+        var access     = Expression.Property(Expression.Convert(taskParam, returnType), resultProp);
+
+        return Expression.Lambda<Func<Task, object?>>(
+            Expression.Convert(access, typeof(object)), taskParam).Compile();
+    }
+
+    /// <summary>
+    /// Reads binding attributes once at startup and returns a resolver lambda
+    /// that performs zero reflection at request time.
+    /// </summary>
+    private static Func<HttpContext, object?> BuildResolver(ParameterInfo param)
+    {
+        var type = param.ParameterType;
+        var name = param.Name!;
+
+        // [FromBody]
+        if (param.GetCustomAttribute<FromBodyAttribute>() is not null)
+            return ctx => ctx.Request.ReadJson(type);
+
+        // [FromRoute]
+        if (param.GetCustomAttribute<FromRouteAttribute>() is { } fromRoute)
+        {
+            var key = fromRoute.Name ?? name;
+            return ctx => ctx.Request.RouteValues.TryGetValue(key, out var v) ? Convert(v, type) : null;
+        }
+
+        // [FromQuery]
+        if (param.GetCustomAttribute<FromQueryAttribute>() is { } fromQuery)
+        {
+            var key = fromQuery.Name ?? name;
+            return ctx => ctx.Request.Query.TryGetValue(key, out var v) ? Convert(v, type) : null;
+        }
+
+        // HttpContext injection
+        if (type == typeof(HttpContext))
+            return ctx => ctx;
+
+        // Implicit: route by name → query by name → DI (runtime dictionary lookup only, no reflection)
+        return ctx =>
+        {
+            if (ctx.Request.RouteValues.TryGetValue(name, out var rv)) return Convert(rv, type);
+            if (ctx.Request.Query.TryGetValue(name, out var qv))       return Convert(qv, type);
+            return ctx.RequestServices.GetService(type);
+        };
+    }
+
     private static string CombineTemplates(string prefix, string template)
     {
         prefix = prefix.Trim('/');
@@ -116,58 +226,10 @@ public static class ControllerScanner
                 : $"/{template}";
     }
 
-    private static object?[] BindParameters(MethodInfo method, HttpContext ctx)
-    {
-        var parameters = method.GetParameters();
-        var values = new object?[parameters.Length];
-
-        for (int i = 0; i < parameters.Length; i++)
-        {
-            var param = parameters[i];
-            var paramType = param.ParameterType;
-
-            if (param.GetCustomAttribute<FromBodyAttribute>() is not null)
-            {
-                values[i] = ctx.Request.ReadJson(paramType);
-            }
-            else if (param.GetCustomAttribute<FromRouteAttribute>() is { } fromRoute)
-            {
-                var key = fromRoute.Name ?? param.Name!;
-                values[i] = ctx.Request.RouteValues.TryGetValue(key, out var rv) ? Convert(rv, paramType) : null;
-            }
-            else if (param.GetCustomAttribute<FromQueryAttribute>() is { } fromQuery)
-            {
-                var key = fromQuery.Name ?? param.Name!;
-                values[i] = ctx.Request.Query.TryGetValue(key, out var qv) ? Convert(qv, paramType) : null;
-            }
-            else if (paramType == typeof(HttpContext))
-            {
-                values[i] = ctx;
-            }
-            else if (ctx.Request.RouteValues.TryGetValue(param.Name!, out var routeVal))
-            {
-                // Implicit route binding by parameter name
-                values[i] = Convert(routeVal, paramType);
-            }
-            else if (ctx.Request.Query.TryGetValue(param.Name!, out var queryVal))
-            {
-                // Implicit query binding by parameter name
-                values[i] = Convert(queryVal, paramType);
-            }
-            else
-            {
-                // Try DI
-                values[i] = ctx.RequestServices.GetService(paramType);
-            }
-        }
-
-        return values;
-    }
-
     private static object? Convert(string value, Type targetType)
     {
         if (targetType == typeof(string)) return value;
-        if (targetType == typeof(int) || targetType == typeof(int?)) return int.Parse(value);
+        if (targetType == typeof(int)  || targetType == typeof(int?))  return int.Parse(value);
         if (targetType == typeof(long) || targetType == typeof(long?)) return long.Parse(value);
         if (targetType == typeof(bool) || targetType == typeof(bool?)) return bool.Parse(value);
         if (targetType == typeof(Guid) || targetType == typeof(Guid?)) return Guid.Parse(value);
