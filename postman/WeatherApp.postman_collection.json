@@ -224,6 +224,82 @@
       ]
     },
     {
+      "name": "SQL",
+      "item": [
+        {
+          "name": "Query — sys.objects (stream rows)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM sys.objects",
+              "host": ["{{baseUrl}}"],
+              "path": ["sql", "query"],
+              "query": [{ "key": "sql", "value": "SELECT TOP 100 * FROM sys.objects" }]
+            },
+            "description": "Mirrors Query.razor. Streams rows using QueryStreamAsync, returns JSON array."
+          }
+        },
+        {
+          "name": "Query — AccountTrans (stream rows)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM AccountTrans",
+              "host": ["{{baseUrl}}"],
+              "path": ["sql", "query"],
+              "query": [{ "key": "sql", "value": "SELECT TOP 100 * FROM AccountTrans" }]
+            },
+            "description": "Mirrors Query.razor with the AccountTrans table."
+          }
+        },
+        {
+          "name": "JSON Stream — AccountTrans",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sql/json-stream?sql=SELECT TOP 200 * FROM AccountTrans",
+              "host": ["{{baseUrl}}"],
+              "path": ["sql", "json-stream"],
+              "query": [{ "key": "sql", "value": "SELECT TOP 200 * FROM AccountTrans" }]
+            },
+            "description": "Mirrors JsonStream.razor. Serializes each row to a JSON object client-side."
+          }
+        },
+        {
+          "name": "FOR JSON — Products",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sql/for-json?sql=SELECT TOP 200 * FROM Products FOR JSON PATH",
+              "host": ["{{baseUrl}}"],
+              "path": ["sql", "for-json"],
+              "query": [{ "key": "sql", "value": "SELECT TOP 200 * FROM Products FOR JSON PATH" }]
+            },
+            "description": "Mirrors JsonStreamForjson.razor. Uses QueryJsonStreamAsync — SQL must include FOR JSON PATH or AUTO."
+          }
+        },
+        {
+          "name": "SQL — No Token (401)",
+          "request": {
+            "auth": { "type": "noauth" },
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/sql/query?sql=SELECT TOP 10 * FROM sys.objects",
+              "host": ["{{baseUrl}}"],
+              "path": ["sql", "query"],
+              "query": [{ "key": "sql", "value": "SELECT TOP 10 * FROM sys.objects" }]
+            },
+            "description": "Demonstrates 401 when no token is provided."
+          }
+        }
+      ]
+    },
+    {
       "name": "Health",
       "item": [
         {

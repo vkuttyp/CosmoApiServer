@@ -11,7 +11,7 @@
 @contentType = application/json
 
 # After running Login, paste the returned token here:
-@token = 
+@token = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJodHRwOi8vc2NoZW1hcy54bWxzb2FwLm9yZy93cy8yMDA1LzA1L2lkZW50aXR5L2NsYWltcy9uYW1lIjoiYWRtaW4iLCJodHRwOi8vc2NoZW1hcy5taWNyb3NvZnQuY29tL3dzLzIwMDgvMDYvaWRlbnRpdHkvY2xhaW1zL3JvbGUiOiJBZG1pbiIsInN1YiI6ImFkbWluIiwibmJmIjoxNzcyNDg2MTcyLCJleHAiOjE3NzI0ODk3NzIsImlzcyI6IldlYXRoZXJBcHAiLCJhdWQiOiJXZWF0aGVyQXBwIn0.OswtgHS52Qt-6Sk9CFZ38r2UXm0kd1eeE42qoo2OHfk
 
 
 ### ─── AUTH ──────────────────────────────────────────────────────────────────
@@ -96,6 +96,39 @@ Authorization: Bearer {{token}}
 
 # Get all forecasts — no token (expect 401)
 GET {{baseUrl}}/weather
+
+###
+
+### ─── SQL (mirrors Blazor test pages) ───────────────────────────────────────
+
+# Query — stream rows as JSON (mirrors Query.razor)
+# Uses sys.objects (built-in SQL Server table, always available)
+GET {{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM sys.objects
+Authorization: Bearer {{token}}
+
+###
+
+# Query — AccountTrans table (mirrors Query.razor)
+GET {{baseUrl}}/sql/query?sql=SELECT TOP 100 * FROM AccountTrans
+Authorization: Bearer {{token}}
+
+###
+
+# JSON Stream — serialize rows client-side (mirrors JsonStream.razor)
+GET {{baseUrl}}/sql/json-stream?sql=SELECT TOP 200 * FROM AccountTrans
+Authorization: Bearer {{token}}
+
+###
+
+# FOR JSON — server-side JSON (mirrors JsonStreamForjson.razor)
+# SQL must include FOR JSON PATH or FOR JSON AUTO
+GET {{baseUrl}}/sql/for-json?sql=SELECT TOP 200 * FROM Products FOR JSON PATH
+Authorization: Bearer {{token}}
+
+###
+
+# SQL — no token (expect 401)
+GET {{baseUrl}}/sql/query?sql=SELECT TOP 10 * FROM sys.objects
 
 ###
 

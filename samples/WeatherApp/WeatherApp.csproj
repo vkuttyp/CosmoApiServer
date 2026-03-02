@@ -13,4 +13,8 @@
     <ProjectReference Include="..\..\src\CosmoApiServer.Core\CosmoApiServer.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="CosmoSQLClient.MsSql" Version="1.4.6" />
+  </ItemGroup>
+
 </Project>
