@@ -25,7 +25,7 @@
 ```
 ┌─────────────────────────────────────────────────────┐
 │                   CosmoApiServer                    │
-│  (HTTP listener – DotNetty, port 8100 by default)  │
+│  (System.IO.Pipelines transport, port 8100)         │
 └──────────────────────┬──────────────────────────────┘
                        │ IMiddleware
                        ▼
