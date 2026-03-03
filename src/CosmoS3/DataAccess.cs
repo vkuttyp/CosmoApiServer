@@ -24,7 +24,7 @@ public class DataAccess
     {
         _Settings = settings ?? throw new ArgumentNullException(nameof(settings));
         var db = _Settings.Database;
-        conString = $"server={db.Hostname},{db.Port};database={db.DatabaseName};user id={db.Username};password={db.Password};TrustServerCertificate=true;";
+        conString = $"server={db.Hostname},{db.Port};database={db.DatabaseName};user id={db.Username};password={db.Password};TrustServerCertificate=true;Min Pool Size=5;Max Pool Size=50;Connect Timeout=10;";
     }
 
     static void InitConString()
@@ -33,7 +33,7 @@ public class DataAccess
         {
             _Settings = SerializationHelper.DeserializeJson<SettingsBase>(File.ReadAllText("./system.json"));
             var db = _Settings.Database;
-            conString = $"server={db.Hostname},{db.Port};database={db.DatabaseName};user id={db.Username};password={db.Password};TrustServerCertificate=true;";
+            conString = $"server={db.Hostname},{db.Port};database={db.DatabaseName};user id={db.Username};password={db.Password};TrustServerCertificate=true;Min Pool Size=5;Max Pool Size=50;Connect Timeout=10;";
         }
     }
     public static bool SaveObject(Bucket bucket, Obj obj, S3Logger log)
@@ -99,10 +99,10 @@ public class DataAccess
             cmd.Parameters.AddWithValue("@guide", bucket.GUID);
             con.Open();
             var reader = cmd.ExecuteReader();
-            if (reader.Rows.Count > 0)
+            if (reader.Read())
             {
-                ret.Objects = reader.Rows[0][0].AsInt() ?? 0;
-                ret.Bytes   = reader.Rows[0][1].AsInt() ?? 0;
+                ret.Objects = reader.IsDBNull(0) ? 0 : reader.GetInt32(0);
+                ret.Bytes   = reader.IsDBNull(1) ? 0 : reader.GetInt32(1);
             }
         }
         return ret;
