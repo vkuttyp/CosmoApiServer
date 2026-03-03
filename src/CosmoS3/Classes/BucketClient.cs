@@ -216,19 +216,19 @@ namespace CosmoS3.Classes
             return ret;
         }
 
-        internal Obj? GetObjectLatestMetadata(string key)
+        internal Obj GetObjectLatestMetadata(string key)
         { 
             if (String.IsNullOrEmpty(key)) throw new ArgumentNullException(nameof(key));
             return DataAccess.GetObjectLatestMetadata(_Bucket, key);
         }
 
-        internal Obj? GetObjectVersionMetadata(string key, long version = 1)
+        internal Obj GetObjectVersionMetadata(string key, long version = 1)
         { 
             if (String.IsNullOrEmpty(key)) throw new ArgumentNullException(nameof(key));
             return DataAccess.GetObjectVersionMetadata(_Bucket, key, version);
         }
 
-        internal Obj? GetObjectMetadataByGuid(string guid)
+        internal Obj GetObjectMetadataByGuid(string guid)
         { 
             if (String.IsNullOrEmpty(guid)) throw new ArgumentNullException(nameof(guid));
 

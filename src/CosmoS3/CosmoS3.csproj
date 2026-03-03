@@ -5,7 +5,8 @@
     <AssemblyName>CosmoS3</AssemblyName>
     <RootNamespace>CosmoS3</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+    <Nullable>disable</Nullable>
+    <NoWarn>$(NoWarn);CS8632</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>

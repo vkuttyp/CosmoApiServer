@@ -9,7 +9,7 @@ public class SettingsBase
     public bool ValidateSignatures { get; set; } = true;
 
     /// <summary>Base domain, if using virtual hosted-style URLs, e.g. "localhost".</summary>
-    public string? BaseDomain { get; set; } = null;
+    public string BaseDomain { get; set; } = null;
 
     /// <summary>API key header for admin API requests.</summary>
     public string HeaderApiKey

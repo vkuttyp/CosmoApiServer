@@ -220,7 +220,7 @@ public class DataAccess
     }
     public static bool DeleteObjectVersion(Bucket bucket, string key, long version, S3Logger logger, StorageDriverBase storage)
     {
-        Obj? obj = GetObjectVersionMetadata(bucket, key, version);
+        Obj obj = GetObjectVersionMetadata(bucket, key, version);
         if (obj == null)
         {
             logger.Debug("Delete unable to find key " + bucket.Name + "/" + key + " version " + version);
@@ -241,7 +241,7 @@ public class DataAccess
     }
     public static bool DeleteObjectVersionMetadata(Bucket bucket, string key, long version, S3Logger logger, StorageDriverBase storage)
     {
-        Obj? obj = GetObjectVersionMetadata(bucket, key, version);
+        Obj obj = GetObjectVersionMetadata(bucket, key, version);
         if (obj == null)
         {
             logger.Debug("Delete unable to find key " + bucket.Name + "/" + key + " version " + version);
@@ -386,7 +386,7 @@ public class DataAccess
 
         while (true)
         {
-            List<Obj>? tempObjects = GetObj(bucket.GUID, nextStartIndex, prefix, maxResults);
+            List<Obj> tempObjects = GetObj(bucket.GUID, nextStartIndex, prefix, maxResults);
 
             if (tempObjects == null || tempObjects.Count < 1)
             {

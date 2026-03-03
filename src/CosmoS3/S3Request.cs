@@ -114,7 +114,7 @@ public class S3Request
             else
             {
                 // V2: Expires is a Unix timestamp (seconds since epoch)
-                string? expiresStr = RetrieveQueryValue("expires");
+                string expiresStr = RetrieveQueryValue("expires");
                 if (!long.TryParse(expiresStr, out long expiresUnixSeconds)) return false;
                 return DateTimeOffset.UtcNow.ToUnixTimeSeconds() > expiresUnixSeconds;
             }
@@ -332,7 +332,7 @@ public class S3Request
         // V4 presigned URL: credentials are in query parameters instead of Authorization header
         if (AccessKey == null && QuerystringExists("X-Amz-Credential"))
         {
-            string? cred = RetrieveQueryValue("X-Amz-Credential");
+            string cred = RetrieveQueryValue("X-Amz-Credential");
             if (!string.IsNullOrEmpty(cred))
             {
                 string[] parts = cred.Split('/');

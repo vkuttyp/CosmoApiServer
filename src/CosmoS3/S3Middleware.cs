@@ -525,7 +525,7 @@ public sealed class S3Middleware : IMiddleware
 
         if (objMeta == null)
         {
-            string? errorKey = config.ErrorDocument?.Key;
+            string errorKey = config.ErrorDocument?.Key;
             if (!string.IsNullOrEmpty(errorKey))
             {
                 var errorMeta = client.GetObjectLatestMetadata(errorKey);
