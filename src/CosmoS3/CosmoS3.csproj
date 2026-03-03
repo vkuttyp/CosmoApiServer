@@ -21,4 +21,11 @@
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.3" />
   </ItemGroup>
 
+  <ItemGroup>
+    <EmbeddedResource Include="..\..\data\schema\sqlite.sql"   LogicalName="CosmoS3.Schema.sqlite.sql"   />
+    <EmbeddedResource Include="..\..\data\schema\postgres.sql" LogicalName="CosmoS3.Schema.postgres.sql" />
+    <EmbeddedResource Include="..\..\data\schema\mysql.sql"    LogicalName="CosmoS3.Schema.mysql.sql"    />
+    <EmbeddedResource Include="..\..\data\schema\mssql.sql"    LogicalName="CosmoS3.Schema.mssql.sql"    />
+  </ItemGroup>
+
 </Project>

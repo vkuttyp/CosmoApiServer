@@ -1,3 +1,6 @@
+using System.IO;
+using System.Reflection;
+using System.Text.RegularExpressions;
 using CosmoSQLClient.Core;
 using CosmoSQLClient.MsSql;
 using CosmoSQLClient.Postgres;
@@ -54,6 +57,49 @@ public static class DatabaseFactory
         }
 
         return new S3Repository(db, tablePrefix);
+    }
+
+    /// <summary>
+    /// Applies the embedded schema SQL for the given database type (idempotent — uses CREATE IF NOT EXISTS / INSERT OR IGNORE).
+    /// Call once before starting the server to ensure tables and seed data exist.
+    /// </summary>
+    public static async Task EnsureSchemaAsync(DatabaseSettings settings, CancellationToken ct = default)
+    {
+        var type         = (settings.DatabaseType ?? "mssql").ToLowerInvariant().Trim();
+        var resourceName = $"CosmoS3.Schema.{type}.sql";
+
+        var assembly = typeof(DatabaseFactory).Assembly;
+        using var stream = assembly.GetManifestResourceStream(resourceName)
+            ?? throw new InvalidOperationException(
+                $"Embedded schema resource '{resourceName}' not found. Valid types: mssql, postgres, mysql, sqlite.");
+
+        string sql;
+        using (var reader = new StreamReader(stream))
+            sql = await reader.ReadToEndAsync(ct);
+
+        // Build a temporary pool to run DDL
+        var cs = settings.ConnectionString ?? BuildConnectionString(settings, type);
+        ISqlDatabase db = type switch
+        {
+            "mssql"    => new MsSqlConnectionPool(MsSqlConfiguration.Parse(cs),     maxConnections: 5, minIdle: 1),
+            "postgres" => new PostgresConnectionPool(PostgresConfiguration.Parse(cs), maxConnections: 5),
+            "mysql"    => new MySqlConnectionPool(MySqlConfiguration.Parse(cs),      maxConnections: 5),
+            "sqlite"   => new SqliteConnectionPool(SqliteConfiguration.Parse(cs),    maxConnections: 1),
+            _          => throw new ArgumentException($"Unknown DatabaseType '{type}'.")
+        };
+
+        await using (db)
+        {
+            // Strip single-line comments, then split into individual statements
+            var stripped = Regex.Replace(sql, @"--[^\r\n]*", "");
+            var statements = Regex.Split(stripped, @";")
+                .Select(s => s.Trim())
+                .Where(s => s.Length > 0)
+                .ToList();
+
+            foreach (var stmt in statements)
+                await db.ExecuteAsync(stmt, ct: ct);
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
