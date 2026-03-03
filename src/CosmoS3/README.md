@@ -74,19 +74,18 @@ dotnet run
 ### 2. Wire CosmoS3 into your own CosmoApiServer app
 
 ```csharp
-using CosmoApiServer.Core.Hosting;
 using CosmoS3;
 using CosmoS3.Settings;
 
 var settings = new SettingsBase
 {
     RegionString       = "us-east-1",
-    ValidateSignatures = false,          // set true in production
+    ValidateSignatures = false,   // set true in production
 
     Storage = new StorageSettings
     {
         StorageType   = CosmoS3.Storage.StorageDriverType.Disk,
-        DiskDirectory = "./data/objects"  // no trailing slash
+        DiskDirectory = "./data/objects"
     },
 
     Database = new DatabaseSettings
@@ -96,11 +95,36 @@ var settings = new SettingsBase
         DatabaseName = "MyDatabase",
         Username     = "sa",
         Password     = "your-password"
-    }
+    },
+
+    // Optional: enable CORS for browser-based S3 clients
+    Cors = new CorsSettings { Enabled = true },
+
+    // Optional: enable HTTPS
+    // CertificatePath     = "./certs/server.pfx",
+    // CertificatePassword = "changeme",
+
+    // Optional: enable HTTP/2 cleartext (h2c)
+    // EnableHttp2 = true,
 };
+
+// CosmoS3Application.Create() wires TLS, HTTP/2, CORS, logging, and S3Middleware.
+var app = CosmoS3Application.Create(settings, port: 8100);
+app.Run();
+```
+
+Or wire manually for full control over the middleware order:
+
+```csharp
+using CosmoApiServer.Core.Hosting;
+using CosmoS3;
+using CosmoS3.Settings;
 
 var app = CosmoWebApplicationBuilder.Create()
     .ListenOn(8100)
+    .UseHttps("./certs/server.pfx", "changeme")   // optional TLS
+    .UseHttp2()                                    // optional h2c
+    .UseCors()                                     // optional CORS
     .UseLogging()
     .UseMiddleware(new S3Middleware(settings))
     .Build();
@@ -126,6 +150,10 @@ app.Run();
 | `Logging` | `LoggingSettings` | default | Log level callbacks. |
 | `Debug` | `DebugSettings` | default | Enable extra debug output. |
 | `Users` / `Credentials` / `Buckets` | `List<T>` | empty | Seed in-memory data for no-database mode (testing). |
+| `CertificatePath` | `string?` | `null` | Path to PFX file for HTTPS. When set, TLS is automatically applied. |
+| `CertificatePassword` | `string?` | `null` | Password for the PFX certificate. |
+| `EnableHttp2` | `bool` | `false` | Enable h2c (HTTP/2 cleartext) support. |
+| `Cors` | `CorsSettings` | disabled | CORS configuration for browser-based S3 clients. |
 
 ### `DatabaseSettings`
 

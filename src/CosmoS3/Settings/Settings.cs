@@ -82,6 +82,43 @@ public class SettingsBase
     /// <summary>True when running in no-DB mode (Users list is seeded).</summary>
     internal bool NoDatabase => Users.Count > 0;
 
+    // ── TLS / HTTPS ──────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Path to a PFX certificate file. When set, CosmoS3 serves HTTPS.
+    /// Can be used with <see cref="CosmoS3Application.Create"/> or via
+    /// <c>CosmoWebApplicationBuilder.UseHttps()</c> manually.
+    /// </summary>
+    public string CertificatePath { get; set; } = null;
+
+    /// <summary>Password for the PFX certificate (optional).</summary>
+    public string CertificatePassword { get; set; } = null;
+
+    /// <summary>True when a certificate path has been configured.</summary>
+    public bool EnableTls => CertificatePath != null;
+
+    // ── HTTP/2 ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Enable h2c (HTTP/2 cleartext) support.
+    /// When <see cref="CertificatePath"/> is also set, TLS is applied and h2c
+    /// is used on the same port (the channel sniffs the connection type).
+    /// </summary>
+    public bool EnableHttp2 { get; set; } = false;
+
+    // ── CORS ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// CORS settings for browser-based S3 clients. Defaults to wide-open
+    /// during development; restrict <see cref="CorsSettings.AllowedOrigins"/>
+    /// in production.
+    /// </summary>
+    public CorsSettings Cors
+    {
+        get => _Cors;
+        set => _Cors = value ?? throw new ArgumentNullException(nameof(Cors));
+    }
+
     private string _HeaderApiKey = "x-api-key";
     private string _AdminApiKey = "cosmos3admin";
     private string _RegionString = "us-west-1";
@@ -89,6 +126,7 @@ public class SettingsBase
     private StorageSettings _Storage = new();
     private LoggingSettings _Logging = new();
     private DebugSettings _Debug = new();
+    private CorsSettings _Cors = new();
 
     public SettingsBase() { }
 }
