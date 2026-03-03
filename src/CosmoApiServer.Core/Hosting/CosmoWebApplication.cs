@@ -85,7 +85,10 @@ public sealed class CosmoWebApplication
             return Task.CompletedTask;
         });
 
-        await _server.StartAsync(_options.Port, pipeline, _services, _options.MaxRequestBodySize, cancellationToken);
+        await _server.StartAsync(
+            _options.Port, pipeline, _services, _options.MaxRequestBodySize,
+            _options.CertificatePath, _options.CertificatePassword, _options.EnableHttp2,
+            cancellationToken);
 
         // Wait until cancelled
         var tcs = new TaskCompletionSource();

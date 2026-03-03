@@ -97,6 +97,26 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    /// <summary>
+    /// Enable HTTPS. The certificate must be a PFX/PKCS#12 file.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseHttps(string certificatePath, string? password = null)
+    {
+        _options.CertificatePath = certificatePath;
+        _options.CertificatePassword = password;
+        return this;
+    }
+
+    /// <summary>
+    /// Advertise HTTP/2 (h2) via ALPN during TLS handshake.
+    /// Must be combined with <see cref="UseHttps"/>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseHttp2()
+    {
+        _options.EnableHttp2 = true;
+        return this;
+    }
+
     // ── Build ──────────────────────────────────────────────────────────────
 
     public CosmoWebApplication Build()
