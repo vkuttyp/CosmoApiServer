@@ -12,6 +12,9 @@
   <ItemGroup>
     <ProjectReference Include="..\CosmoApiServer.Core\CosmoApiServer.Core.csproj" />
     <ProjectReference Include="..\..\..\CosmoSQLClient\CosmoSQLClient-Dotnet\src\CosmoSQLClient.MsSql\CosmoSQLClient.MsSql.csproj" />
+    <ProjectReference Include="..\..\..\CosmoSQLClient\CosmoSQLClient-Dotnet\src\CosmoSQLClient.Postgres\CosmoSQLClient.Postgres.csproj" />
+    <ProjectReference Include="..\..\..\CosmoSQLClient\CosmoSQLClient-Dotnet\src\CosmoSQLClient.MySql\CosmoSQLClient.MySql.csproj" />
+    <ProjectReference Include="..\..\..\CosmoSQLClient\CosmoSQLClient-Dotnet\src\CosmoSQLClient.Sqlite\CosmoSQLClient.Sqlite.csproj" />
   </ItemGroup>
 
   <ItemGroup>

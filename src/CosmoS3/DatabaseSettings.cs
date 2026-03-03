@@ -8,6 +8,22 @@ namespace CosmoS3;
 
 public class DatabaseSettings
 {
+    /// <summary>
+    /// Database engine to use: "mssql", "postgres", "mysql", or "sqlite".
+    /// </summary>
+    public string DatabaseType { get; set; } = "mssql";
+
+    /// <summary>
+    /// Full connection string for the selected DatabaseType.
+    /// When set, takes precedence over the individual Hostname/Port/Username/Password fields.
+    /// Examples:
+    ///   mssql:    Server=localhost,1433;Database=mydb;User Id=sa;Password=pass;TrustServerCertificate=True;
+    ///   postgres: Host=localhost;Port=5432;Database=mydb;Username=postgres;Password=secret;
+    ///   mysql:    Server=localhost;Port=3306;Database=mydb;User=root;Password=secret;
+    ///   sqlite:   Data Source=cosmos3.db;
+    /// </summary>
+    public string ConnectionString { get; set; } = null;
+
     public string Hostname { get; set; } = null;
     public int Port
     {
