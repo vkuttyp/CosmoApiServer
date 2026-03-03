@@ -13,10 +13,14 @@ public sealed class HttpContext
     public ClaimsPrincipal? User { get; set; }
 
     /// <summary>
-    /// When set by ControllerScanner, HttpChannelHandler will write a chunked response
-    /// instead of the buffered DefaultFullHttpResponse. The argument is IChannelHandlerContext (boxed).
+    /// Set by ControllerScanner when the action returns IAsyncEnumerable&lt;T&gt;.
+    /// The transport writes chunked/stream headers then calls this with a raw Stream
+    /// (chunked-encoding wrapper for HTTP/1.1, or a DATA-frame stream for HTTP/2).
     /// </summary>
-    internal Func<object, Task>? ChunkedBodyWriter { get; set; }
+    internal Func<Stream, Task>? StreamingBodyWriter { get; set; }
+
+    /// <summary>Lifecycle: the transport disposes this after the response is sent.</summary>
+    internal IDisposable? _disposeScope;
 
     public HttpContext(HttpRequest request, HttpResponse response, IServiceProvider services)
     {

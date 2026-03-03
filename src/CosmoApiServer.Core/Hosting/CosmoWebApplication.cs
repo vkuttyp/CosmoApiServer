@@ -1,9 +1,9 @@
 using System.Reflection;
 using CosmoApiServer.Core.Controllers;
-using CosmoApiServer.Core.DotNetty;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
+using CosmoApiServer.Core.Transport;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CosmoApiServer.Core.Hosting;
@@ -19,7 +19,7 @@ public sealed class CosmoWebApplication
     private readonly RouteTable _routeTable;
     private readonly List<Assembly> _controllerAssemblies;
     private readonly ServerOptions _options;
-    private readonly HttpServerChannel _server;
+    private readonly PipelineHttpServer _server;
 
     internal CosmoWebApplication(
         IServiceProvider services,
@@ -33,7 +33,7 @@ public sealed class CosmoWebApplication
         _routeTable = routeTable;
         _controllerAssemblies = controllerAssemblies;
         _options = options;
-        _server = new HttpServerChannel();
+        _server = new PipelineHttpServer();
     }
 
     // ── Convention routing ─────────────────────────────────────────────────

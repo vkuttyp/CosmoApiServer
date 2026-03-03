@@ -111,12 +111,12 @@ public static class ControllerScanner
                     returnedResult = desc.TaskResultExtractor?.Invoke(task);
                 }
 
-                // IAsyncEnumerable<T> → chunked streaming response
-                var streamWriter = DotNetty.ChunkedResponseHelper.TryCreateStreamWriter(
+                // IAsyncEnumerable<T> → streaming response via transport-agnostic Stream
+                var streamWriter = Transport.StreamingBodyWriter.TryCreate(
                     returnedResult, ctx.Response.StatusCode);
                 if (streamWriter is not null)
                 {
-                    ctx.ChunkedBodyWriter = streamWriter;
+                    ctx.StreamingBodyWriter = streamWriter;
                     return;
                 }
 
