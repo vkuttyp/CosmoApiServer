@@ -1,11 +1,16 @@
 namespace CosmoApiServer.Core.Routing;
 
 /// <summary>
-/// Parses and matches route templates like /users/{id}/orders/{orderId}
+/// Parses and matches route templates like /users/{id}/orders/{orderId}.
+/// Matching uses ReadOnlySpan&lt;char&gt; to avoid string allocations on the hot path.
 /// </summary>
 public sealed class RouteTemplate
 {
-    private readonly string[] _segments;
+    private static readonly IReadOnlyDictionary<string, string> EmptyRouteValues =
+        new Dictionary<string, string>(0);
+
+    private readonly string[] _segments;  // pre-split template segments
+    private readonly bool _hasParams;     // fast-path: no params → no dict needed
 
     public string Template { get; }
 
@@ -13,36 +18,54 @@ public sealed class RouteTemplate
     {
         Template = template;
         _segments = template.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        _hasParams = Array.Exists(_segments, s => s.StartsWith('{'));
     }
 
     /// <summary>
-    /// Attempts to match a request path against this template.
-    /// Returns null if no match; otherwise returns extracted route values.
+    /// Attempts to match a request path. Returns null on mismatch; otherwise extracted route values.
+    /// Uses span-based walking: no heap allocations for literal-only routes.
     /// </summary>
-    public Dictionary<string, string>? TryMatch(string path)
+    public IReadOnlyDictionary<string, string>? TryMatch(string path)
     {
-        var pathSegments = path.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
+        var span = path.AsSpan().Trim('/');
 
-        if (_segments.Length != pathSegments.Length)
+        // Count path segments without allocating
+        int segCount = CountSegments(span);
+        if (segCount != _segments.Length)
             return null;
 
-        var values = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        Dictionary<string, string>? values = null;
 
         for (int i = 0; i < _segments.Length; i++)
         {
-            var seg = _segments[i];
-            if (seg.StartsWith('{') && seg.EndsWith('}'))
+            // Advance span to current segment
+            int slash = span.IndexOf('/');
+            var seg = slash < 0 ? span : span[..slash];
+            span = slash < 0 ? ReadOnlySpan<char>.Empty : span[(slash + 1)..];
+
+            var tmpl = _segments[i];
+            if (tmpl[0] == '{')
             {
-                // Parameter segment — capture value
-                var paramName = seg[1..^1];
-                values[paramName] = pathSegments[i];
+                // Route parameter — capture value (only alloc when route has params)
+                values ??= new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase);
+                values[tmpl[1..^1]] = seg.ToString();
             }
-            else if (!seg.Equals(pathSegments[i], StringComparison.OrdinalIgnoreCase))
+            else if (!seg.Equals(tmpl.AsSpan(), StringComparison.OrdinalIgnoreCase))
             {
-                return null; // Literal mismatch
+                return null;
             }
         }
 
-        return values;
+        // For parameterless routes return a shared empty dict (no alloc at all)
+        return _hasParams ? (values ?? new Dictionary<string, string>(0)) : EmptyRouteValues;
+    }
+
+    private static int CountSegments(ReadOnlySpan<char> path)
+    {
+        if (path.IsEmpty) return 0;
+        int count = 1;
+        foreach (char c in path)
+            if (c == '/') count++;
+        return count;
     }
 }

@@ -9,18 +9,31 @@ public sealed class CorsOptions
     public string[] AllowedHeaders { get; set; } = ["Content-Type", "Authorization"];
 }
 
-public sealed class CorsMiddleware(CorsOptions options) : IMiddleware
+public sealed class CorsMiddleware : IMiddleware
 {
+    private readonly CorsOptions _options;
+    private readonly string _allowedMethodsHeader;  // pre-computed once
+    private readonly string _allowedHeadersHeader;  // pre-computed once
+    private readonly bool _allowAll;
+
+    public CorsMiddleware(CorsOptions options)
+    {
+        _options = options;
+        _allowedMethodsHeader = string.Join(", ", options.AllowedMethods);
+        _allowedHeadersHeader = string.Join(", ", options.AllowedHeaders);
+        _allowAll = Array.IndexOf(options.AllowedOrigins, "*") >= 0;
+    }
+
     public async Task InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        var origin = context.Request.Headers.TryGetValue("Origin", out var o) ? o : "*";
-        var allowed = options.AllowedOrigins.Contains("*") || options.AllowedOrigins.Contains(origin);
+        string origin = context.Request.Headers.TryGetValue("Origin", out var o) ? o : "*";
+        bool allowed = _allowAll || Array.IndexOf(_options.AllowedOrigins, origin) >= 0;
 
         if (allowed)
         {
-            context.Response.Headers["Access-Control-Allow-Origin"] = origin;
-            context.Response.Headers["Access-Control-Allow-Methods"] = string.Join(", ", options.AllowedMethods);
-            context.Response.Headers["Access-Control-Allow-Headers"] = string.Join(", ", options.AllowedHeaders);
+            context.Response.Headers["Access-Control-Allow-Origin"]  = origin;
+            context.Response.Headers["Access-Control-Allow-Methods"] = _allowedMethodsHeader;
+            context.Response.Headers["Access-Control-Allow-Headers"] = _allowedHeadersHeader;
         }
 
         // Handle pre-flight

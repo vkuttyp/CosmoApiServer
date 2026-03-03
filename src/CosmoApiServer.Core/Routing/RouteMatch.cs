@@ -6,9 +6,9 @@ namespace CosmoApiServer.Core.Routing;
 public sealed class RouteMatch
 {
     public RouteEntry Entry { get; }
-    public Dictionary<string, string> RouteValues { get; }
+    public IReadOnlyDictionary<string, string> RouteValues { get; }
 
-    public RouteMatch(RouteEntry entry, Dictionary<string, string> routeValues)
+    public RouteMatch(RouteEntry entry, IReadOnlyDictionary<string, string> routeValues)
     {
         Entry = entry;
         RouteValues = routeValues;
