@@ -11,10 +11,10 @@
 
   <ItemGroup>
     <ProjectReference Include="..\CosmoApiServer.Core\CosmoApiServer.Core.csproj" />
+    <ProjectReference Include="..\..\..\CosmoSQLClient\CosmoSQLClient-Dotnet\src\CosmoSQLClient.MsSql\CosmoSQLClient.MsSql.csproj" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Data.SqlClient" Version="6.1.4" />
     <PackageReference Include="Microsoft.Extensions.Caching.Memory" Version="10.0.3" />
   </ItemGroup>
 
