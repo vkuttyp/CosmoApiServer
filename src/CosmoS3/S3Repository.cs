@@ -29,8 +29,7 @@ public class S3Repository : IS3Repository
             BucketGUID      = r["bucketguid"].AsString(),
             OwnerGUID       = r["ownerguid"].AsString(),
             AuthorGUID      = r["authorguid"].AsString(),
-            Key             = r["key"].AsString(),
-            ContentType     = r["contenttype"].AsString(),
+            Key             = r["objectkey"].AsString(),
             ContentLength   = r["contentlength"].AsInt() ?? 0,
             Version         = r["version"].AsInt() ?? 0,
             Etag            = r["etag"].AsString(),
@@ -144,7 +143,7 @@ public class S3Repository : IS3Repository
         BucketGUID    = r["bucketguid"].AsString(),
         OwnerGUID     = r["ownerguid"].AsString(),
         AuthorGUID    = r["authorguid"].AsString(),
-        Key           = r["key"].AsString(),
+        Key           = r["objectkey"].AsString(),
         CreatedUtc    = r["createdutc"].AsDate() ?? DateTime.UtcNow,
         LastAccessUtc = r["lastaccessutc"].AsDate() ?? DateTime.UtcNow,
         ExpirationUtc = r["expirationutc"].AsDate() ?? DateTime.UtcNow,
@@ -201,15 +200,15 @@ public class S3Repository : IS3Repository
         {
             _db.ExecuteAsync(
                 $"INSERT INTO {_t}objects " +
-                "(guid, bucketguid, ownerguid, authorguid, key, contenttype, contentlength, version, etag, retention, blobfilename, isfolder, deletemarker, md5, createdutc, lastupdateutc, lastaccessutc, metadata, expirationutc) " +
-                "VALUES (@guid, @bucketguid, @ownerguid, @authorguid, @key, @contenttype, @contentlength, @version, @etag, @retention, @blobfilename, @isfolder, @deletemarker, @md5, @createdutc, @lastupdateutc, @lastaccessutc, @metadata, @expirationutc)",
+                "(guid, bucketguid, ownerguid, authorguid, objectkey, contenttype, contentlength, version, etag, retention, blobfilename, isfolder, deletemarker, md5, createdutc, lastupdateutc, lastaccessutc, metadata, expirationutc) " +
+                "VALUES (@guid, @bucketguid, @ownerguid, @authorguid, @objectkey, @contenttype, @contentlength, @version, @etag, @retention, @blobfilename, @isfolder, @deletemarker, @md5, @createdutc, @lastupdateutc, @lastaccessutc, @metadata, @expirationutc)",
                 ObjParams(obj)).GetAwaiter().GetResult();
         }
         else
         {
             _db.ExecuteAsync(
                 $"UPDATE {_t}objects SET " +
-                "bucketguid=@bucketguid, ownerguid=@ownerguid, authorguid=@authorguid, key=@key, contenttype=@contenttype, contentlength=@contentlength, version=@version, etag=@etag, retention=@retention, blobfilename=@blobfilename, isfolder=@isfolder, deletemarker=@deletemarker, md5=@md5, createdutc=@createdutc, lastupdateutc=@lastupdateutc, lastaccessutc=@lastaccessutc, metadata=@metadata, expirationutc=@expirationutc " +
+                "bucketguid=@bucketguid, ownerguid=@ownerguid, authorguid=@authorguid, objectkey=@objectkey, contenttype=@contenttype, contentlength=@contentlength, version=@version, etag=@etag, retention=@retention, blobfilename=@blobfilename, isfolder=@isfolder, deletemarker=@deletemarker, md5=@md5, createdutc=@createdutc, lastupdateutc=@lastupdateutc, lastaccessutc=@lastaccessutc, metadata=@metadata, expirationutc=@expirationutc " +
                 "WHERE guid=@guid",
                 ObjParams(obj)).GetAwaiter().GetResult();
         }
@@ -223,7 +222,7 @@ public class S3Repository : IS3Repository
         SqlParameter.Named("bucketguid",    SqlValue.From(o.BucketGUID)),
         SqlParameter.Named("ownerguid",     SqlValue.From(o.OwnerGUID)),
         SqlParameter.Named("authorguid",    SqlValue.From(o.AuthorGUID)),
-        SqlParameter.Named("key",           SqlValue.From(o.Key)),
+        SqlParameter.Named("objectkey",     SqlValue.From(o.Key)),
         SqlParameter.Named("contenttype",   SqlValue.From(o.ContentType)),
         SqlParameter.Named("contentlength", SqlValue.From(o.ContentLength)),
         SqlParameter.Named("version",       SqlValue.From(o.Version)),
@@ -243,7 +242,7 @@ public class S3Repository : IS3Repository
     public long GetObjectLatestVersion(string key)
     {
         var rows = _db.QueryAsync(
-            $"SELECT MAX(version) AS v FROM {_t}objects WHERE key = @key",
+            $"SELECT MAX(version) AS v FROM {_t}objects WHERE objectkey = @key",
             new[] { SqlParameter.Named("key", SqlValue.From(key)) })
             .GetAwaiter().GetResult();
 
@@ -270,7 +269,7 @@ public class S3Repository : IS3Repository
     public Obj? GetObjectLatestMetadata(Bucket bucket, string key)
     {
         var rows = _db.QueryAsync(
-            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND key = @key AND deletemarker = 0 ORDER BY version DESC",
+            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND objectkey = @key AND deletemarker = 0 ORDER BY version DESC",
             new[]
             {
                 SqlParameter.Named("bg",  SqlValue.From(bucket.GUID)),
@@ -283,7 +282,7 @@ public class S3Repository : IS3Repository
     public Obj? GetObjectVersionMetadata(Bucket bucket, string key, long version)
     {
         var rows = _db.QueryAsync(
-            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND key = @key AND version = @ver",
+            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND objectkey = @key AND version = @ver",
             new[]
             {
                 SqlParameter.Named("bg",  SqlValue.From(bucket.GUID)),
@@ -408,7 +407,7 @@ public class S3Repository : IS3Repository
 
         var sqlPrefix = string.IsNullOrEmpty(prefix) ? "%" : prefix + "%";
         var rows = _db.QueryAsync(
-            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND key LIKE @prefix ORDER BY key",
+            $"SELECT * FROM {_t}objects WHERE bucketguid = @bg AND objectkey LIKE @prefix ORDER BY objectkey",
             new[]
             {
                 SqlParameter.Named("bg",     SqlValue.From(bucket.GUID)),
@@ -1101,15 +1100,15 @@ public class S3Repository : IS3Repository
     public Upload AddUpload(Upload upload)
     {
         _db.ExecuteAsync(
-            $"INSERT INTO {_t}uploads (guid, bucketguid, ownerguid, authorguid, key, createdutc, lastaccessutc, expirationutc, contenttype, metadata) " +
-            "VALUES (@guid, @bg, @owner, @author, @key, @created, @accessed, @expires, @ct, @meta)",
+            $"INSERT INTO {_t}uploads (guid, bucketguid, ownerguid, authorguid, objectkey, createdutc, lastaccessutc, expirationutc, contenttype, metadata) " +
+            "VALUES (@guid, @bg, @owner, @author, @objectkey, @created, @accessed, @expires, @ct, @meta)",
             new[]
             {
-                SqlParameter.Named("guid",     SqlValue.From(upload.GUID)),
-                SqlParameter.Named("bg",       SqlValue.From(upload.BucketGUID)),
-                SqlParameter.Named("owner",    SqlValue.From(upload.OwnerGUID)),
-                SqlParameter.Named("author",   SqlValue.From(upload.AuthorGUID)),
-                SqlParameter.Named("key",      SqlValue.From(upload.Key)),
+                SqlParameter.Named("guid",      SqlValue.From(upload.GUID)),
+                SqlParameter.Named("bg",        SqlValue.From(upload.BucketGUID)),
+                SqlParameter.Named("owner",     SqlValue.From(upload.OwnerGUID)),
+                SqlParameter.Named("author",    SqlValue.From(upload.AuthorGUID)),
+                SqlParameter.Named("objectkey", SqlValue.From(upload.Key)),
                 SqlParameter.Named("created",  SqlValue.From(upload.CreatedUtc)),
                 SqlParameter.Named("accessed", SqlValue.From(upload.LastAccessUtc)),
                 SqlParameter.Named("expires",  SqlValue.From(upload.ExpirationUtc)),

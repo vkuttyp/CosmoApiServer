@@ -5,6 +5,8 @@
   "AdminApiKey": "less3admin",
   "RegionString": "us-west-1",
   "Database": {
+    "DatabaseType": "mssql",
+    "ConnectionString": "Server=localhost,1433;Database=MurshiDb;User Id=sa;Password=aBCD111;TrustServerCertificate=True;",
     "Hostname": "localhost",
     "Port": 1433,
     "Username": "sa",
