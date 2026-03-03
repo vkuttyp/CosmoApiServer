@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>CosmoApiBenchHost</AssemblyName>
+    <RootNamespace>CosmoApiBenchHost</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\CosmoApiServer.Core\CosmoApiServer.Core.csproj" />
+  </ItemGroup>
+
+</Project>
