@@ -106,6 +106,51 @@ internal static class Http11Parser
         return true;
     }
 
+    /// <summary>
+    /// Returns true when the buffer contains a complete HTTP header section
+    /// that includes an "Expect: 100-continue" header.
+    /// Does not consume any bytes — safe to call before TryParse.
+    /// </summary>
+    public static bool TryDetectExpect100(in ReadOnlySequence<byte> buffer)
+    {
+        var reader = new SequenceReader<byte>(buffer);
+
+        // Skip request line
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, (byte)'\n'))
+            return false;
+
+        // Scan headers looking for "Expect: 100-continue"
+        while (reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, (byte)'\n'))
+        {
+            var line = lineSeq.IsSingleSegment
+                ? lineSeq.FirstSpan
+                : lineSeq.ToArray().AsSpan();
+
+            if (!line.IsEmpty && line[^1] == '\r') line = line[..^1];
+            if (line.IsEmpty) return false; // end of headers, no Expect found
+
+            int colon = line.IndexOf((byte)':');
+            if (colon < 0) continue;
+
+            var nameSpan = line[..colon];
+            if (SpanEqualsCi(nameSpan, "Expect"u8))
+            {
+                var val = line[(colon + 1)..];
+                while (!val.IsEmpty && val[0] == (byte)' ') val = val[1..];
+                return SpanEqualsCi(val.Length >= 12 ? val[..12] : val, "100-continue"u8);
+            }
+        }
+        return false; // headers section not complete yet
+    }
+
+    private static bool SpanEqualsCi(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+            if ((a[i] | 0x20) != (b[i] | 0x20)) return false;
+        return true;
+    }
+
     /// <summary>Reads a chunked-encoded body and decodes it into a flat byte array.</summary>
     private static bool TryReadChunkedBody(ref SequenceReader<byte> reader, out byte[] body)
     {

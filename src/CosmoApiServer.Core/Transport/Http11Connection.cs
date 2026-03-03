@@ -61,6 +61,8 @@ internal static class Http11Connection
         }
     }
 
+    private static readonly byte[] Continue100 = "HTTP/1.1 100 Continue\r\n\r\n"u8.ToArray();
+
     // ── Pipe → HTTP/1.1 requests → responses ─────────────────────────────
 
     private static async Task ProcessAsync(
@@ -101,6 +103,16 @@ internal static class Http11Connection
                 var buffer = result.Buffer;
 
                 bool parsed = Http11Parser.TryParse(ref buffer, out var req);
+
+                // ── Expect: 100-continue ──────────────────────────────────────
+                // When a client sends request headers with "Expect: 100-continue"
+                // it waits up to ~1 s for our "100 Continue" before sending the body.
+                // Detect the case (headers complete, body missing) and reply immediately.
+                if (!parsed && Http11Parser.TryDetectExpect100(result.Buffer))
+                {
+                    writer.Write(Continue100);
+                    await writer.FlushAsync(ct);
+                }
 
                 reader.AdvanceTo(buffer.Start, buffer.End);
 
