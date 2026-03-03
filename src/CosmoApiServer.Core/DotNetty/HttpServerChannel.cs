@@ -22,6 +22,7 @@ public sealed class HttpServerChannel : IAsyncDisposable
         int port,
         RequestDelegate pipeline,
         IServiceProvider services,
+        int maxRequestBodySize = 64 * 1024 * 1024, // 64 MB default
         CancellationToken cancellationToken = default)
     {
         var bootstrap = new ServerBootstrap()
@@ -34,7 +35,7 @@ public sealed class HttpServerChannel : IAsyncDisposable
                 var pipeline2 = channel.Pipeline;
                 pipeline2.AddLast(new HttpRequestDecoder());
                 pipeline2.AddLast(new HttpResponseEncoder());
-                pipeline2.AddLast(new HttpObjectAggregator(65536));
+                pipeline2.AddLast(new HttpObjectAggregator(maxRequestBodySize));
                 pipeline2.AddLast(new HttpChannelHandler(pipeline, services));
             }));
 

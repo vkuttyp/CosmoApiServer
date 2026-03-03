@@ -53,7 +53,16 @@ internal sealed class HttpChannelHandler : SimpleChannelInboundHandler<IFullHttp
         // Chunked streaming response (IAsyncEnumerable<T> actions)
         if (httpContext.ChunkedBodyWriter is not null)
         {
-            await httpContext.ChunkedBodyWriter(ctx);
+            try
+            {
+                await httpContext.ChunkedBodyWriter(ctx);
+            }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[ChunkedWriter ERROR] {ex.GetType().Name}: {ex.Message}");
+                Console.Error.WriteLine(ex.StackTrace);
+                ctx.CloseAsync();
+            }
             return;
         }
 
@@ -64,7 +73,10 @@ internal sealed class HttpChannelHandler : SimpleChannelInboundHandler<IFullHttp
             HttpResponseStatus.ValueOf(response.StatusCode),
             body);
 
-        nettyResponse.Headers.Set(HttpHeaderNames.ContentLength, response.Body.Length);
+        nettyResponse.Headers.Set(HttpHeaderNames.ContentLength,
+            response.Headers.TryGetValue("Content-Length", out var explicitCL)
+                ? explicitCL
+                : response.Body.Length.ToString());
         nettyResponse.Headers.Set(HttpHeaderNames.ContentType,
             response.Headers.TryGetValue("Content-Type", out var ct) ? ct : "text/plain");
         nettyResponse.Headers.Set(HttpHeaderNames.Connection, HttpHeaderValues.KeepAlive);

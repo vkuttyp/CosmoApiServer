@@ -8,10 +8,6 @@ using DotNetty.Transport.Channels;
 
 namespace CosmoApiServer.Core.DotNetty;
 
-/// <summary>
-/// Detects IAsyncEnumerable&lt;T&gt; return values and builds a DotNetty chunked-transfer writer.
-/// Keeps DotNetty details out of ControllerScanner.
-/// </summary>
 internal static class ChunkedResponseHelper
 {
     private static readonly JsonSerializerOptions CamelCase = new()
@@ -57,56 +53,68 @@ internal static class ChunkedResponseHelper
             var ctx = (IChannelHandlerContext)nettyCtxObj;
             var enumerator = source.GetAsyncEnumerator();
 
-            // Peek at the first item BEFORE sending headers.
-            // If the DB throws here we can still return a proper JSON error response.
+            // ── Peek first item before committing to any response ────────────
             bool hasItem;
             T? firstItem = default;
             try
             {
+                Console.WriteLine("[Stream] Fetching first item...");
                 hasItem = await enumerator.MoveNextAsync();
                 if (hasItem) firstItem = enumerator.Current;
+                Console.WriteLine($"[Stream] hasItem={hasItem}");
             }
             catch (Exception ex)
             {
+                Console.Error.WriteLine($"[Stream ERROR] {ex.GetType().Name}: {ex.Message}");
                 await enumerator.DisposeAsync();
                 await SendErrorAsync(ctx, 500, ex.Message);
                 return;
             }
 
-            // Commit to chunked streaming — headers sent here, status code is now locked in
+            // ── Send headers (Connection: close so client knows when done) ───
             var httpResponse = new DefaultHttpResponse(
                 HttpVersion.Http11,
                 HttpResponseStatus.ValueOf(statusCode));
             httpResponse.Headers.Set(HttpHeaderNames.TransferEncoding, HttpHeaderValues.Chunked);
-            httpResponse.Headers.Set(HttpHeaderNames.ContentType, "application/json");
-            httpResponse.Headers.Set(HttpHeaderNames.Connection, HttpHeaderValues.KeepAlive);
-            await ctx.WriteAndFlushAsync(httpResponse);
+            httpResponse.Headers.Set(HttpHeaderNames.ContentType, "application/x-ndjson");
+            httpResponse.Headers.Set(HttpHeaderNames.Connection, "close");  // client closes when 0-chunk received
 
-            // Opening bracket + first item (if any)
+            Console.WriteLine("[Stream] Sending headers...");
+            await ctx.WriteAndFlushAsync(httpResponse);
+            Console.WriteLine("[Stream] Headers sent");
+
+            // ── Empty result ─────────────────────────────────────────────────
             if (!hasItem)
             {
-                await ctx.WriteAsync(new DefaultHttpContent(Unpooled.CopiedBuffer("[]", Encoding.UTF8)));
                 await ctx.WriteAndFlushAsync(EmptyLastHttpContent.Default);
+                await ctx.CloseAsync();
                 await enumerator.DisposeAsync();
+                Console.WriteLine("[Stream] Done (empty)");
                 return;
             }
 
+            // ── First item ───────────────────────────────────────────────────
+            var firstJson = JsonSerializer.Serialize(firstItem!, CamelCase) + "\n";
+            Console.WriteLine($"[Stream] Sending first item ({firstJson.Length} chars)...");
             await ctx.WriteAndFlushAsync(new DefaultHttpContent(
-                Unpooled.CopiedBuffer("[" + JsonSerializer.Serialize(firstItem!, CamelCase), Encoding.UTF8)));
+                Unpooled.CopiedBuffer(firstJson, Encoding.UTF8)));
+            Console.WriteLine("[Stream] First item sent");
 
-            // Stream remaining items
+            // ── Remaining items ──────────────────────────────────────────────
+            int count = 1;
             try
             {
                 while (await enumerator.MoveNextAsync())
                 {
-                    var json = "," + JsonSerializer.Serialize(enumerator.Current, CamelCase);
+                    count++;
+                    var json = JsonSerializer.Serialize(enumerator.Current, CamelCase) + "\n";
                     await ctx.WriteAndFlushAsync(new DefaultHttpContent(
                         Unpooled.CopiedBuffer(json, Encoding.UTF8)));
                 }
             }
-            catch
+            catch (Exception ex)
             {
-                // Mid-stream: headers already sent, can't change status — close connection
+                Console.Error.WriteLine($"[Stream ERROR mid-stream] {ex.GetType().Name}: {ex.Message}");
                 await ctx.CloseAsync();
                 return;
             }
@@ -115,9 +123,10 @@ internal static class ChunkedResponseHelper
                 await enumerator.DisposeAsync();
             }
 
-            // Close JSON array and end chunked transfer
-            await ctx.WriteAsync(new DefaultHttpContent(Unpooled.CopiedBuffer("]", Encoding.UTF8)));
+            // ── Signal end of chunked response ───────────────────────────────
             await ctx.WriteAndFlushAsync(EmptyLastHttpContent.Default);
+            await ctx.CloseAsync();
+            Console.WriteLine($"[Stream] Done ({count} items)");
         };
     }
 

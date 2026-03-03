@@ -1,0 +1,173 @@
+﻿namespace CosmoS3.Api.Admin
+{
+    
+    using CosmoS3.Classes;
+    using CosmoS3.Settings;
+    using CosmoS3;
+    using System;
+    using System.Collections.Generic;
+    using System.Threading.Tasks;
+
+    /// <summary>
+    /// Admin API GET handler.
+    /// </summary>
+    internal class GetHandler
+    {
+        #region Public-Members
+
+        #endregion
+
+        #region Private-Members
+
+        private SettingsBase _Settings;
+        private S3Logger _Logging;
+        private ConfigManager _Config;
+        private BucketManager _Buckets;
+        private AuthManager _Auth;
+
+        #endregion
+
+        #region Constructors-and-Factories
+
+        internal GetHandler(
+            SettingsBase settings,
+            S3Logger logging,
+            ConfigManager config,
+            BucketManager buckets,
+            AuthManager auth)
+        {
+            if (settings == null) throw new ArgumentNullException(nameof(settings));
+            if (logging == null) throw new ArgumentNullException(nameof(logging));
+            if (config == null) throw new ArgumentNullException(nameof(config));
+            if (buckets == null) throw new ArgumentNullException(nameof(buckets));
+            if (auth == null) throw new ArgumentNullException(nameof(auth));
+
+            _Settings = settings;
+            _Logging = logging;
+            _Config = config;
+            _Buckets = buckets;
+            _Auth = auth;
+        }
+
+        #endregion
+
+        #region Internal-Methods
+
+        internal async Task Process(S3Context ctx)
+        {
+            if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[1].Equals("buckets"))
+            {
+                await GetBuckets(ctx);
+                return;
+            }
+            else if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[1].Equals("users"))
+            {
+                await GetUsers(ctx);
+                return;
+            }
+            else if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[1].Equals("credentials"))
+            {
+                await GetCredentials(ctx);
+                return;
+            }
+
+            await ctx.Response.Send(CosmoS3.S3Objects.ErrorCode.InvalidRequest);
+        }
+
+        #endregion
+
+        #region Private-Methods
+
+        private async Task GetBuckets(S3Context ctx)
+        {
+            if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length >= 3)
+            {
+                Bucket bucket = _Buckets.GetByGuid(ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[2]);
+                if (bucket == null)
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.ContentType = "text/plain";
+                    await ctx.Response.Send();
+                    return;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.Send(SerializationHelper.SerializeJson(bucket, true));
+                    return;
+                }
+            }
+            else
+            {
+                List<Bucket> buckets = _Config.GetBuckets();
+                ctx.Response.StatusCode = 200;
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.Send(SerializationHelper.SerializeJson(buckets, true));
+                return;
+            }
+        }
+
+        private async Task GetUsers(S3Context ctx)
+        {
+            if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length >= 3)
+            {
+                User user = _Config.GetUserByGuid(ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[2]);
+                if (user == null)
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.ContentType = "text/plain";
+                    await ctx.Response.Send();
+                    return;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.Send(SerializationHelper.SerializeJson(user, true));
+                    return;
+                }
+            }
+            else
+            {
+                List<User> users = _Config.GetUsers();
+                ctx.Response.StatusCode = 200;
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.Send(SerializationHelper.SerializeJson(users, true));
+                return;
+            }
+        }
+
+        private async Task GetCredentials(S3Context ctx)
+        {
+            if (ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries).Length >= 3)
+            {
+                Credential cred = _Config.GetCredentialByGuid(ctx.Http.Request.Path.Split('/', StringSplitOptions.RemoveEmptyEntries)[2]);
+                if (cred == null)
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.ContentType = "text/plain";
+                    await ctx.Response.Send();
+                    return;
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 200;
+                    ctx.Response.ContentType = "application/json";
+                    await ctx.Response.Send(SerializationHelper.SerializeJson(cred, true));
+                    return;
+                }
+            }
+            else
+            {
+                List<Credential> creds = _Config.GetCredentials();
+                ctx.Response.StatusCode = 200;
+                ctx.Response.ContentType = "application/json";
+                await ctx.Response.Send(SerializationHelper.SerializeJson(creds, true));
+                return;
+            }
+        }
+
+        #endregion
+    }
+}
