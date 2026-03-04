@@ -5,6 +5,7 @@ using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
 using CosmoApiServer.Core.Transport;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace CosmoApiServer.Core.Hosting;
 
@@ -85,6 +86,13 @@ public sealed class CosmoWebApplication
             return Task.CompletedTask;
         });
 
+        // ── Start IHostedServices ──────────────────────────────────────────
+        var hostedServices = _services.GetServices<IHostedService>().ToArray();
+        foreach (var service in hostedServices)
+        {
+            await service.StartAsync(cancellationToken);
+        }
+
         await _server.StartAsync(
             _options.Port, pipeline, _services, _options.MaxRequestBodySize,
             _options.CertificatePath, _options.CertificatePassword, _options.EnableHttp2,
@@ -92,7 +100,7 @@ public sealed class CosmoWebApplication
 
         // Wait until cancelled
         var tcs = new TaskCompletionSource();
-        cancellationToken.Register(() => tcs.TrySetResult());
+        using var registration = cancellationToken.Register(() => tcs.TrySetResult());
 
         if (!cancellationToken.CanBeCanceled)
         {
@@ -105,6 +113,14 @@ public sealed class CosmoWebApplication
         }
 
         await tcs.Task;
+
+        // ── Stop IHostedServices ───────────────────────────────────────────
+        foreach (var service in hostedServices.Reverse())
+        {
+            try { await service.StopAsync(CancellationToken.None); }
+            catch (Exception ex) { Console.Error.WriteLine($"Error stopping hosted service {service.GetType().Name}: {ex.Message}"); }
+        }
+
         await _server.DisposeAsync();
     }
 

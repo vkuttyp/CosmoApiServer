@@ -1,5 +1,6 @@
 using CosmoApiServer.Core.Hosting;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 var builder = CosmoWebApplicationBuilder.Create()
     .ListenOn(5005)
@@ -34,6 +35,7 @@ var builder = CosmoWebApplicationBuilder.Create()
 
 // Dependency Injection example
 builder.Services.AddSingleton<IMyService, MyService>();
+builder.Services.AddHostedService<MyBackgroundTask>();
 
 var app = builder.Build();
 
@@ -47,3 +49,16 @@ app.Run();
 // Dummy service for DI demonstration
 public interface IMyService { string GetData(); }
 public class MyService : IMyService { public string GetData() => "Data from DI Service"; }
+
+// Background task example using IHostedService
+public class MyBackgroundTask : BackgroundService
+{
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            Console.WriteLine($"[Background] Task is running at {DateTime.Now}");
+            await Task.Delay(10000, stoppingToken);
+        }
+    }
+}
