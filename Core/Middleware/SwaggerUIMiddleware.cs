@@ -12,8 +12,7 @@ public sealed class SwaggerUIMiddleware(string path, string openApiUrl) : IMiddl
         if (context.Request.Method == CosmoApiServer.Core.Http.HttpMethod.GET && context.Request.Path == path)
         {
             context.Response.StatusCode = 200;
-            context.Response.Headers["Content-Type"] = "text/html";
-            context.Response.WriteText(GenerateHtml());
+            context.Response.WriteText(GenerateHtml(), "text/html");
             return;
         }
 
