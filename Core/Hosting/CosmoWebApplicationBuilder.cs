@@ -65,6 +65,22 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseHttpsRedirection(Action<HttpsRedirectionOptions>? configure = null)
+    {
+        var opts = new HttpsRedirectionOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new HttpsRedirectionMiddleware(opts));
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseHsts(Action<HstsOptions>? configure = null)
+    {
+        var opts = new HstsOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new HstsMiddleware(opts));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
     {
         _services.AddTransient(typeof(T));
