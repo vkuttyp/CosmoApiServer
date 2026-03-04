@@ -2,7 +2,7 @@ using CosmoApiServer.Core.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 
 var builder = CosmoWebApplicationBuilder.Create()
-    .ListenOn(5000)
+    .ListenOn(5005)
     // 1. Global Exception Handling
     .UseExceptionHandler()
     // 2. Logging
@@ -38,9 +38,9 @@ builder.Services.AddSingleton<IMyService, MyService>();
 var app = builder.Build();
 
 Console.WriteLine("🚀 Cosmo Feature Showcase started!");
-Console.WriteLine("🌐 Static Files: http://localhost:5000/");
-Console.WriteLine("📄 OpenAPI Spec: http://localhost:5000/openapi.json");
-Console.WriteLine("⚡ WebSockets:   ws://localhost:5000/ws");
+Console.WriteLine("🌐 Static Files: http://localhost:5005/");
+Console.WriteLine("📄 OpenAPI Spec: http://localhost:5005/openapi.json");
+Console.WriteLine("⚡ WebSockets:   ws://localhost:5005/ws");
 
 app.Run();
 
