@@ -30,8 +30,8 @@ record BenchResult(string Scenario, List<double> Samples)
 
 class Program
 {
-    const int WarmupRounds  = 50;
-    const int MeasureRounds = 1000;
+    const int WarmupRounds  = 100;
+    const int MeasureRounds = 2000;
 
     static readonly string EchoBody = JsonSerializer.Serialize(new
     {
@@ -55,8 +55,12 @@ class Program
         Console.WriteLine($"║  Rounds   : {WarmupRounds} warmup + {MeasureRounds} measured{"",-12}║");
         Console.WriteLine($"╚══════════════════════════════════════════════╝");
 
-        using var http = new HttpClient { BaseAddress = new Uri(url) };
-        http.DefaultRequestHeaders.ConnectionClose = false;
+        var handler = new SocketsHttpHandler
+        {
+            PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            MaxConnectionsPerServer = 100
+        };
+        using var http = new HttpClient(handler) { BaseAddress = new Uri(url) };
 
         // Verify server
         try {
@@ -69,7 +73,7 @@ class Program
         }
 
         // ─── Warmup ───────────────────────────────────────────────────────
-        Console.Write("[Warmup] ...");
+        Console.Write("[Warmup] Running...");
         for (int i = 0; i < WarmupRounds; i++)
         {
             await http.GetAsync("/ping");
@@ -82,11 +86,19 @@ class Program
         // ─── Measured rounds ──────────────────────────────────────────────
         var results = new List<BenchResult>();
 
-        results.Add(await RunScenario("GET /ping",      MeasureRounds, () => http.GetAsync("/ping")));
-        results.Add(await RunScenario("GET /json",      MeasureRounds, () => http.GetAsync("/json")));
-        results.Add(await RunScenario("GET /route/{id}", MeasureRounds, () => http.GetAsync("/route/7")));
-        results.Add(await RunScenario("POST /echo",     MeasureRounds, () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))));
-        results.Add(await RunScenario("GET /middleware", MeasureRounds, () => http.GetAsync("/middleware")));
+        var scenarios = new (string name, Func<Task<HttpResponseMessage>> fn)[]
+        {
+            ("GET /ping",      () => http.GetAsync("/ping")),
+            ("GET /json",      () => http.GetAsync("/json")),
+            ("GET /route/{id}", () => http.GetAsync("/route/7")),
+            ("POST /echo",     () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))),
+            ("GET /middleware", () => http.GetAsync("/middleware"))
+        };
+
+        foreach (var s in scenarios)
+        {
+            results.Add(await RunScenario(s.name, MeasureRounds, s.fn));
+        }
 
         // ─── Report ───────────────────────────────────────────────────────
         PrintReport(target, results);
@@ -94,12 +106,15 @@ class Program
 
     static async Task<BenchResult> RunScenario(string name, int rounds, Func<Task<HttpResponseMessage>> fn)
     {
-        Console.Write($"  {name,-20} ...");
+        Console.Write($"  {name,-20} [");
         var samples = new List<double>(rounds);
         int errors = 0;
+        int progressStep = rounds / 20;
 
         for (int i = 0; i < rounds; i++)
         {
+            if (i % progressStep == 0) Console.Write("=");
+            
             var sw = Stopwatch.StartNew();
             try {
                 using var resp = await fn();
@@ -113,7 +128,7 @@ class Program
             }
         }
 
-        Console.WriteLine(errors > 0 ? $" done ({errors} errors)." : " done.");
+        Console.WriteLine($"] done{(errors > 0 ? $" ({errors} errors)" : "")}.");
         return new BenchResult(name, samples);
     }
 
