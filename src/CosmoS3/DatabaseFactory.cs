@@ -90,8 +90,9 @@ public static class DatabaseFactory
 
         await using (db)
         {
-            // Strip single-line comments, then split into individual statements
+            // Strip single-line comments; also strip GO batch separators (T-SQL tool artifact)
             var stripped = Regex.Replace(sql, @"--[^\r\n]*", "");
+            stripped     = Regex.Replace(stripped, @"(?m)^\s*GO\s*$", "", RegexOptions.IgnoreCase);
             var statements = Regex.Split(stripped, @";")
                 .Select(s => s.Trim())
                 .Where(s => s.Length > 0)

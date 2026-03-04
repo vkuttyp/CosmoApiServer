@@ -4,7 +4,7 @@
 
 CREATE SCHEMA IF NOT EXISTS s3;
 
-CREATE TABLE s3.users (
+CREATE TABLE IF NOT EXISTS s3.users (
     id         SERIAL       PRIMARY KEY,
     guid       VARCHAR(64)  NOT NULL UNIQUE,
     name       VARCHAR(256) NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE s3.users (
     createdutc TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.credentials (
+CREATE TABLE IF NOT EXISTS s3.credentials (
     id          SERIAL       PRIMARY KEY,
     guid        VARCHAR(64)  NOT NULL UNIQUE,
     userguid    VARCHAR(64)  NOT NULL,
@@ -23,7 +23,7 @@ CREATE TABLE s3.credentials (
     createdutc  TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.buckets (
+CREATE TABLE IF NOT EXISTS s3.buckets (
     id                SERIAL       PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     ownerguid         VARCHAR(64)  NOT NULL,
@@ -37,7 +37,7 @@ CREATE TABLE s3.buckets (
     createdutc        TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.objects (
+CREATE TABLE IF NOT EXISTS s3.objects (
     id            SERIAL        PRIMARY KEY,
     guid          VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)   NOT NULL,
@@ -60,7 +60,7 @@ CREATE TABLE s3.objects (
     lastaccessutc TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.buckettags (
+CREATE TABLE IF NOT EXISTS s3.buckettags (
     id         SERIAL        PRIMARY KEY,
     guid       VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid VARCHAR(64)   NOT NULL,
@@ -69,7 +69,7 @@ CREATE TABLE s3.buckettags (
     createdutc TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.objecttags (
+CREATE TABLE IF NOT EXISTS s3.objecttags (
     id         SERIAL        PRIMARY KEY,
     guid       VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid VARCHAR(64)   NOT NULL,
@@ -79,7 +79,7 @@ CREATE TABLE s3.objecttags (
     createdutc TIMESTAMP     NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.bucketacls (
+CREATE TABLE IF NOT EXISTS s3.bucketacls (
     id                SERIAL       PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     usergroup         VARCHAR(256),
@@ -94,7 +94,7 @@ CREATE TABLE s3.bucketacls (
     createdutc        TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.objectacls (
+CREATE TABLE IF NOT EXISTS s3.objectacls (
     id                SERIAL       PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     usergroup         VARCHAR(256),
@@ -110,7 +110,7 @@ CREATE TABLE s3.objectacls (
     createdutc        TIMESTAMP    NOT NULL DEFAULT NOW()
 );
 
-CREATE TABLE s3.uploads (
+CREATE TABLE IF NOT EXISTS s3.uploads (
     id            SERIAL        PRIMARY KEY,
     guid          VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)   NOT NULL,
@@ -124,7 +124,7 @@ CREATE TABLE s3.uploads (
     metadata      TEXT
 );
 
-CREATE TABLE s3.uploadparts (
+CREATE TABLE IF NOT EXISTS s3.uploadparts (
     id            SERIAL       PRIMARY KEY,
     guid          VARCHAR(64)  NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)  NOT NULL,
@@ -140,9 +140,9 @@ CREATE TABLE s3.uploadparts (
 );
 
 -- Seed defaults
-INSERT INTO s3.users  (guid, name, email) VALUES ('default', 'Default User', 'default@default.com');
+INSERT INTO s3.users  (guid, name, email) VALUES ('default', 'Default User', 'default@default.com') ON CONFLICT DO NOTHING;
 INSERT INTO s3.credentials (guid, userguid, description, accesskey, secretkey, isbase64)
-VALUES (gen_random_uuid()::text, 'default', 'Default key', 'default', 'default', 0);
+VALUES (gen_random_uuid()::text, 'default', 'Default key', 'default', 'default', 0) ON CONFLICT DO NOTHING;
 INSERT INTO s3.buckets (guid, ownerguid, name, regionstring, storagetype, diskdirectory,
                         enableversioning, enablepublicwrite, enablepublicread)
-VALUES ('default', 'default', 'default', 'us-west-1', 'Disk', './disk/default/Objects/', 0, 0, 1);
+VALUES ('default', 'default', 'default', 'us-west-1', 'Disk', './disk/default/Objects/', 0, 0, 1) ON CONFLICT DO NOTHING;

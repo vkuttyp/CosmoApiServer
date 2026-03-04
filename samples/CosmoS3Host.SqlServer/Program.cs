@@ -17,7 +17,7 @@ var settings = new SettingsBase
     Database = new DatabaseSettings
     {
         DatabaseType     = "mssql",
-        ConnectionString = "Server=127.0.0.1,1433;Database=cosmos3;User Id=sa;Password=YourPassword123!;TrustServerCertificate=True;"
+        ConnectionString = "Server=127.0.0.1,1433;Database=MurshiDb;User Id=sa;Password=aBCD111;TrustServerCertificate=True;"
     },
 
     Storage = new StorageSettings

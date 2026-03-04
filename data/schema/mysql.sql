@@ -2,7 +2,7 @@
 -- Tables use the s3_ prefix (MySQL treats schemas as databases).
 -- Run once against the target database.
 
-CREATE TABLE s3_users (
+CREATE TABLE IF NOT EXISTS s3_users (
     id         INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid       VARCHAR(64)  NOT NULL UNIQUE,
     name       VARCHAR(256) NOT NULL,
@@ -10,7 +10,7 @@ CREATE TABLE s3_users (
     createdutc DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_credentials (
+CREATE TABLE IF NOT EXISTS s3_credentials (
     id          INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid        VARCHAR(64)  NOT NULL UNIQUE,
     userguid    VARCHAR(64)  NOT NULL,
@@ -21,7 +21,7 @@ CREATE TABLE s3_credentials (
     createdutc  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_buckets (
+CREATE TABLE IF NOT EXISTS s3_buckets (
     id                INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     ownerguid         VARCHAR(64)  NOT NULL,
@@ -35,7 +35,7 @@ CREATE TABLE s3_buckets (
     createdutc        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_objects (
+CREATE TABLE IF NOT EXISTS s3_objects (
     id            BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid          VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)   NOT NULL,
@@ -58,7 +58,7 @@ CREATE TABLE s3_objects (
     lastaccessutc DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_buckettags (
+CREATE TABLE IF NOT EXISTS s3_buckettags (
     id         INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid       VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid VARCHAR(64)   NOT NULL,
@@ -67,7 +67,7 @@ CREATE TABLE s3_buckettags (
     createdutc DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_objecttags (
+CREATE TABLE IF NOT EXISTS s3_objecttags (
     id         INT           NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid       VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid VARCHAR(64)   NOT NULL,
@@ -77,7 +77,7 @@ CREATE TABLE s3_objecttags (
     createdutc DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_bucketacls (
+CREATE TABLE IF NOT EXISTS s3_bucketacls (
     id                INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     usergroup         VARCHAR(256),
@@ -92,7 +92,7 @@ CREATE TABLE s3_bucketacls (
     createdutc        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_objectacls (
+CREATE TABLE IF NOT EXISTS s3_objectacls (
     id                INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid              VARCHAR(64)  NOT NULL UNIQUE,
     usergroup         VARCHAR(256),
@@ -108,7 +108,7 @@ CREATE TABLE s3_objectacls (
     createdutc        DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE TABLE s3_uploads (
+CREATE TABLE IF NOT EXISTS s3_uploads (
     id            BIGINT        NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid          VARCHAR(64)   NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)   NOT NULL,
@@ -122,7 +122,7 @@ CREATE TABLE s3_uploads (
     metadata      TEXT
 );
 
-CREATE TABLE s3_uploadparts (
+CREATE TABLE IF NOT EXISTS s3_uploadparts (
     id            INT          NOT NULL AUTO_INCREMENT PRIMARY KEY,
     guid          VARCHAR(64)  NOT NULL UNIQUE,
     bucketguid    VARCHAR(64)  NOT NULL,
@@ -138,9 +138,9 @@ CREATE TABLE s3_uploadparts (
 );
 
 -- Seed defaults
-INSERT INTO s3_users  (guid, name, email) VALUES ('default', 'Default User', 'default@default.com');
-INSERT INTO s3_credentials (guid, userguid, description, accesskey, secretkey, isbase64)
+INSERT IGNORE INTO s3_users  (guid, name, email) VALUES ('default', 'Default User', 'default@default.com');
+INSERT IGNORE INTO s3_credentials (guid, userguid, description, accesskey, secretkey, isbase64)
 VALUES (UUID(), 'default', 'Default key', 'default', 'default', 0);
-INSERT INTO s3_buckets (guid, ownerguid, name, regionstring, storagetype, diskdirectory,
+INSERT IGNORE INTO s3_buckets (guid, ownerguid, name, regionstring, storagetype, diskdirectory,
                         enableversioning, enablepublicwrite, enablepublicread)
 VALUES ('default', 'default', 'default', 'us-west-1', 'Disk', './disk/default/Objects/', 0, 0, 1);

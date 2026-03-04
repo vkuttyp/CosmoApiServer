@@ -1,10 +1,11 @@
 -- CosmoS3 schema for Microsoft SQL Server
--- Run once against the target database.
+-- Idempotent: safe to run multiple times (uses IF NOT EXISTS guards).
 -- Tables live in the [s3] schema.
 
-CREATE SCHEMA s3;
-GO
+IF NOT EXISTS (SELECT * FROM sys.schemas WHERE name = 's3')
+    EXEC('CREATE SCHEMA [s3]');
 
+IF OBJECT_ID('s3.users', 'U') IS NULL
 CREATE TABLE s3.users (
     id          INT            IDENTITY(1,1) PRIMARY KEY,
     guid        NVARCHAR(64)   NOT NULL UNIQUE,
@@ -13,6 +14,7 @@ CREATE TABLE s3.users (
     createdutc  DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.credentials', 'U') IS NULL
 CREATE TABLE s3.credentials (
     id          INT            IDENTITY(1,1) PRIMARY KEY,
     guid        NVARCHAR(64)   NOT NULL UNIQUE,
@@ -24,6 +26,7 @@ CREATE TABLE s3.credentials (
     createdutc  DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.buckets', 'U') IS NULL
 CREATE TABLE s3.buckets (
     id               INT            IDENTITY(1,1) PRIMARY KEY,
     guid             NVARCHAR(64)   NOT NULL UNIQUE,
@@ -38,13 +41,14 @@ CREATE TABLE s3.buckets (
     createdutc       DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.objects', 'U') IS NULL
 CREATE TABLE s3.objects (
     id             INT            IDENTITY(1,1) PRIMARY KEY,
     guid           NVARCHAR(64)   NOT NULL UNIQUE,
     bucketguid     NVARCHAR(64)   NOT NULL,
     ownerguid      NVARCHAR(64)   NOT NULL,
     authorguid     NVARCHAR(64)   NOT NULL,
-    objectkey          NVARCHAR(1024) NOT NULL,
+    objectkey      NVARCHAR(1024) NOT NULL,
     contenttype    NVARCHAR(256),
     contentlength  BIGINT         NOT NULL DEFAULT 0,
     version        BIGINT         NOT NULL DEFAULT 1,
@@ -61,6 +65,7 @@ CREATE TABLE s3.objects (
     lastaccessutc  DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.buckettags', 'U') IS NULL
 CREATE TABLE s3.buckettags (
     id         INT            IDENTITY(1,1) PRIMARY KEY,
     guid       NVARCHAR(64)   NOT NULL UNIQUE,
@@ -70,6 +75,7 @@ CREATE TABLE s3.buckettags (
     createdutc DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.objecttags', 'U') IS NULL
 CREATE TABLE s3.objecttags (
     id         INT            IDENTITY(1,1) PRIMARY KEY,
     guid       NVARCHAR(64)   NOT NULL UNIQUE,
@@ -80,6 +86,7 @@ CREATE TABLE s3.objecttags (
     createdutc DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.bucketacls', 'U') IS NULL
 CREATE TABLE s3.bucketacls (
     id                 INT            IDENTITY(1,1) PRIMARY KEY,
     guid               NVARCHAR(64)   NOT NULL UNIQUE,
@@ -95,6 +102,7 @@ CREATE TABLE s3.bucketacls (
     createdutc         DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.objectacls', 'U') IS NULL
 CREATE TABLE s3.objectacls (
     id                 INT            IDENTITY(1,1) PRIMARY KEY,
     guid               NVARCHAR(64)   NOT NULL UNIQUE,
@@ -111,13 +119,14 @@ CREATE TABLE s3.objectacls (
     createdutc         DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
 
+IF OBJECT_ID('s3.uploads', 'U') IS NULL
 CREATE TABLE s3.uploads (
     id             INT            IDENTITY(1,1) PRIMARY KEY,
     guid           NVARCHAR(64)   NOT NULL UNIQUE,
     bucketguid     NVARCHAR(64)   NOT NULL,
     ownerguid      NVARCHAR(64)   NOT NULL,
     authorguid     NVARCHAR(64)   NOT NULL,
-    objectkey          NVARCHAR(1024) NOT NULL,
+    objectkey      NVARCHAR(1024) NOT NULL,
     createdutc     DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     lastaccessutc  DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     expirationutc  DATETIME2      NOT NULL,
@@ -125,6 +134,7 @@ CREATE TABLE s3.uploads (
     metadata       NVARCHAR(MAX)
 );
 
+IF OBJECT_ID('s3.uploadparts', 'U') IS NULL
 CREATE TABLE s3.uploadparts (
     id            INT            IDENTITY(1,1) PRIMARY KEY,
     guid          NVARCHAR(64)   NOT NULL UNIQUE,
@@ -139,16 +149,17 @@ CREATE TABLE s3.uploadparts (
     lastaccessutc DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME(),
     createdutc    DATETIME2      NOT NULL DEFAULT SYSUTCDATETIME()
 );
-GO
 
--- Seed default user, credential, and bucket
-INSERT INTO s3.users  (guid, name, email)
-VALUES ('default', 'Default User', 'default@default.com');
+IF NOT EXISTS (SELECT 1 FROM s3.users WHERE guid = 'default')
+    INSERT INTO s3.users (guid, name, email)
+    VALUES ('default', 'Default User', 'default@default.com');
 
-INSERT INTO s3.credentials (guid, userguid, description, accesskey, secretkey, isbase64)
-VALUES (NEWID(), 'default', 'Default key', 'default', 'default', 0);
+IF NOT EXISTS (SELECT 1 FROM s3.credentials WHERE accesskey = 'default')
+    INSERT INTO s3.credentials (guid, userguid, description, accesskey, secretkey, isbase64)
+    VALUES (NEWID(), 'default', 'Default key', 'default', 'default', 0);
 
-INSERT INTO s3.buckets (guid, ownerguid, name, regionstring, storagetype, diskdirectory,
-                        enableversioning, enablepublicwrite, enablepublicread)
-VALUES ('default', 'default', 'default', 'us-west-1', 'Disk', './disk/default/Objects/', 0, 0, 1);
-GO
+IF NOT EXISTS (SELECT 1 FROM s3.buckets WHERE guid = 'default')
+    INSERT INTO s3.buckets (guid, ownerguid, name, regionstring, storagetype, diskdirectory,
+                            enableversioning, enablepublicwrite, enablepublicread)
+    VALUES ('default', 'default', 'default', 'us-west-1', 'Disk', './disk/default/Objects/', 0, 0, 1);
+
