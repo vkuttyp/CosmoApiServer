@@ -3,4 +3,3 @@ obj/
 *.user
 .DS_Store
 .vs/
-*.nupkg
