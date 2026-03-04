@@ -199,6 +199,11 @@ public static class ControllerScanner
         if (param.GetCustomAttribute<FromQueryAttribute>() is { } fromQuery)
         {
             var key = fromQuery.Name ?? name;
+            if (IsComplexType(type))
+            {
+                var binder = CompileComplexQueryBinder(type, string.IsNullOrEmpty(fromQuery.Name) ? "" : key);
+                return ctx => binder(ctx.Request.Query);
+            }
             return ctx => ctx.Request.Query.TryGetValue(key, out var v) ? Convert(v, type) : null;
         }
 
@@ -225,9 +230,22 @@ public static class ControllerScanner
             };
         }
 
+        // [FromServices]
+        if (param.GetCustomAttribute<FromServicesAttribute>() is not null)
+        {
+            return ctx => ctx.RequestServices.GetRequiredService(type);
+        }
+
         // HttpContext injection
         if (type == typeof(HttpContext))
             return ctx => ctx;
+
+        // Implicit complex type (from query)
+        if (IsComplexType(type))
+        {
+            var binder = CompileComplexQueryBinder(type, "");
+            return ctx => binder(ctx.Request.Query);
+        }
 
         // Implicit: route by name → query by name → DI (runtime dictionary lookup only, no reflection)
         return ctx =>
@@ -237,6 +255,61 @@ public static class ControllerScanner
             return ctx.RequestServices.GetService(type);
         };
     }
+
+    private static bool IsComplexType(Type type)
+    {
+        if (type.IsPrimitive || type.IsEnum || type == typeof(string) || type == typeof(decimal) || type == typeof(Guid) || type == typeof(DateTime) || type == typeof(DateTimeOffset)) return false;
+        var underlying = Nullable.GetUnderlyingType(type);
+        if (underlying != null) return IsComplexType(underlying);
+        return type.IsClass || (type.IsValueType && !type.IsPrimitive);
+    }
+
+    private static Func<IReadOnlyDictionary<string, string>, object?> CompileComplexQueryBinder(Type type, string prefix)
+    {
+        var dictParam = Expression.Parameter(typeof(IReadOnlyDictionary<string, string>), "query");
+        var instanceVar = Expression.Variable(type, "instance");
+
+        var createInstance = Expression.Assign(instanceVar, Expression.New(type));
+        var statements = new List<Expression> { createInstance };
+
+        var tryGetValueMethod = typeof(IReadOnlyDictionary<string, string>).GetMethod("TryGetValue")!;
+        var convertMethod = typeof(ControllerScanner).GetMethod("Convert", BindingFlags.NonPublic | BindingFlags.Static)!;
+
+        foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (!prop.CanWrite) continue;
+
+            var queryKey = string.IsNullOrEmpty(prefix) ? prop.Name : $"{prefix}.{prop.Name}";
+
+            var valueVar = Expression.Variable(typeof(string), "val");
+            var tryGetCall = Expression.Call(dictParam, tryGetValueMethod, Expression.Constant(queryKey), valueVar);
+
+            var convertedVar = Expression.Variable(typeof(object), "converted");
+            var convertCall = Expression.Call(convertMethod, valueVar, Expression.Constant(prop.PropertyType));
+            var assignConverted = Expression.Assign(convertedVar, convertCall);
+
+            var assignProp = Expression.Assign(
+                Expression.Property(instanceVar, prop),
+                Expression.Convert(convertedVar, prop.PropertyType)
+            );
+
+            var ifNotNull = Expression.IfThen(
+                Expression.NotEqual(convertedVar, Expression.Constant(null, typeof(object))),
+                assignProp
+            );
+
+            var block = Expression.Block(new[] { convertedVar }, assignConverted, ifNotNull);
+            var ifTrue = Expression.IfThen(tryGetCall, block);
+
+            statements.Add(Expression.Block(new[] { valueVar }, ifTrue));
+        }
+
+        statements.Add(Expression.Convert(instanceVar, typeof(object)));
+        var body = Expression.Block(new[] { instanceVar }, statements);
+
+        return Expression.Lambda<Func<IReadOnlyDictionary<string, string>, object?>>(body, dictParam).Compile();
+    }
+
 
     private static string CombineTemplates(string prefix, string template)
     {

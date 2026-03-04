@@ -31,4 +31,49 @@ public class ModelBindingTests
 
         Assert.Equal(guid, result);
     }
+
+    public class TestQueryModel
+    {
+        public int Page { get; set; }
+        public string? Filter { get; set; }
+    }
+
+    [Fact]
+    public void CompileComplexQueryBinder_BindsPropertiesCorrectly()
+    {
+        var method = typeof(ControllerScanner).GetMethod("CompileComplexQueryBinder", BindingFlags.NonPublic | BindingFlags.Static);
+        var binder = (Func<IReadOnlyDictionary<string, string>, object?>)method!.Invoke(null, [typeof(TestQueryModel), ""])!;
+
+        var query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "page", "5" },
+            { "filter", "active" }
+        };
+
+        var result = binder(query) as TestQueryModel;
+
+        Assert.NotNull(result);
+        Assert.Equal(5, result.Page);
+        Assert.Equal("active", result.Filter);
+    }
+
+    [Fact]
+    public void CompileComplexQueryBinder_BindsPropertiesWithPrefixCorrectly()
+    {
+        var method = typeof(ControllerScanner).GetMethod("CompileComplexQueryBinder", BindingFlags.NonPublic | BindingFlags.Static);
+        var binder = (Func<IReadOnlyDictionary<string, string>, object?>)method!.Invoke(null, [typeof(TestQueryModel), "filter"])!;
+
+        var query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            { "filter.page", "10" },
+            { "filter.filter", "pending" }
+        };
+
+        var result = binder(query) as TestQueryModel;
+
+        Assert.NotNull(result);
+        Assert.Equal(10, result.Page);
+        Assert.Equal("pending", result.Filter);
+    }
 }
+

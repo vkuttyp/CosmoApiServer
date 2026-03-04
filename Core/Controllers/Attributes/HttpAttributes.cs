@@ -61,3 +61,7 @@ public sealed class FromFormAttribute(string? name = null) : Attribute
 {
     public string? Name { get; } = name;
 }
+
+/// <summary>Bind parameter from the dependency injection container.</summary>
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class FromServicesAttribute : Attribute;
