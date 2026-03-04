@@ -4,9 +4,3 @@ obj/
 .DS_Store
 .vs/
 *.nupkg
-BenchmarkDotNet.Artifacts/
-temp/
-data/objects/
-S3Server/
-logs.txt
-data/
