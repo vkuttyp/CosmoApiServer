@@ -29,6 +29,18 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseExceptionHandler()
+    {
+        _middlewarePipeline.UseInstance(new GlobalExceptionHandlerMiddleware());
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseStaticFiles(string rootPath = "wwwroot")
+    {
+        _middlewarePipeline.UseInstance(new StaticFileMiddleware(rootPath));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseCors(Action<CorsOptions>? configure = null)
     {
         var opts = new CorsOptions();

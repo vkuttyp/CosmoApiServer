@@ -1,3 +1,4 @@
+using System;
 using CosmoApiServer.Core.Hosting;
 
 // Benchmark server matching CosmoApiServer-Swift bench routes:
