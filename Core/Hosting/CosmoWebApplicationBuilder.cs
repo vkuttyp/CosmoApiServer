@@ -1,5 +1,6 @@
 using System.Reflection;
 using CosmoApiServer.Core.Auth;
+using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
 using Microsoft.Extensions.DependencyInjection;
@@ -15,6 +16,8 @@ public sealed class CosmoWebApplicationBuilder
     private readonly MiddlewarePipeline _middlewarePipeline = new();
     private readonly List<Assembly> _controllerAssemblies = [];
     private readonly ServerOptions _options = new();
+    private string? _openApiPath;
+    private OpenApiInfo? _openApiInfo;
 
     public IServiceCollection Services => _services;
     public ServerOptions ServerOptions => _options;
@@ -86,6 +89,14 @@ public sealed class CosmoWebApplicationBuilder
         var opts = new ResponseCompressionOptions();
         configure?.Invoke(opts);
         _middlewarePipeline.UseInstance(new ResponseCompressionMiddleware(opts));
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseOpenApi(string path = "/openapi.json", Action<OpenApiInfo>? configure = null)
+    {
+        _openApiPath = path;
+        _openApiInfo = new OpenApiInfo();
+        configure?.Invoke(_openApiInfo);
         return this;
     }
 
@@ -176,6 +187,17 @@ public sealed class CosmoWebApplicationBuilder
         // Register RouteTable in DI
         var routeTable = new RouteTable();
         _services.AddSingleton(routeTable);
+
+        // OpenAPI generation (happens once at startup)
+        if (_openApiPath != null && _openApiInfo != null)
+        {
+            var controllerTypes = _controllerAssemblies
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t.IsClass && !t.IsAbstract && t.IsSubclassOf(typeof(ControllerBase)));
+            
+            var spec = OpenApiGenerator.Generate(controllerTypes, _openApiInfo);
+            _middlewarePipeline.UseInstance(new OpenApiMiddleware(_openApiPath, spec));
+        }
 
         var provider = _services.BuildServiceProvider();
 
