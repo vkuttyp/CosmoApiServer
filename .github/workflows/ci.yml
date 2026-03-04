@@ -26,4 +26,5 @@ jobs:
         run: dotnet build Core/CosmoApiServer.Core.csproj --no-restore -c Release
 
       - name: Test
-        run: dotnet test tests/CosmoApiServer.Core.Tests.csproj --no-build -c Release
+        run: dotnet test tests/CosmoApiServer.Core.Tests/CosmoApiServer.Core.Tests.csproj --no-build -c Release
+        
