@@ -207,7 +207,7 @@ internal static class Http11Parser
             else if (b >= 'a' && b <= 'f') digit = b - 'a' + 10;
             else if (b >= 'A' && b <= 'F') digit = b - 'A' + 10;
             else return false;
-            value = (value << 4) | digit;
+            value = (value << 4) | (long)digit;
         }
         return true;
     }
