@@ -12,15 +12,16 @@ namespace ApiServer.Benchmark;
 record BenchResult(string Scenario, List<double> Samples)
 {
     public int N        => Samples.Count;
-    public double Min   => Samples.Min();
+    public double Min   => Samples.Count > 0 ? Samples.Min() : 0;
     public double P50   => Percentile(50);
     public double P95   => Percentile(95);
     public double P99   => Percentile(99);
-    public double Max   => Samples.Max();
+    public double Max   => Samples.Count > 0 ? Samples.Max() : 0;
     public double OpsPerSec => P50 > 0 ? 1000.0 / P50 : 0;
 
     double Percentile(int p)
     {
+        if (Samples.Count == 0) return 0;
         var sorted = Samples.OrderBy(x => x).ToList();
         int idx = (int)Math.Ceiling(p / 100.0 * sorted.Count) - 1;
         return sorted[Math.Clamp(idx, 0, sorted.Count - 1)];
@@ -29,8 +30,8 @@ record BenchResult(string Scenario, List<double> Samples)
 
 class Program
 {
-    const int WarmupRounds  = 10;
-    const int MeasureRounds = 200;
+    const int WarmupRounds  = 50;
+    const int MeasureRounds = 1000;
 
     static readonly string EchoBody = JsonSerializer.Serialize(new
     {
@@ -43,9 +44,9 @@ class Program
         string target = args.Length > 0 ? args[0] : "CosmoApiServer";
         string url = target switch
         {
-            "CosmoApiServer" => "http://localhost:9001",
-            "AspNetCore"     => "http://localhost:9002",
-            _                => args[0]  // raw URL
+            "CosmoApiServer" => "http://127.0.0.1:9001",
+            "AspNetCore"     => "http://127.0.0.1:9002",
+            _                => args[0]
         };
 
         Console.WriteLine($"╔══════════════════════════════════════════════╗");
@@ -56,19 +57,15 @@ class Program
 
         using var http = new HttpClient { BaseAddress = new Uri(url) };
         http.DefaultRequestHeaders.ConnectionClose = false;
-        http.Timeout = TimeSpan.FromSeconds(15);
 
-        // Verify server is up
-        try
-        {
+        // Verify server
+        try {
             var resp = await http.GetAsync("/ping");
             resp.EnsureSuccessStatusCode();
             Console.WriteLine($"Server responded: {(int)resp.StatusCode} — ready.\n");
-        }
-        catch (Exception ex)
-        {
+        } catch (Exception ex) {
             Console.Error.WriteLine($"ERROR: Server at {url} is not responding: {ex.Message}");
-            Environment.Exit(1);
+            return;
         }
 
         // ─── Warmup ───────────────────────────────────────────────────────
@@ -76,8 +73,8 @@ class Program
         for (int i = 0; i < WarmupRounds; i++)
         {
             await http.GetAsync("/ping");
-            await http.GetAsync("/items");
-            await http.GetAsync("/items/5");
+            await http.GetAsync("/json");
+            await http.GetAsync("/route/5");
             await http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"));
         }
         Console.WriteLine(" done.\n");
@@ -85,17 +82,11 @@ class Program
         // ─── Measured rounds ──────────────────────────────────────────────
         var results = new List<BenchResult>();
 
-        results.Add(await RunScenario("GET /ping",      MeasureRounds,
-            () => http.GetAsync("/ping")));
-
-        results.Add(await RunScenario("GET /items",     MeasureRounds,
-            () => http.GetAsync("/items")));
-
-        results.Add(await RunScenario("GET /items/{id}", MeasureRounds,
-            () => http.GetAsync("/items/7")));
-
-        results.Add(await RunScenario("POST /echo",     MeasureRounds,
-            () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))));
+        results.Add(await RunScenario("GET /ping",      MeasureRounds, () => http.GetAsync("/ping")));
+        results.Add(await RunScenario("GET /json",      MeasureRounds, () => http.GetAsync("/json")));
+        results.Add(await RunScenario("GET /route/{id}", MeasureRounds, () => http.GetAsync("/route/7")));
+        results.Add(await RunScenario("POST /echo",     MeasureRounds, () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))));
+        results.Add(await RunScenario("GET /middleware", MeasureRounds, () => http.GetAsync("/middleware")));
 
         // ─── Report ───────────────────────────────────────────────────────
         PrintReport(target, results);
@@ -110,42 +101,31 @@ class Program
         for (int i = 0; i < rounds; i++)
         {
             var sw = Stopwatch.StartNew();
-            try
-            {
-                var resp = await fn();
-                _ = await resp.Content.ReadAsStringAsync(); // read to completion
+            try {
+                using var resp = await fn();
+                await resp.Content.ReadAsByteArrayAsync();
                 sw.Stop();
-                if (resp.IsSuccessStatusCode)
-                    samples.Add(sw.Elapsed.TotalMilliseconds);
-                else
-                    errors++;
-            }
-            catch
-            {
+                if (resp.IsSuccessStatusCode) samples.Add(sw.Elapsed.TotalMilliseconds);
+                else errors++;
+            } catch {
                 sw.Stop();
                 errors++;
             }
         }
 
-        string errNote = errors > 0 ? $" ({errors} errors)" : "";
-        Console.WriteLine($" done{errNote}.");
+        Console.WriteLine(errors > 0 ? $" done ({errors} errors)." : " done.");
         return new BenchResult(name, samples);
     }
 
     static void PrintReport(string server, List<BenchResult> results)
     {
         Console.WriteLine();
-        Console.WriteLine($"╔══════════════════════════════════════════════════════════════════════════════╗");
-        Console.WriteLine($"║  BENCHMARK RESULTS — {server,-56}║");
-        Console.WriteLine($"╠══════════════════════╦════════╦═══════╦═══════╦═══════╦═══════╦═════════════╣");
+        Console.WriteLine($"╔══════════════════════╦════════╦═══════╦═══════╦═══════╦═══════╦═════════════╣");
         Console.WriteLine($"║  Scenario            ║   N    ║  Min  ║  P50  ║  P95  ║  P99  ║   ops/sec   ║");
         Console.WriteLine($"╠══════════════════════╬════════╬═══════╬═══════╬═══════╬═══════╬═════════════╣");
-        foreach (var r in results)
-        {
-            Console.WriteLine(
-                $"║  {r.Scenario,-20}║  {r.N,4}  ║ {r.Min,5:F1} ║ {r.P50,5:F1} ║ {r.P95,5:F1} ║ {r.P99,5:F1} ║ {r.OpsPerSec,9:F1}   ║");
+        foreach (var r in results) {
+            Console.WriteLine($"║  {r.Scenario,-20}║  {r.N,4}  ║ {r.Min,5:F2} ║ {r.P50,5:F2} ║ {r.P95,5:F2} ║ {r.P99,5:F2} ║ {r.OpsPerSec,9:F1}   ║");
         }
         Console.WriteLine($"╚══════════════════════╩════════╩═══════╩═══════╩═══════╩═══════╩═════════════╝");
-        Console.WriteLine("  All latency values in milliseconds. N=200 measured rounds.");
     }
 }
