@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\CosmoApiServer.Core\CosmoApiServer.Core.csproj" />
+    <ProjectReference Include="..\..\Core\CosmoApiServer.Core.csproj" />
   </ItemGroup>
 
   <ItemGroup>
