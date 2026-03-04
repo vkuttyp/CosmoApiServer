@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "vkuttyp",
+  "classifications": [ "Web", "API", "Service" ],
+  "name": "Cosmo API Server",
+  "identity": "CosmoApiServer.Template",
+  "shortName": "cosmoapi",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CosmoApiServerTemplate",
+  "preferNameDirectory": true
+}
