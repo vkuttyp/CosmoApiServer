@@ -202,6 +202,29 @@ public static class ControllerScanner
             return ctx => ctx.Request.Query.TryGetValue(key, out var v) ? Convert(v, type) : null;
         }
 
+        // [FromHeader]
+        if (param.GetCustomAttribute<FromHeaderAttribute>() is { } fromHeader)
+        {
+            var key = fromHeader.Name ?? name;
+            return ctx => ctx.Request.Headers.TryGetValue(key, out var v) ? Convert(v, type) : null;
+        }
+
+        // [FromForm]
+        if (param.GetCustomAttribute<FromFormAttribute>() is { } fromForm)
+        {
+            var key = fromForm.Name ?? name;
+            return ctx =>
+            {
+                if (!ctx.Items.TryGetValue("__MultipartForm", out var formObj))
+                {
+                    formObj = ctx.Request.ReadMultipart();
+                    ctx.Items["__MultipartForm"] = formObj;
+                }
+                var form = (MultipartForm)formObj!;
+                return form.Fields.TryGetValue(key, out var v) ? Convert(v, type) : null;
+            };
+        }
+
         // HttpContext injection
         if (type == typeof(HttpContext))
             return ctx => ctx;
@@ -228,12 +251,17 @@ public static class ControllerScanner
 
     private static object? Convert(string value, Type targetType)
     {
-        if (targetType == typeof(string)) return value;
-        if (targetType == typeof(int)  || targetType == typeof(int?))  return int.Parse(value);
-        if (targetType == typeof(long) || targetType == typeof(long?)) return long.Parse(value);
-        if (targetType == typeof(bool) || targetType == typeof(bool?)) return bool.Parse(value);
-        if (targetType == typeof(Guid) || targetType == typeof(Guid?)) return Guid.Parse(value);
-        return System.Convert.ChangeType(value, targetType);
+        if (string.IsNullOrEmpty(value)) return null;
+
+        var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
+
+        if (underlyingType == typeof(string)) return value;
+        if (underlyingType == typeof(int))    return int.Parse(value);
+        if (underlyingType == typeof(long))   return long.Parse(value);
+        if (underlyingType == typeof(bool))   return bool.Parse(value);
+        if (underlyingType == typeof(Guid))   return Guid.Parse(value);
+
+        return System.Convert.ChangeType(value, underlyingType);
     }
 }
 

@@ -47,3 +47,17 @@ public sealed class FromRouteAttribute(string? name = null) : Attribute
 {
     public string? Name { get; } = name;
 }
+
+/// <summary>Bind parameter from an HTTP header.</summary>
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class FromHeaderAttribute(string? name = null) : Attribute
+{
+    public string? Name { get; } = name;
+}
+
+/// <summary>Bind parameter from a multipart form field.</summary>
+[AttributeUsage(AttributeTargets.Parameter)]
+public sealed class FromFormAttribute(string? name = null) : Attribute
+{
+    public string? Name { get; } = name;
+}

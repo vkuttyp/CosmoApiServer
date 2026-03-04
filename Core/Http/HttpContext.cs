@@ -9,6 +9,11 @@ public sealed class HttpContext
     public HttpResponse Response { get; }
     public IServiceProvider RequestServices { get; set; }
 
+    /// <summary>
+    /// Per-request storage for middleware and framework components.
+    /// </summary>
+    public Dictionary<object, object?> Items { get; } = new();
+
     /// <summary>The authenticated user, set by JwtMiddleware. Null if unauthenticated.</summary>
     public ClaimsPrincipal? User { get; set; }
 

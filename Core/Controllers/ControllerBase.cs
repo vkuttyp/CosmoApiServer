@@ -16,6 +16,26 @@ public abstract class ControllerBase
     public HttpRequest Request => HttpContext.Request;
     public HttpResponse Response => HttpContext.Response;
 
+    /// <summary>
+    /// Collection of validation errors for the current request.
+    /// </summary>
+    public Dictionary<string, string> ModelState { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Gets a value indicating whether the model state is valid.
+    /// </summary>
+    public bool IsValid => ModelState.Count == 0;
+
+    /// <summary>
+    /// Validates the given model using DataAnnotations.
+    /// Errors are added to <see cref="ModelState"/>.
+    /// </summary>
+    protected bool TryValidate(object? model)
+    {
+        if (model is null) return true;
+        return ModelValidator.Validate(model, ModelState);
+    }
+
     protected IActionResult Ok() => new StatusCodeResult(200);
     protected IActionResult Ok<T>(T value) => new JsonResult<T>(value, 200);
     protected IActionResult Created<T>(string location, T value) => new CreatedResult<T>(location, value);
