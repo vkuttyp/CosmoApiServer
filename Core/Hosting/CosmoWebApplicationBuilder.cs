@@ -49,6 +49,14 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseRateLimiting(Action<RateLimitOptions>? configure = null)
+    {
+        var opts = new RateLimitOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new RateLimitingMiddleware(opts));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
     {
         _services.AddTransient(typeof(T));
