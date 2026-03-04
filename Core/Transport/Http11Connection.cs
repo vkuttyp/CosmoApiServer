@@ -124,6 +124,7 @@ internal static class Http11Connection
 
                 // Build HttpContext from parsed request
                 var httpContext = BuildContext(req, services);
+                httpContext.Items["__RawStream"] = stream;
 
                 // Run the full middleware + router pipeline
                 try { await pipeline(httpContext); }
@@ -153,6 +154,14 @@ internal static class Http11Connection
                 Http11Writer.WriteResponse(writer, httpContext.Response);
                 var flush = await writer.FlushAsync(ct);
                 if (flush.IsCompleted) break;
+
+                // ── WebSocket Upgrade Handover ───────────────────────────────
+                if (httpContext.Items.TryGetValue("__WebSocketUpgrade", out var upgrade) && upgrade is true)
+                {
+                    await writer.CompleteAsync();
+                    await reader.CompleteAsync();
+                    return; 
+                }
 
                 // Check if client requested close
                 if (httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&

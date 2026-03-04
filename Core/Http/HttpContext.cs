@@ -14,6 +14,11 @@ public sealed class HttpContext
     /// </summary>
     public Dictionary<object, object?> Items { get; } = new();
 
+    /// <summary>
+    /// Whether the current request is a WebSocket upgrade request.
+    /// </summary>
+    public bool IsWebSocketRequest => WebSocketHelper.IsWebSocketRequest(Request);
+
     /// <summary>The authenticated user, set by JwtMiddleware. Null if unauthenticated.</summary>
     public ClaimsPrincipal? User { get; set; }
 
@@ -32,5 +37,32 @@ public sealed class HttpContext
         Request = request;
         Response = response;
         RequestServices = services;
+    }
+
+    /// <summary>
+    /// Accepts a WebSocket upgrade request and returns a high-performance WebSocket instance.
+    /// </summary>
+    public async Task<CosmoWebSocket> AcceptWebSocketAsync()
+    {
+        if (!IsWebSocketRequest)
+            throw new InvalidOperationException("Not a WebSocket request.");
+
+        var key = Request.Headers["Sec-WebSocket-Key"];
+        var responseKey = WebSocketHelper.CreateResponseKey(key);
+
+        Response.StatusCode = 101;
+        Response.Headers["Upgrade"] = "websocket";
+        Response.Headers["Connection"] = "Upgrade";
+        Response.Headers["Sec-WebSocket-Accept"] = responseKey;
+
+        // Signal to the transport that we are switching protocols.
+        Items["__WebSocketUpgrade"] = true;
+
+        if (Items.TryGetValue("__RawStream", out var stream) && stream is Stream s)
+        {
+            return new CosmoWebSocket(s);
+        }
+
+        throw new InvalidOperationException("Raw stream not available for WebSocket upgrade.");
     }
 }
