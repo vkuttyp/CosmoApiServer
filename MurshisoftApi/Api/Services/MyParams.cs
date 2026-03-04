@@ -1,0 +1,20 @@
+﻿namespace Api.Services;
+
+public record DuReportParam(int voucherTypeId, DateTime from, DateTime to, int financialYear, int branchId);
+public record ItemBySupplierPar(string customerId, DateTime from, DateTime to);
+public record SupplierByItemPar(string itemId, DateTime from, DateTime to);
+public record StockMostMovingPar(int BranchID, int VoucherTypeID, int ReportType, int nRecords, DateTime from, DateTime to, string refNo);
+public record StockMostProfitPar(int BranchID, int ReportType, int nRecords, DateTime from, DateTime to, string refNo);
+public record CustomerInfoPar(int financialYear, int branchId, string customerId);
+public record InvoiceParam(string transactionId, string userName, string language);
+public record TransactionIdPar(string transactionId);
+public record VoucherNoPar(string voucherNo);
+public record ContractIdPar(string contractId);
+public record UserRightPar(int rightType, int userId, int groupId, string menuId, int rightId);
+public record VouchersByDateRangePar(int branchId, int voucherTypeId, DateTime from, DateTime to);
+public record CustomerWithItemIdPar(string customerId, string itemId);
+public record ZatcaCustomerValidationPar(string customerId, string vatNo, string language);
+public record CreateSqlUserPar(string dbName, string userName, string password);
+public record TranSearchPar(int year, int branchId, int voucherTypeId, DateTime from, DateTime to, bool isTemp, string searchTerm, int searchMethod);
+public record PeriodClosePar(int branchId, DateTime date);
+public record AccountNoPar(string accountNo);

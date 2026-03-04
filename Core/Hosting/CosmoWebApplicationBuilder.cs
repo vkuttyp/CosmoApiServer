@@ -100,6 +100,12 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseSwaggerUI(string path = "/swagger", string? openApiUrl = null)
+    {
+        _middlewarePipeline.UseInstance(new SwaggerUIMiddleware(path, openApiUrl ?? _openApiPath ?? "/openapi.json"));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
     {
         _services.AddTransient(typeof(T));
