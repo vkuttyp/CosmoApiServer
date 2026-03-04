@@ -57,6 +57,14 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseCsrf(Action<CsrfOptions>? configure = null)
+    {
+        var opts = new CsrfOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new CsrfMiddleware(opts));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
     {
         _services.AddTransient(typeof(T));
