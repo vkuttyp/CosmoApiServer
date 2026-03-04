@@ -81,6 +81,14 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseResponseCompression(Action<ResponseCompressionOptions>? configure = null)
+    {
+        var opts = new ResponseCompressionOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new ResponseCompressionMiddleware(opts));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseMiddleware<T>() where T : IMiddleware
     {
         _services.AddTransient(typeof(T));
