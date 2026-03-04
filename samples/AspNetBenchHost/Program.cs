@@ -1,33 +1,47 @@
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using System.Text.Json;
+
 var builder = WebApplication.CreateBuilder(args);
-builder.Logging.ClearProviders(); // silence startup noise
+builder.Logging.ClearProviders(); // match CosmoApiServer's low-overhead behavior
 var app = builder.Build();
 
-var items = Enumerable.Range(1, 20)
-    .Select(i => new Item(i, $"Item {i}", i % 2 == 0 ? "Electronics" : "Books", 9.99 + i))
-    .ToList();
+// GET /ping → "pong"
+app.MapGet("/ping", () => "pong");
 
-// GET /ping → minimal JSON
-app.MapGet("/ping", () => Results.Ok(new { status = "ok", server = "ASP.NET Core" }));
+// GET /json → dynamic JSON object
+app.MapGet("/json", () => Results.Json(new {
+    status = "ok",
+    timestamp = DateTime.UtcNow.ToString("o"),
+    server = "AspNetCore-DotNet"
+}));
 
-// GET /items → list of 20 items
-app.MapGet("/items", () => Results.Ok(items));
-
-// GET /items/{id} → single item by id
-app.MapGet("/items/{id}", (int id) =>
-    id >= 1 && id <= items.Count
-        ? Results.Ok(items[id - 1])
-        : Results.NotFound(new { error = "not found" }));
-
-// POST /echo → deserialize and echo back
+// POST /echo → raw body echo
 app.MapPost("/echo", async (HttpContext ctx) =>
 {
-    using var sr = new StreamReader(ctx.Request.Body);
-    var body = await sr.ReadToEndAsync();
-    ctx.Response.ContentType = "application/json";
-    await ctx.Response.WriteAsync(body);
+    ctx.Response.ContentType = ctx.Request.ContentType ?? "application/octet-stream";
+    await ctx.Request.Body.CopyToAsync(ctx.Response.Body);
 });
 
-Console.WriteLine("AspNetBenchHost listening on http://localhost:9002");
-app.Run("http://localhost:9002");
+// GET /route/{id} → route param extraction
+app.MapGet("/route/{id}", (string id) => Results.Json(new { id }));
 
-record Item(int Id, string Name, string Category, double Price);
+// GET /middleware → middleware traversal test
+app.Use(async (context, next) => {
+    if (context.Request.Path == "/middleware") {
+        context.Response.ContentType = "application/json";
+        await context.Response.WriteAsync(JsonSerializer.Serialize(new { 
+            path = context.Request.Path.Value, 
+            method = context.Request.Method 
+        }));
+        return;
+    }
+    await next();
+});
+
+Console.WriteLine("=== AspNetCore-DotNet Benchmark ===");
+Console.WriteLine("HTTP/1.1  → http://127.0.0.1:9002");
+Console.WriteLine($"Threads: {Environment.ProcessorCount}");
+app.Run("http://127.0.0.1:9002");
