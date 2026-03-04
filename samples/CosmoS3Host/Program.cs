@@ -1,17 +1,21 @@
-using System.Text.Json;
 using CosmoS3;
 using CosmoS3.Settings;
+using Microsoft.Extensions.Configuration;
 
-var jsonOptions = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
-var settings    = JsonSerializer.Deserialize<SettingsBase>(
-                      File.ReadAllText("system.json"), jsonOptions)
-                  ?? throw new InvalidOperationException("system.json is empty or invalid.");
+var config = new ConfigurationBuilder()
+    .SetBasePath(AppContext.BaseDirectory)
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
+    .Build();
 
-// CosmoS3Application.Create() automatically wires TLS, HTTP/2, CORS,
-// request logging, and the S3Middleware from the settings above.
-var app = CosmoS3Application.Create(settings, port: 8100);
+var settings = config.Get<SettingsBase>()
+    ?? throw new InvalidOperationException("appsettings.json is empty or invalid.");
 
-Console.WriteLine("CosmoS3 listening on http://localhost:8100");
+var port = config.GetValue<int>("Port", 8100);
+
+var app = CosmoS3Application.Create(settings, port: port);
+
+Console.WriteLine($"CosmoS3 listening on http://localhost:{port}");
 Console.WriteLine("Press Ctrl+C to stop.");
 
 app.Run();
+
