@@ -58,7 +58,9 @@ class Program
         var handler = new SocketsHttpHandler
         {
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
-            MaxConnectionsPerServer = 100
+            MaxConnectionsPerServer = 100,
+            UseCookies = true,
+            CookieContainer = new System.Net.CookieContainer()
         };
         using var http = new HttpClient(handler) { BaseAddress = new Uri(url) };
 
@@ -66,6 +68,19 @@ class Program
         try {
             var resp = await http.GetAsync("/ping");
             resp.EnsureSuccessStatusCode();
+            
+            // Get CSRF cookie for subsequent POSTs
+            if (resp.Headers.TryGetValues("Set-Cookie", out var cookies))
+            {
+                var cookie = cookies.FirstOrDefault(c => c.Contains("XSRF-TOKEN"));
+                if (cookie != null)
+                {
+                    var token = cookie.Split(';')[0].Split('=')[1];
+                    http.DefaultRequestHeaders.Add("X-XSRF-TOKEN", token);
+                    // Standard SocketsHttpHandler handles the cookie automatically for subsequent requests if we don't clear it
+                }
+            }
+
             Console.WriteLine($"Server responded: {(int)resp.StatusCode} — ready.\n");
         } catch (Exception ex) {
             Console.Error.WriteLine($"ERROR: Server at {url} is not responding: {ex.Message}");
@@ -92,7 +107,9 @@ class Program
             ("GET /json",      () => http.GetAsync("/json")),
             ("GET /route/{id}", () => http.GetAsync("/route/7")),
             ("POST /echo",     () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))),
-            ("GET /middleware", () => http.GetAsync("/middleware"))
+            ("GET /middleware", () => http.GetAsync("/middleware")),
+            ("GET /complex",    () => http.GetAsync("/complex?page=42&q=benchmark")),
+            ("GET /filtered",   () => http.GetAsync("/filtered"))
         };
 
         foreach (var s in scenarios)

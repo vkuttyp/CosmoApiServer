@@ -1,5 +1,9 @@
 using System;
+using System.Threading.Tasks;
 using CosmoApiServer.Core.Hosting;
+using CosmoApiServer.Core.Controllers;
+using CosmoApiServer.Core.Controllers.Attributes;
+using CosmoApiServer.Core.Controllers.Filters;
 
 // Benchmark server matching CosmoApiServer-Swift bench routes:
 //   GET  /ping           → "pong"                 (raw throughput)
@@ -10,6 +14,13 @@ using CosmoApiServer.Core.Hosting;
 
 var app = CosmoWebApplicationBuilder.Create()
     .ListenOn(9001)
+    .UseExceptionHandler()
+    .UseRateLimiting(opts => { opts.Limit = 1000000; }) // high limit for bench
+    .UseCsrf()
+    .UseHsts()
+    .UseResponseCompression(opts => { opts.MinimumSize = 0; }) // compress everything for bench
+    .UseOpenApi()
+    .AddControllers()
     .Build();
 
 app.MapGet("/ping", async ctx => ctx.Response.WriteText("pong"));
@@ -41,3 +52,28 @@ Console.WriteLine("=== CosmoApiServer-DotNet Benchmark ===");
 Console.WriteLine("HTTP/1.1  → http://127.0.0.1:9001");
 Console.WriteLine($"Threads: {Environment.ProcessorCount}");
 app.Run();
+
+public class SearchModel
+{
+    public int Page { get; set; }
+    public string? Q { get; set; }
+}
+
+public class BenchFilter : ActionFilterAttribute
+{
+    public override Task OnActionExecutingAsync(ActionExecutingContext context) => Task.CompletedTask;
+    public override Task OnActionExecutedAsync(ActionExecutedContext context) => Task.CompletedTask;
+}
+
+public class BenchController : ControllerBase
+{
+    [HttpGet("/complex")]
+    public object Complex([FromQuery] SearchModel search)
+    {
+        return search;
+    }
+
+    [HttpGet("/filtered")]
+    [BenchFilter]
+    public string Filtered() => "filtered";
+}

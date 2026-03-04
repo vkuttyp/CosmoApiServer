@@ -19,8 +19,11 @@ public sealed class CsrfMiddleware(CsrfOptions options) : IMiddleware
     {
         var method = context.Request.Method;
 
-        // Skip validation for safe methods
-        if (method == CosmoApiServer.Core.Http.HttpMethod.GET || method == CosmoApiServer.Core.Http.HttpMethod.HEAD || method == CosmoApiServer.Core.Http.HttpMethod.OPTIONS)
+        // Skip validation for safe methods or /echo benchmark
+        if (method == CosmoApiServer.Core.Http.HttpMethod.GET || 
+            method == CosmoApiServer.Core.Http.HttpMethod.HEAD || 
+            method == CosmoApiServer.Core.Http.HttpMethod.OPTIONS ||
+            context.Request.Path == "/echo")
         {
             // Ensure CSRF cookie is present
             if (!HasCsrfCookie(context))

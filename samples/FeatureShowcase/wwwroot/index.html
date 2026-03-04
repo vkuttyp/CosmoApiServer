@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Cosmo Feature Showcase</title>
+    <style>
+        body { font-family: sans-serif; max-width: 800px; margin: 40px auto; line-height: 1.6; background: #f4f4f9; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px; }
+        h1 { color: #333; }
+        code { background: #eee; padding: 2px 4px; border-radius: 4px; }
+        .tag { display: inline-block; background: #0078d4; color: white; padding: 2px 8px; border-radius: 12px; font-size: 0.8em; margin-right: 5px; }
+    </style>
+</head>
+<body>
+    <h1>🚀 CosmoApiServer Feature Showcase</h1>
+    
+    <div class="card">
+        <h2>Static Files</h2>
+        <p>You are viewing this file served by <code>StaticFileMiddleware</code>.</p>
+    </div>
+
+    <div class="card">
+        <h2>API Features</h2>
+        <ul>
+            <li><a href="/api/showcase/products?category=electronics&page=1">Complex Query Binding & Validation</a></li>
+            <li><a href="/api/showcase/info">Header & Service Injection</a></li>
+            <li><a href="/api/showcase/download">File Results</a></li>
+            <li><a href="/api/showcase/error">Global Exception Handling</a></li>
+            <li><a href="/openapi.json">OpenAPI / Swagger Specification</a></li>
+        </ul>
+    </div>
+
+    <div class="card">
+        <h2>Middleware Stack</h2>
+        <span class="tag">Rate Limiting</span>
+        <span class="tag">CSRF Protection</span>
+        <span class="tag">Response Compression</span>
+        <span class="tag">Action Filters</span>
+    </div>
+
+    <div class="card">
+        <h2>WebSockets</h2>
+        <p>Open the console and run:</p>
+        <code>var ws = new WebSocket('ws://localhost:5000/ws'); ws.onmessage = e => console.log(e.data);</code>
+    </div>
+</body>
+</html>
