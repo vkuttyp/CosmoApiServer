@@ -1,6 +1,7 @@
 using System.Linq.Expressions;
 using System.Reflection;
 using CosmoApiServer.Core.Controllers.Attributes;
+using CosmoApiServer.Core.Controllers.Filters;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
@@ -45,6 +46,9 @@ public static class ControllerScanner
         /// <summary>Precomputed auth requirements.</summary>
         public required bool RequiresAuth { get; init; }
         public required bool AllowAnonymous { get; init; }
+
+        /// <summary>Precomputed action filters.</summary>
+        public required IActionFilter[] ActionFilters { get; init; }
     }
 
     // ── Registration ─────────────────────────────────────────────────────────
@@ -53,6 +57,7 @@ public static class ControllerScanner
     {
         var routePrefix = controllerType.GetCustomAttribute<RouteAttribute>()?.Template ?? string.Empty;
         bool controllerRequiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null;
+        var controllerFilters = controllerType.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
 
         foreach (var method in controllerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -72,6 +77,7 @@ public static class ControllerScanner
             var template = CombineTemplates(routePrefix, verbAttr.Template ?? string.Empty);
 
             // ── Build descriptor ONCE at startup (all reflection happens here) ──
+            var methodFilters = method.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
             var desc = new ActionDescriptor
             {
                 Invoker             = CompileInvoker(method),
@@ -79,6 +85,7 @@ public static class ControllerScanner
                 TaskResultExtractor = BuildTaskResultExtractor(method.ReturnType),
                 RequiresAuth        = controllerRequiresAuth || method.GetCustomAttribute<AuthorizeAttribute>() is not null,
                 AllowAnonymous      = method.GetCustomAttribute<AllowAnonymousAttribute>() is not null,
+                ActionFilters       = controllerFilters.Concat(methodFilters).ToArray(),
             };
 
             RequestDelegate handler = async ctx =>
@@ -95,20 +102,71 @@ public static class ControllerScanner
                 var controller = (ControllerBase)ActivatorUtilities.CreateInstance(ctx.RequestServices, controllerType);
                 controller.HttpContext = ctx;
 
-                // Bind parameters — precomputed resolvers, no attribute reflection
-                var args = new object?[desc.Resolvers.Length];
-                for (int i = 0; i < desc.Resolvers.Length; i++)
-                    args[i] = desc.Resolvers[i](ctx);
-
-                // Invoke action — compiled delegate, no MethodInfo.Invoke
-                var result = desc.Invoker(controller, args);
-
-                // Unwrap Task / Task<T> — compiled extractor, no GetProperty reflection
-                object? returnedResult = result;
-                if (result is Task task)
+                // ── ACTION FILTERS (EXECUTING) ─────────────────────────────────
+                IActionResult? returnedResult = null;
+                if (desc.ActionFilters.Length > 0)
                 {
-                    await task;
-                    returnedResult = desc.TaskResultExtractor?.Invoke(task);
+                    var execCtx = new ActionExecutingContext(ctx) { ModelState = controller.ModelState };
+                    foreach (var filter in desc.ActionFilters)
+                    {
+                        await filter.OnActionExecutingAsync(execCtx);
+                        if (execCtx.Result is not null)
+                        {
+                            returnedResult = execCtx.Result;
+                            break;
+                        }
+                    }
+                }
+
+                if (returnedResult is null)
+                {
+                    // Bind parameters — precomputed resolvers, no attribute reflection
+                    var args = new object?[desc.Resolvers.Length];
+                    for (int i = 0; i < desc.Resolvers.Length; i++)
+                        args[i] = desc.Resolvers[i](ctx);
+
+                    // Invoke action — compiled delegate, no MethodInfo.Invoke
+                    try
+                    {
+                        var result = desc.Invoker(controller, args);
+
+                        // Unwrap Task / Task<T> — compiled extractor, no GetProperty reflection
+                        if (result is Task task)
+                        {
+                            await task;
+                            var unwrapped = desc.TaskResultExtractor?.Invoke(task) ?? task;
+                            returnedResult = unwrapped as IActionResult ?? (unwrapped != null && unwrapped != task ? new JsonResult<object>(unwrapped) : null);
+                        }
+                        else
+                        {
+                            returnedResult = result as IActionResult ?? (result != null ? new JsonResult<object>(result) : null);
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        // ── ACTION FILTERS (EXECUTED - EXCEPTION) ──────────────
+                        if (desc.ActionFilters.Length > 0)
+                        {
+                            var execdCtx = new ActionExecutedContext(ctx, null, ex);
+                            // Run in reverse order
+                            for (int i = desc.ActionFilters.Length - 1; i >= 0; i--)
+                                await desc.ActionFilters[i].OnActionExecutedAsync(execdCtx);
+
+                            if (execdCtx.ExceptionHandled) returnedResult = execdCtx.Result;
+                            else throw;
+                        }
+                        else throw;
+                    }
+                }
+
+                // ── ACTION FILTERS (EXECUTED) ───────────────────────────────────
+                if (desc.ActionFilters.Length > 0)
+                {
+                    var execdCtx = new ActionExecutedContext(ctx, returnedResult, null);
+                    for (int i = desc.ActionFilters.Length - 1; i >= 0; i--)
+                        await desc.ActionFilters[i].OnActionExecutedAsync(execdCtx);
+                    
+                    returnedResult = execdCtx.Result;
                 }
 
                 // IAsyncEnumerable<T> → streaming response via transport-agnostic Stream
