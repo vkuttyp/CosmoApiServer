@@ -22,4 +22,7 @@ public sealed class HttpRequest
         Body.Length > 0
             ? System.Text.Json.JsonSerializer.Deserialize<T>(Body, JsonOptions)
             : default;
+
+    /// <summary>Parse a multipart/form-data body. Throws if Content-Type is not multipart/form-data.</summary>
+    public MultipartForm ReadMultipart() => MultipartParser.Parse(this);
 }

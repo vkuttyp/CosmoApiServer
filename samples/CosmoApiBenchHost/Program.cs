@@ -1,42 +1,42 @@
 using CosmoApiServer.Core.Hosting;
 
-var items = Enumerable.Range(1, 20)
-    .Select(i => new Item(i, $"Item {i}", i % 2 == 0 ? "Electronics" : "Books", 9.99 + i))
-    .ToList();
+// Benchmark server matching CosmoApiServer-Swift bench routes:
+//   GET  /ping           → "pong"                 (raw throughput)
+//   GET  /json           → {"status":"ok",...}    (JSON serialization)
+//   POST /echo           → body echoed back       (request parsing + body write)
+//   GET  /route/{id}     → route param extraction (routing performance)
+//   GET  /middleware     → full stack traversal   (all middleware)
 
 var app = CosmoWebApplicationBuilder.Create()
-    .ListenOn(9001)
+    .ListenOn(19001)
     .Build();
 
-// GET /ping → minimal JSON
-app.MapGet("/ping", async ctx =>
-    ctx.Response.WriteJson(new { status = "ok", server = "CosmoApiServer" }));
+app.MapGet("/ping", async ctx => ctx.Response.WriteText("pong"));
 
-// GET /items → list of 20 items
-app.MapGet("/items", async ctx =>
-    ctx.Response.WriteJson(items));
+app.MapGet("/json", async ctx =>
+    ctx.Response.WriteJson(new {
+        status = "ok",
+        timestamp = DateTime.UtcNow.ToString("o"),
+        server = "CosmoApiServer-DotNet"
+    }));
 
-// GET /items/{id} → single item by id
-app.MapGet("/items/{id}", async ctx =>
-{
-    if (!int.TryParse(ctx.Request.RouteValues["id"]?.ToString(), out var id) ||
-        id < 1 || id > items.Count)
-    {
-        ctx.Response.StatusCode = 404;
-        ctx.Response.WriteJson(new { error = "not found" });
-        return;
-    }
-    ctx.Response.WriteJson(items[id - 1]);
-});
-
-// POST /echo → deserialize and echo back
 app.MapPost("/echo", async ctx =>
 {
-    var body = System.Text.Encoding.UTF8.GetString(ctx.Request.Body);
-    ctx.Response.WriteText(body, "application/json; charset=utf-8");
+    var ct = ctx.Request.Headers.TryGetValue("content-type", out var v) ? v : "application/octet-stream";
+    ctx.Response.Headers["Content-Type"] = ct;
+    ctx.Response.Write(ctx.Request.Body);
 });
 
-Console.WriteLine("CosmoApiBenchHost listening on http://localhost:9001");
-app.Run();
+app.MapGet("/route/{id}", async ctx =>
+{
+    var id = ctx.Request.RouteValues.TryGetValue("id", out var val) ? val?.ToString() ?? "unknown" : "unknown";
+    ctx.Response.WriteJson(new { id });
+});
 
-record Item(int Id, string Name, string Category, double Price);
+app.MapGet("/middleware", async ctx =>
+    ctx.Response.WriteJson(new { path = ctx.Request.Path, method = ctx.Request.Method }));
+
+Console.WriteLine("=== CosmoApiServer-DotNet Benchmark ===");
+Console.WriteLine("HTTP/1.1  → http://127.0.0.1:19001");
+Console.WriteLine($"Threads: {Environment.ProcessorCount}");
+app.Run();
