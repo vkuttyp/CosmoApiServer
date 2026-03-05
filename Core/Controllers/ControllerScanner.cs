@@ -91,8 +91,6 @@ public static class ControllerScanner
                 .Replace("[action]", actionName, StringComparison.OrdinalIgnoreCase)
                 .Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
 
-            Console.WriteLine($"[Scanner] {httpMethod} {finalTemplate} ({controllerType.Name}.{method.Name})");
-
             // ── Build descriptor ONCE at startup (all reflection happens here) ──
             var methodFilters = method.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
             var desc = new ActionDescriptor
