@@ -57,6 +57,13 @@ Key design decisions:
 - JWT authentication (`[Authorize]`, `HttpContext.User`)
 - CORS with pre-computed headers
 - IPv4 + IPv6 dual-stack
+- WebSockets (`HttpContext.AcceptWebSocketAsync()`)
+- Multipart Form Data parsing
+- OpenAPI & Swagger UI auto-generation
+- Rate Limiting, Static Files, Response Compression
+- Security Middlewares (CSRF, HSTS, HTTPS Redirection)
+- Model Validation via DataAnnotations
+- Global Exception Handling
 
 ---
 
@@ -172,6 +179,17 @@ public class ProductController
     public async Task Delete(int id) =>
         await _svc.DeleteAsync(id);
 }
+
+// DataAnnotations are automatically validated for [FromBody] requests
+public class CreateProductRequest
+{
+    [Required]
+    [StringLength(100, MinimumLength = 3)]
+    public string Name { get; set; } = string.Empty;
+
+    [Range(0.01, 10000)]
+    public decimal Price { get; set; }
+}
 ```
 
 **Supported action return types:**
@@ -218,7 +236,16 @@ string? userId        = ctx.User?.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 | Method | Effect |
 |---|---|
 | `.UseLogging()` | Logs method, path, status, duration for every request |
-| `.UseCors()` | Adds CORS headers; handles OPTIONS preflight |
+| `.UseExceptionHandler()` | Catches unhandled exceptions and returns 500 |
+| `.UseStaticFiles(path)` | Serves files from the specified directory |
+| `.UseCors(opts)` | Adds CORS headers; handles OPTIONS preflight |
+| `.UseRateLimiting(opts)` | Throttles requests based on IP/token |
+| `.UseCsrf(opts)` | Validates CSRF tokens |
+| `.UseHttpsRedirection()` | Redirects HTTP traffic to HTTPS |
+| `.UseHsts(opts)` | Adds HTTP Strict Transport Security header |
+| `.UseResponseCompression()` | Gzip/Deflate response compression |
+| `.UseOpenApi(path)` | Auto-generates and serves OpenAPI JSON |
+| `.UseSwaggerUI(path)` | Hosts Swagger UI for the OpenAPI spec |
 | `.UseJwtAuthentication(opts)` | Validates Bearer token; sets `ctx.User` |
 
 ### Custom middleware
@@ -290,6 +317,78 @@ public IActionResult Login([FromBody] LoginRequest req)
 [Authorize]
 public object GetMe(ClaimsPrincipal user) =>
     new { id = user.FindFirst(ClaimTypes.NameIdentifier)?.Value };
+```
+
+---
+
+## WebSockets
+
+CosmoApiServer provides built-in, low-allocation WebSocket support. Call `ctx.AcceptWebSocketAsync()` to upgrade an HTTP connection.
+
+```csharp
+app.MapGet("/ws", async ctx =>
+{
+    if (!ctx.IsWebSocketRequest)
+    {
+        ctx.Response.StatusCode = 400;
+        return;
+    }
+
+    using var ws = await ctx.AcceptWebSocketAsync();
+    
+    // Send a message
+    var msg = Encoding.UTF8.GetBytes("Hello WebSocket!");
+    await ws.SendAsync(msg, WebSocketMessageType.Text, endOfMessage: true);
+
+    // Close
+    await ws.CloseAsync(WebSocketCloseStatus.NormalClosure, "Done");
+});
+```
+
+---
+
+## Multipart Form Data
+
+Parse `multipart/form-data` uploads directly from the request body.
+
+```csharp
+using CosmoApiServer.Core.Http;
+
+[HttpPost("/upload")]
+public IActionResult Upload(HttpContext ctx)
+{
+    var form = MultipartParser.Parse(ctx.Request);
+    
+    var description = form.Fields.GetValueOrDefault("description");
+    if (form.Files.TryGetValue("document", out var file))
+    {
+        // file.Filename, file.ContentType, file.Data (byte[])
+        File.WriteAllBytes($"/tmp/{file.Filename}", file.Data);
+    }
+    
+    return new StatusCodeResult(200);
+}
+```
+
+---
+
+## OpenAPI & Swagger UI
+
+Generate an `openapi.json` spec automatically from your `[Route]`, `[HttpGet]`, and `[HttpPost]` controllers and host Swagger UI:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .ListenOn(8080)
+    .UseOpenApi(configure: info => 
+    {
+        info.Title = "My API";
+        info.Version = "v1";
+    })
+    .UseSwaggerUI("/swagger") // Access at http://localhost:8080/swagger
+    .AddControllers();
+
+var app = builder.Build();
+app.Run();
 ```
 
 ---
