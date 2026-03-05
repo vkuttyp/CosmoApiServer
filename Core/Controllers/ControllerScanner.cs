@@ -55,7 +55,10 @@ public static class ControllerScanner
 
     private static void RegisterController(Type controllerType, RouteTable routeTable, IServiceProvider services)
     {
+        var controllerName = controllerType.Name.Replace("Controller", "");
         var routePrefix = controllerType.GetCustomAttribute<RouteAttribute>()?.Template ?? string.Empty;
+        routePrefix = routePrefix.Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
+
         bool controllerRequiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null;
         var controllerFilters = controllerType.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
 
@@ -74,7 +77,21 @@ public static class ControllerScanner
                 _                   => Http.HttpMethod.GET
             };
 
-            var template = CombineTemplates(routePrefix, verbAttr.Template ?? string.Empty);
+            var actionName = method.Name;
+            var actionTemplate = verbAttr.Template ?? string.Empty;
+            
+            // 1. Replace [controller] in prefix
+            var currentPrefix = routePrefix.Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
+            
+            // 2. Combine prefix and action template
+            var combined = CombineTemplates(currentPrefix, actionTemplate);
+            
+            // 3. Replace [action] and [controller] in the combined result
+            var finalTemplate = combined
+                .Replace("[action]", actionName, StringComparison.OrdinalIgnoreCase)
+                .Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
+
+            Console.WriteLine($"[Scanner] {httpMethod} {finalTemplate} ({controllerType.Name}.{method.Name})");
 
             // ── Build descriptor ONCE at startup (all reflection happens here) ──
             var methodFilters = method.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
@@ -183,7 +200,7 @@ public static class ControllerScanner
                     await actionResult.ExecuteAsync(ctx.Response);
             };
 
-            routeTable.Add(httpMethod, template, handler);
+            routeTable.Add(httpMethod, finalTemplate, handler);
         }
     }
 

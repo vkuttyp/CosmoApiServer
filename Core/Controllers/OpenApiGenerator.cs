@@ -21,7 +21,9 @@ public static class OpenApiGenerator
 
         foreach (var type in controllerTypes)
         {
+            var controllerName = type.Name.Replace("Controller", "");
             var routePrefix = type.GetCustomAttribute<RouteAttribute>()?.Template ?? string.Empty;
+            routePrefix = routePrefix.Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
             
             foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
@@ -29,15 +31,19 @@ public static class OpenApiGenerator
                 if (verbAttr is null) continue;
 
                 var verb = GetHttpVerb(verbAttr);
-                var template = CombineTemplates(routePrefix, verbAttr.Template ?? string.Empty);
+                var actionName = method.Name;
+                var actionTemplate = verbAttr.Template ?? string.Empty;
+
+                var template = CombineTemplates(routePrefix, actionTemplate);
+                template = template.Replace("[action]", actionName, StringComparison.OrdinalIgnoreCase)
+                                   .Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
                 
-                // Convert {id} to {id} (OpenAPI format is the same)
                 if (!paths.ContainsKey(template)) paths[template] = new Dictionary<string, object>();
                 var pathItem = (Dictionary<string, object>)paths[template];
 
                 var operation = new Dictionary<string, object>
                 {
-                    ["tags"] = new[] { type.Name.Replace("Controller", "") },
+                    ["tags"] = new[] { controllerName },
                     ["summary"] = method.Name,
                     ["responses"] = new Dictionary<string, object>
                     {
@@ -49,7 +55,7 @@ public static class OpenApiGenerator
                 var parameters = new List<object>();
                 foreach (var param in method.GetParameters())
                 {
-                    var paramIn = GetBindingSource(param);
+                    var paramIn = GetBindingSource(param, template);
                     if (paramIn == "body")
                     {
                         operation["requestBody"] = new Dictionary<string, object>
@@ -66,7 +72,7 @@ public static class OpenApiGenerator
                         {
                             ["name"] = param.Name!,
                             ["in"] = paramIn,
-                            ["required"] = !IsNullable(param.ParameterType),
+                            ["required"] = paramIn == "path" || !IsNullable(param.ParameterType),
                             ["schema"] = MapType(param.ParameterType)
                         });
                     }
@@ -88,21 +94,24 @@ public static class OpenApiGenerator
 
     private static string GetHttpVerb(HttpMethodAttribute attr) => attr switch
     {
-        HttpGetAttribute => "get",
-        HttpPostAttribute => "post",
-        HttpPutAttribute => "put",
+        HttpGetAttribute    => "get",
+        HttpPostAttribute   => "post",
+        HttpPutAttribute    => "put",
         HttpDeleteAttribute => "delete",
-        HttpPatchAttribute => "patch",
-        _ => "get"
+        HttpPatchAttribute  => "patch",
+        _                   => "get"
     };
 
-    private static string? GetBindingSource(ParameterInfo param)
+    private static string? GetBindingSource(ParameterInfo param, string template)
     {
         if (param.GetCustomAttribute<FromBodyAttribute>() != null) return "body";
         if (param.GetCustomAttribute<FromQueryAttribute>() != null) return "query";
         if (param.GetCustomAttribute<FromRouteAttribute>() != null) return "path";
         if (param.GetCustomAttribute<FromHeaderAttribute>() != null) return "header";
         
+        // If the parameter name is in the template, it's a path parameter
+        if (template.Contains($"{{{param.Name}}}", StringComparison.OrdinalIgnoreCase)) return "path";
+
         // Simple heuristic for implicit binding
         if (param.ParameterType.IsPrimitive || param.ParameterType == typeof(string)) return "query";
         return null;
