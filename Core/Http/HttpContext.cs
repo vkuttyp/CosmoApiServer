@@ -10,6 +10,11 @@ public sealed class HttpContext
     public IServiceProvider RequestServices { get; set; }
 
     /// <summary>
+    /// Gets or sets a cancellation token that signals when the request is aborted.
+    /// </summary>
+    public CancellationToken RequestAborted { get; set; }
+
+    /// <summary>
     /// Per-request storage for middleware and framework components.
     /// </summary>
     public Dictionary<object, object?> Items { get; } = new();
@@ -32,11 +37,12 @@ public sealed class HttpContext
     /// <summary>Lifecycle: the transport disposes this after the response is sent.</summary>
     internal IDisposable? _disposeScope;
 
-    public HttpContext(HttpRequest request, HttpResponse response, IServiceProvider services)
+    public HttpContext(HttpRequest request, HttpResponse response, IServiceProvider services, CancellationToken requestAborted = default)
     {
         Request = request;
         Response = response;
         RequestServices = services;
+        RequestAborted = requestAborted;
     }
 
     /// <summary>

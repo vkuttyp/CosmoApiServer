@@ -334,7 +334,7 @@ internal sealed class Http2Connection
         };
         var response = new HttpResponse();
         var scope    = new Http11Connection.LazyScopeProvider(_services);
-        return new HttpContext(request, response, scope) { _disposeScope = scope };
+        return new HttpContext(request, response, scope, _ct) { _disposeScope = scope };
     }
 
     private static Dictionary<string, string> ParseQuery(string qs)

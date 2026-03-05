@@ -123,7 +123,7 @@ internal static class Http11Connection
                 }
 
                 // Build HttpContext from parsed request
-                var httpContext = BuildContext(req, services);
+                var httpContext = BuildContext(req, services, ct);
                 httpContext.Items["__RawStream"] = stream;
 
                 // Run the full middleware + router pipeline
@@ -180,7 +180,7 @@ internal static class Http11Connection
 
     // ── Request builder ───────────────────────────────────────────────────
 
-    private static HttpContext BuildContext(ParsedRequest req, IServiceProvider services)
+    private static HttpContext BuildContext(ParsedRequest req, IServiceProvider services, CancellationToken ct)
     {
         // Parse path + query
         string path = req.RawTarget, queryString = string.Empty;
@@ -215,7 +215,7 @@ internal static class Http11Connection
         };
         var response = new HttpResponse();
         var scope    = new LazyScopeProvider(services);
-        return new HttpContext(request, response, scope) { _disposeScope = scope };
+        return new HttpContext(request, response, scope, ct) { _disposeScope = scope };
     }
 
     private static Dictionary<string, string> ParseQuery(string queryString)
