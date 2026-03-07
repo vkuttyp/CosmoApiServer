@@ -2,6 +2,7 @@ using System.Buffers;
 using System.IO.Pipelines;
 using System.Net.Sockets;
 using CosmoApiServer.Core.Http;
+using Cosmo.Transport.Pipelines;
 using CosmoApiServer.Core.Middleware;
 using Microsoft.Extensions.DependencyInjection;
 

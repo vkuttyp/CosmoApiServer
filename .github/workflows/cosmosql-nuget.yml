@@ -1,0 +1,67 @@
+name: Publish CosmoSQLClient to NuGet
+
+on:
+  push:
+    tags:
+      - 'sql-v*.*.*'
+
+jobs:
+  publish:
+    name: Pack & Push
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '10.0.x'
+
+      - name: Restore
+        run: dotnet restore CosmoSQLClient/CosmoSQLClient-Dotnet/CosmoSQLClient-Dotnet.sln
+
+      - name: Build
+        run: dotnet build CosmoSQLClient/CosmoSQLClient-Dotnet/CosmoSQLClient-Dotnet.sln --no-restore -c Release
+
+      # Strip leading 'sql-v' from tag (sql-v1.1.0 → 1.1.0)
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF_NAME#sql-v}" >> "$GITHUB_OUTPUT"
+
+      - name: Pack
+        run: |
+          dotnet pack CosmoSQLClient/CosmoSQLClient-Dotnet/src/CosmoSQLClient.Core/CosmoSQLClient.Core.csproj \
+            -c Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./nupkgs
+
+          dotnet pack CosmoSQLClient/CosmoSQLClient-Dotnet/src/CosmoSQLClient.MsSql/CosmoSQLClient.MsSql.csproj \
+            -c Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./nupkgs
+
+          dotnet pack CosmoSQLClient/CosmoSQLClient-Dotnet/src/CosmoSQLClient.Postgres/CosmoSQLClient.Postgres.csproj \
+            -c Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./nupkgs
+
+          dotnet pack CosmoSQLClient/CosmoSQLClient-Dotnet/src/CosmoSQLClient.MySql/CosmoSQLClient.MySql.csproj \
+            -c Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./nupkgs
+
+          dotnet pack CosmoSQLClient/CosmoSQLClient-Dotnet/src/CosmoSQLClient.Sqlite/CosmoSQLClient.Sqlite.csproj \
+            -c Release --no-build \
+            -p:Version=${{ steps.version.outputs.VERSION }} \
+            -o ./nupkgs
+
+          ls -la ./nupkgs
+
+      - name: Push to NuGet
+        run: |
+          dotnet nuget push ./nupkgs/*.nupkg \
+            --api-key ${{ secrets.NUGET_API_KEY }} \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

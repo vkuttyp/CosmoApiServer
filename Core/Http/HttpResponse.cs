@@ -36,5 +36,13 @@ public sealed class HttpResponse
         Write(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions));
     }
 
+    public async Task WriteJsonAsync<T>(T value, CancellationToken ct = default)
+    {
+        Headers["Content-Type"] = "application/json; charset=utf-8";
+        using var ms = new MemoryStream();
+        await JsonSerializer.SerializeAsync(ms, value, JsonOptions, ct);
+        Write(ms.ToArray());
+    }
+
     public bool IsStarted => _body is not null;
 }

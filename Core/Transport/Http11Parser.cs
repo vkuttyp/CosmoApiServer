@@ -1,53 +1,27 @@
 using System.Buffers;
 using System.Text;
+using Cosmo.Transport.Pipelines;
 
 namespace CosmoApiServer.Core.Transport;
 
-/// <summary>
-/// Parses HTTP/1.1 requests from a ReadOnlySequence&lt;byte&gt; supplied by a PipeReader.
-/// All parsing is allocation-free for the common case (no query string, no route params).
-/// Returns false (incomplete) when the buffer does not yet contain a full request.
-/// </summary>
 internal static class Http11Parser
 {
-    private static readonly byte[] CrLf        = "\r\n"u8.ToArray();
-    private static readonly byte[] DoubleCrLf  = "\r\n\r\n"u8.ToArray();
-    private static readonly byte[] ChunkedEnd  = "0\r\n\r\n"u8.ToArray();
-
-    /// <summary>
-    /// Attempts to parse one complete HTTP/1.1 request from <paramref name="buffer"/>.
-    /// On success, slices <paramref name="buffer"/> past the consumed bytes and populates
-    /// <paramref name="request"/>. Returns false when more data is needed.
-    /// </summary>
-    public static bool TryParse(
-        ref ReadOnlySequence<byte> buffer,
-        out ParsedRequest request)
+    public static bool TryParse(ref ReadOnlySequence<byte> buffer, out ParsedRequest request)
     {
         request = default;
         var reader = new SequenceReader<byte>(buffer);
 
         // ── Request line ─────────────────────────────────────────────────
-        if (!reader.TryReadTo(out ReadOnlySequence<byte> requestLineSeq, (byte)'\n'))
-            return false;
+        string? requestLine = reader.ReadLine();
+        if (requestLine == null) return false;
 
-        var requestLine = requestLineSeq.IsSingleSegment
-            ? requestLineSeq.FirstSpan
-            : requestLineSeq.ToArray().AsSpan();
-
-        // strip \r
-        if (!requestLine.IsEmpty && requestLine[^1] == '\r')
-            requestLine = requestLine[..^1];
-
-        // parse METHOD SP /path SP HTTP/x.y
-        int sp1 = requestLine.IndexOf((byte)' ');
+        int sp1 = requestLine.IndexOf(' ');
         if (sp1 < 0) return false;
-        int sp2 = requestLine[(sp1 + 1)..].IndexOf((byte)' ');
+        int sp2 = requestLine.IndexOf(' ', sp1 + 1);
         if (sp2 < 0) return false;
-        sp2 += sp1 + 1;
 
-        var method    = Encoding.ASCII.GetString(requestLine[..sp1]);
-        var rawTarget = Encoding.ASCII.GetString(requestLine[(sp1 + 1)..sp2]);
-        // ignore version
+        var method    = requestLine[..sp1];
+        var rawTarget = requestLine[(sp1 + 1)..sp2];
 
         // ── Headers ─────────────────────────────────────────────────────
         var headers = new List<(string name, string value)>(8);
@@ -56,48 +30,33 @@ internal static class Http11Parser
 
         while (true)
         {
-            if (!reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, (byte)'\n'))
-                return false;
+            string? line = reader.ReadLine();
+            if (line == null) return false;
+            if (line.Length == 0) break; // end of headers
 
-            var line = lineSeq.IsSingleSegment
-                ? lineSeq.FirstSpan
-                : lineSeq.ToArray().AsSpan();
+            int colon = line.IndexOf(':');
+            if (colon < 0) continue;
 
-            if (!line.IsEmpty && line[^1] == '\r') line = line[..^1];
-            if (line.IsEmpty) break; // blank line = end of headers
-
-            int colon = line.IndexOf((byte)':');
-            if (colon < 0) continue; // malformed, skip
-
-            var name  = Encoding.ASCII.GetString(line[..colon]).Trim();
-            var value = Encoding.ASCII.GetString(line[(colon + 1)..]).Trim();
+            var name  = line[..colon].Trim();
+            var value = line[(colon + 1)..].Trim();
             headers.Add((name, value));
 
-            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) 
                 long.TryParse(value, out contentLength);
-            else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) &&
-                     value.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) && value.Contains("chunked", StringComparison.OrdinalIgnoreCase))
                 chunkedTransfer = true;
         }
 
         // ── Body ─────────────────────────────────────────────────────────
         byte[] body;
-        if (chunkedTransfer)
-        {
-            if (!TryReadChunkedBody(ref reader, out body))
-                return false;
-        }
-        else if (contentLength > 0)
-        {
-            if (reader.Remaining < contentLength)
-                return false;
-
+        if (chunkedTransfer) {
+            if (!TryReadChunkedBody(ref reader, out body)) return false;
+        } else if (contentLength > 0) {
+            if (reader.Remaining < contentLength) return false;
             body = new byte[contentLength];
             reader.TryCopyTo(body);
             reader.Advance(contentLength);
-        }
-        else
-        {
+        } else {
             body = [];
         }
 
@@ -106,130 +65,52 @@ internal static class Http11Parser
         return true;
     }
 
-    /// <summary>
-    /// Returns true when the buffer contains a complete HTTP header section
-    /// that includes an "Expect: 100-continue" header.
-    /// Does not consume any bytes — safe to call before TryParse.
-    /// </summary>
-    public static bool TryDetectExpect100(in ReadOnlySequence<byte> buffer)
-    {
-        var reader = new SequenceReader<byte>(buffer);
-
-        // Skip request line
-        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, (byte)'\n'))
-            return false;
-
-        // Scan headers looking for "Expect: 100-continue"
-        while (reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, (byte)'\n'))
-        {
-            var line = lineSeq.IsSingleSegment
-                ? lineSeq.FirstSpan
-                : lineSeq.ToArray().AsSpan();
-
-            if (!line.IsEmpty && line[^1] == '\r') line = line[..^1];
-            if (line.IsEmpty) return false; // end of headers, no Expect found
-
-            int colon = line.IndexOf((byte)':');
-            if (colon < 0) continue;
-
-            var nameSpan = line[..colon];
-            if (SpanEqualsCi(nameSpan, "Expect"u8))
-            {
-                var val = line[(colon + 1)..];
-                while (!val.IsEmpty && val[0] == (byte)' ') val = val[1..];
-                return SpanEqualsCi(val.Length >= 12 ? val[..12] : val, "100-continue"u8);
-            }
-        }
-        return false; // headers section not complete yet
-    }
-
-    private static bool SpanEqualsCi(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++)
-            if ((a[i] | 0x20) != (b[i] | 0x20)) return false;
-        return true;
-    }
-
-    /// <summary>Reads a chunked-encoded body and decodes it into a flat byte array.</summary>
     private static bool TryReadChunkedBody(ref SequenceReader<byte> reader, out byte[] body)
     {
         body = [];
         var chunks = new List<byte[]>();
+        while (true) {
+            string? sizeLine = reader.ReadLine();
+            if (sizeLine == null) return false;
+            
+            int extIdx = sizeLine.IndexOf(';');
+            string hexPart = extIdx >= 0 ? sizeLine[..extIdx] : sizeLine;
+            if (!long.TryParse(hexPart, System.Globalization.NumberStyles.HexNumber, null, out long chunkSize)) return false;
 
-        while (true)
-        {
-            // Read chunk-size line
-            if (!reader.TryReadTo(out ReadOnlySequence<byte> sizeLineSeq, (byte)'\n'))
-                return false;
-
-            var sizeLine = sizeLineSeq.IsSingleSegment
-                ? sizeLineSeq.FirstSpan
-                : sizeLineSeq.ToArray().AsSpan();
-            if (!sizeLine.IsEmpty && sizeLine[^1] == '\r') sizeLine = sizeLine[..^1];
-
-            // Parse hex chunk size (ignore chunk extensions)
-            int extIdx = sizeLine.IndexOf((byte)';');
-            var hexPart = extIdx >= 0 ? sizeLine[..extIdx] : sizeLine;
-            if (!TryParseHex(hexPart, out long chunkSize)) return false;
-
-            if (chunkSize == 0)
-            {
-                // Trailing headers + final CRLF
-                ReadOnlySequence<byte> _ignored;
-                if (!reader.TryReadTo(out _ignored, (byte)'\n')) return false; // skip trailing CRLF
+            if (chunkSize == 0) {
+                reader.ReadLine(); // skip trailing CRLF
                 break;
             }
 
-            if (reader.Remaining < chunkSize + 2) return false; // +2 for trailing CRLF
-
-            var chunk = new byte[chunkSize];
+            if (reader.Remaining < chunkSize + 2) return false;
+            byte[] chunk = new byte[chunkSize];
             reader.TryCopyTo(chunk);
-            reader.Advance(chunkSize + 2); // skip data + CRLF
+            reader.Advance(chunkSize + 2); // data + CRLF
             chunks.Add(chunk);
         }
-
-        // Flatten chunks
-        int total = chunks.Sum(c => c.Length);
-        body = new byte[total];
+        body = new byte[chunks.Sum(c => c.Length)];
         int offset = 0;
         foreach (var c in chunks) { c.CopyTo(body, offset); offset += c.Length; }
         return true;
     }
 
-    private static bool TryParseHex(ReadOnlySpan<byte> span, out long value)
+    public static bool TryDetectExpect100(in ReadOnlySequence<byte> buffer)
     {
-        value = 0;
-        foreach (byte b in span)
-        {
-            int digit;
-            if (b >= '0' && b <= '9')      digit = b - '0';
-            else if (b >= 'a' && b <= 'f') digit = b - 'a' + 10;
-            else if (b >= 'A' && b <= 'F') digit = b - 'A' + 10;
-            else return false;
-            value = (value << 4) | (long)digit;
+        var reader = new SequenceReader<byte>(buffer);
+        if (reader.ReadLine() == null) return false;
+        while (true) {
+            string? line = reader.ReadLine();
+            if (line == null) return false;
+            if (line.Length == 0) return false;
+            if (line.StartsWith("Expect:", StringComparison.OrdinalIgnoreCase) && line.Contains("100-continue", StringComparison.OrdinalIgnoreCase)) return true;
         }
-        return true;
     }
 }
 
-/// <summary>Parsed HTTP/1.1 request — raw strings, not yet mapped to HttpRequest model.</summary>
-internal readonly struct ParsedRequest
+internal readonly struct ParsedRequest(string method, string rawTarget, List<(string name, string value)> headers, byte[] body)
 {
-    public readonly string Method;
-    public readonly string RawTarget;    // path + optional ?query
-    public readonly List<(string name, string value)> Headers;
-    public readonly byte[] Body;
-
-    public ParsedRequest(
-        string method,
-        string rawTarget,
-        List<(string name, string value)> headers,
-        byte[] body)
-    {
-        Method    = method;
-        RawTarget = rawTarget;
-        Headers   = headers;
-        Body      = body;
-    }
+    public readonly string Method = method;
+    public readonly string RawTarget = rawTarget;
+    public readonly List<(string name, string value)> Headers = headers;
+    public readonly byte[] Body = body;
 }

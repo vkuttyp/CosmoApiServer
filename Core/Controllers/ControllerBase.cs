@@ -77,22 +77,20 @@ public sealed class TextResult(int statusCode, string message) : IActionResult
 
 public sealed class JsonResult<T>(T value, int statusCode = 200) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public async Task ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
-        response.WriteJson(value);
-        return Task.CompletedTask;
+        await response.WriteJsonAsync(value);
     }
 }
 
 public sealed class CreatedResult<T>(string location, T value) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public async Task ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = 201;
         response.Headers["Location"] = location;
-        response.WriteJson(value);
-        return Task.CompletedTask;
+        await response.WriteJsonAsync(value);
     }
 }
 

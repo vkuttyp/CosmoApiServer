@@ -25,6 +25,19 @@ jobs:
       - name: Build
         run: dotnet build tests/CosmoApiServer.Core.Tests.slnx --no-restore -c Release
 
-      - name: Test
+      - name: Test Core
         run: dotnet test tests/CosmoApiServer.Core.Tests/CosmoApiServer.Core.Tests.csproj --no-build -c Release
+
+      - name: Restore CosmoSQLClient
+        run: dotnet restore CosmoSQLClient/CosmoSQLClient-Dotnet/CosmoSQLClient-Dotnet.sln
+
+      - name: Build CosmoSQLClient
+        run: dotnet build CosmoSQLClient/CosmoSQLClient-Dotnet/CosmoSQLClient-Dotnet.sln --no-restore -c Release
+
+      - name: Test CosmoSQLClient
+        run: dotnet test CosmoSQLClient/CosmoSQLClient-Dotnet/CosmoSQLClient-Dotnet.sln --no-build -c Release
+        env:
+          MSSQL_TEST_CONNECTION: ${{ secrets.MSSQL_TEST_CONNECTION }}
+          POSTGRES_TEST_CONNECTION: ${{ secrets.POSTGRES_TEST_CONNECTION }}
+          MYSQL_TEST_CONNECTION: ${{ secrets.MYSQL_TEST_CONNECTION }}
         
