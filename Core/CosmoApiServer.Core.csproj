@@ -29,7 +29,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../CosmoSQLClient/CosmoSQLClient-Dotnet/src/Cosmo.Transport.Pipelines/Cosmo.Transport.Pipelines.csproj" />
+    <ProjectReference Include="../CosmoSQLClient/src/Cosmo.Transport.Pipelines/Cosmo.Transport.Pipelines.csproj" />
   </ItemGroup>
 
 </Project>
