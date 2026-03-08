@@ -3,32 +3,43 @@ using CosmoApiServer.Core.Auth;
 using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Hosting;
 
-/// <summary>
-/// Builder for CosmoWebApplication. Analogous to WebApplicationBuilder in ASP.NET.
-/// </summary>
 public sealed class CosmoWebApplicationBuilder
 {
     private readonly IServiceCollection _services = new ServiceCollection();
     private readonly MiddlewarePipeline _middlewarePipeline = new();
     private readonly List<Assembly> _controllerAssemblies = [];
     private readonly ServerOptions _options = new();
+    private readonly IConfiguration _configuration;
 
-    public CosmoWebApplicationBuilder() { _services.AddLogging(); }
+    public IServiceCollection Services => _services;
+    public ServerOptions ServerOptions => _options;
+    public IConfiguration Configuration => _configuration;
+
+    public CosmoWebApplicationBuilder()
+    {
+        // Default configuration loading
+        var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
+        _configuration = new ConfigurationBuilder()
+            .SetBasePath(Directory.GetCurrentDirectory())
+            .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+            .AddJsonFile($"appsettings.{env}.json", optional: true)
+            .AddEnvironmentVariables()
+            .Build();
+
+        _services.AddSingleton(_configuration);
+        _services.AddLogging();
+    }
 
     private string? _openApiPath;
     private OpenApiInfo? _openApiInfo;
 
-    public IServiceCollection Services => _services;
-    public ServerOptions ServerOptions => _options;
-
     public static CosmoWebApplicationBuilder Create() => new();
-
-    // ── Middleware ─────────────────────────────────────────────────────────
 
     public CosmoWebApplicationBuilder UseLogging()
     {
@@ -127,8 +138,6 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
-    // ── Authentication ─────────────────────────────────────────────────────
-
     public CosmoWebApplicationBuilder UseJwtAuthentication(JwtOptions options)
     {
         _services.AddSingleton(options);
@@ -144,11 +153,8 @@ public sealed class CosmoWebApplicationBuilder
         return UseJwtAuthentication(options);
     }
 
-    // ── Controllers ────────────────────────────────────────────────────────
-
     public CosmoWebApplicationBuilder AddControllers()
     {
-        // Scan the calling assembly (entry point) automatically
         var callingAssembly = Assembly.GetCallingAssembly();
         if (!_controllerAssemblies.Contains(callingAssembly))
             _controllerAssemblies.Add(callingAssembly);
@@ -162,17 +168,12 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
-    // ── Server config ──────────────────────────────────────────────────────
-
     public CosmoWebApplicationBuilder ListenOn(int port)
     {
         _options.Port = port;
         return this;
     }
 
-    /// <summary>
-    /// Enable HTTPS. The certificate must be a PFX/PKCS#12 file.
-    /// </summary>
     public CosmoWebApplicationBuilder UseHttps(string certificatePath, string? password = null)
     {
         _options.CertificatePath = certificatePath;
@@ -180,25 +181,17 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
-    /// <summary>
-    /// Advertise HTTP/2 (h2) via ALPN during TLS handshake.
-    /// Must be combined with <see cref="UseHttps"/>.
-    /// </summary>
     public CosmoWebApplicationBuilder UseHttp2()
     {
         _options.EnableHttp2 = true;
         return this;
     }
 
-    // ── Build ──────────────────────────────────────────────────────────────
-
     public CosmoWebApplication Build()
     {
-        // Register RouteTable in DI
         var routeTable = new RouteTable();
         _services.AddSingleton(routeTable);
 
-        // OpenAPI generation (happens once at startup)
         if (_openApiPath != null && _openApiInfo != null)
         {
             var controllerTypes = _controllerAssemblies
