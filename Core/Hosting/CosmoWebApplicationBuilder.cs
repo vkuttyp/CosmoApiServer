@@ -4,6 +4,7 @@ using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Hosting;
 
@@ -17,7 +18,7 @@ public sealed class CosmoWebApplicationBuilder
     private readonly List<Assembly> _controllerAssemblies = [];
     private readonly ServerOptions _options = new();
 
-    public CosmoWebApplicationBuilder()n    {n        _services.AddLogging();n    }
+    public CosmoWebApplicationBuilder() { _services.AddLogging(); }
 
     private string? _openApiPath;
     private OpenApiInfo? _openApiInfo;
