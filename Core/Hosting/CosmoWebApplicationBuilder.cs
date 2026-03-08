@@ -16,6 +16,9 @@ public sealed class CosmoWebApplicationBuilder
     private readonly MiddlewarePipeline _middlewarePipeline = new();
     private readonly List<Assembly> _controllerAssemblies = [];
     private readonly ServerOptions _options = new();
+
+    public CosmoWebApplicationBuilder()n    {n        _services.AddLogging();n    }
+
     private string? _openApiPath;
     private OpenApiInfo? _openApiInfo;
 
