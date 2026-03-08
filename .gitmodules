@@ -1,3 +1,0 @@
-[submodule "CosmoSQLClient"]
-	path = CosmoSQLClient
-	url = ../CosmoSQLClient-Dotnet
