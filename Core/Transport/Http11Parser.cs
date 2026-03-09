@@ -38,7 +38,7 @@ internal static class Http11Parser
             var entry = new HeaderEntry(nameSeq, valueSeq);
             headers.Add(entry);
 
-            // Fast check for well-known headers using bytes to avoid strings
+            // Fast check for well-known headers
             if (entry.IsName("Content-Length"u8))
             {
                 TryParseInt64(valueSeq, out contentLength);
@@ -76,7 +76,7 @@ internal static class Http11Parser
 
         buffer = buffer.Slice(reader.Position);
         
-        // Materialize method and target as strings (likely used everywhere)
+        // Materialize method and target as strings
         string method = Encoding.ASCII.GetString(methodSeq);
         string rawTarget = Encoding.UTF8.GetString(targetSeq);
 
@@ -159,66 +159,51 @@ internal static class Http11Parser
             if (reader.IsNext(CrLf)) return false;
             if (!reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, CrLf)) return false;
             
-            // Simple check
-            if (StartsWith(lineSeq, "Expect:"u8) && Contains(lineSeq, "100-continue"u8)) return true;
+            var lineBytes = lineSeq.ToArray();
+            var lineString = Encoding.ASCII.GetString(lineBytes);
+            if (lineString.StartsWith("Expect:", StringComparison.OrdinalIgnoreCase) && 
+                lineString.Contains("100-continue", StringComparison.OrdinalIgnoreCase)) return true;
         }
-    }
-
-    private static bool StartsWith(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> value)
-    {
-        if (sequence.Length < value.Length) return false;
-        Span<byte> buffer = stackalloc byte[value.Length];
-        sequence.Slice(0, value.Length).CopyTo(buffer);
-        return buffer.SequenceEqual(value);
-    }
-
-    private static bool Contains(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> value)
-    {
-        if (sequence.Length < value.Length) return false;
-        var span = sequence.IsSingleSegment ? sequence.First.Span : sequence.ToArray();
-        return span.IndexOf(value) >= 0;
     }
 }
 
-public readonly struct HeaderEntry(ReadOnlySequence<byte> name, ReadOnlySequence<byte> value)
+public readonly struct HeaderEntry
 {
-    private readonly ReadOnlySequence<byte> _name = name;
-    private readonly ReadOnlySequence<byte> _value = value;
+    public string Name { get; }
+    public string Value { get; }
 
-    public string Name => Encoding.ASCII.GetString(_name).Trim();
-    public string Value => Encoding.UTF8.GetString(_value).Trim();
+    public HeaderEntry(ReadOnlySequence<byte> name, ReadOnlySequence<byte> value)
+    {
+        Name = Encoding.ASCII.GetString(name).Trim();
+        Value = Encoding.UTF8.GetString(value).Trim();
+    }
 
     public bool IsName(ReadOnlySpan<byte> nameUtf8)
     {
-        var span = _name.IsSingleSegment ? _name.First.Span : _name.ToArray();
-        return AsciiEqualsIgnoreCase(span.Trim((byte)' '), nameUtf8);
+        // Compare using the materialized string but without new allocations
+        if (Name.Length != nameUtf8.Length) return false;
+        
+        for (int i = 0; i < Name.Length; i++)
+        {
+            byte c1 = (byte)Name[i];
+            byte c2 = nameUtf8[i];
+            if (c1 == c2) continue;
+            if (c1 >= 'A' && c1 <= 'Z') c1 |= 0x20;
+            if (c2 >= 'A' && c2 <= 'Z') c2 |= 0x20;
+            if (c1 != c2) return false;
+        }
+        return true;
     }
 
     public bool ValueContains(ReadOnlySpan<byte> valueUtf8)
     {
-        var span = _value.IsSingleSegment ? _value.First.Span : _value.ToArray();
-        return span.IndexOf(valueUtf8) >= 0;
+        return Value.Contains(Encoding.UTF8.GetString(valueUtf8), StringComparison.OrdinalIgnoreCase);
     }
 
     public void Deconstruct(out string name, out string value)
     {
         name = Name;
         value = Value;
-    }
-
-    private static bool AsciiEqualsIgnoreCase(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
-    {
-        if (a.Length != b.Length) return false;
-        for (int i = 0; i < a.Length; i++)
-        {
-            byte charA = a[i];
-            byte charB = b[i];
-            if (charA == charB) continue;
-            if (charA >= 'A' && charA <= 'Z') charA |= 0x20;
-            if (charB >= 'A' && charB <= 'Z') charB |= 0x20;
-            if (charA != charB) return false;
-        }
-        return true;
     }
 }
 

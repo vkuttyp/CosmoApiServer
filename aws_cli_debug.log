@@ -1,0 +1,293 @@
+2026-03-10 02:01:51,746 - MainThread - awscli.clidriver - DEBUG - CLI version: aws-cli/2.31.15 Python/3.13.8 Darwin/25.3.0 source/arm64
+2026-03-10 02:01:51,746 - MainThread - awscli.clidriver - DEBUG - Arguments entered to CLI: ['s3', 'ls', '--endpoint-url', 'http://localhost:8100', '--debug']
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function add_s3 at 0x109992e80>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function add_ddb at 0x109765b20>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <bound method BasicCommand.add_command of <class 'awscli.customizations.configure.configure.ConfigureCommand'>>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function change_name at 0x1096ca520>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function change_name at 0x1096cb560>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function add_history_commands at 0x1098aa480>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <bound method BasicCommand.add_command of <class 'awscli.customizations.devcommands.CLIDevCommand'>>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <function add_waiters at 0x1099c44a0>
+2026-03-10 02:01:51,779 - MainThread - botocore.hooks - DEBUG - Event building-command-table.main: calling handler <bound method AliasSubCommandInjector.on_building_command_table of <awscli.alias.AliasSubCommandInjector object at 0x109a2c980>>
+2026-03-10 02:01:51,779 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/data/cli.json
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <function resolve_types at 0x109899300>
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <function no_sign_request at 0x109899620>
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <function resolve_verify_ssl at 0x109899580>
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <function resolve_cli_read_timeout at 0x109899760>
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <function resolve_cli_connect_timeout at 0x1098996c0>
+2026-03-10 02:01:51,780 - MainThread - botocore.hooks - DEBUG - Event top-level-args-parsed: calling handler <built-in method update of dict object at 0x109a51f80>
+2026-03-10 02:01:51,781 - MainThread - awscli.clidriver - DEBUG - CLI version: aws-cli/2.31.15 Python/3.13.8 Darwin/25.3.0 source/arm64
+2026-03-10 02:01:51,781 - MainThread - awscli.clidriver - DEBUG - Arguments entered to CLI: ['s3', 'ls', '--endpoint-url', 'http://localhost:8100', '--debug']
+2026-03-10 02:01:51,781 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function add_timestamp_parser at 0x10999eb60>
+2026-03-10 02:01:51,781 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function register_uri_param_handler at 0x1087aaa20>
+2026-03-10 02:01:51,781 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function add_binary_formatter at 0x1094d8cc0>
+2026-03-10 02:01:51,781 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function no_pager_handler at 0x109472480>
+2026-03-10 02:01:51,781 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function inject_assume_role_provider_cache at 0x1094cbf60>
+2026-03-10 02:01:51,783 - MainThread - botocore.utils - DEBUG - IMDS ENDPOINT: http://169.254.169.254/
+2026-03-10 02:01:51,789 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function attach_history_handler at 0x1098a8c20>
+2026-03-10 02:01:51,789 - MainThread - botocore.hooks - DEBUG - Event session-initialized: calling handler <function inject_json_file_cache at 0x109757240>
+2026-03-10 02:01:51,789 - MainThread - botocore.hooks - DEBUG - Event building-command-table.s3: calling handler <function add_waiters at 0x1099c44a0>
+2026-03-10 02:01:51,789 - MainThread - botocore.hooks - DEBUG - Event building-command-table.s3: calling handler <bound method AliasSubCommandInjector.on_building_command_table of <awscli.alias.AliasSubCommandInjector object at 0x109a2c980>>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event building-command-table.s3_ls: calling handler <function add_waiters at 0x1099c44a0>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event building-command-table.s3_ls: calling handler <bound method AliasSubCommandInjector.on_building_command_table of <awscli.alias.AliasSubCommandInjector object at 0x109a2c980>>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.paths: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.anonymous: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.page-size: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.human-readable: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event process-cli-arg.custom.ls: calling handler <awscli.argprocess.ParamShorthandParser object at 0x109906ba0>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.summarize: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event process-cli-arg.custom.ls: calling handler <awscli.argprocess.ParamShorthandParser object at 0x109906ba0>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.request-payer: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.bucket-name-prefix: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.hooks - DEBUG - Event load-cli-arg.custom.ls.bucket-region: calling handler <awscli.paramfile.URIArgumentHandler object at 0x109a2d400>
+2026-03-10 02:01:51,790 - MainThread - botocore.credentials - DEBUG - Looking for credentials via: env
+2026-03-10 02:01:51,790 - MainThread - botocore.credentials - INFO - Found credentials in environment variables.
+2026-03-10 02:01:51,791 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/endpoints.json
+2026-03-10 02:01:51,800 - MainThread - botocore.hooks - DEBUG - Event choose-service-name: calling handler <function handle_service_name_alias at 0x10868e700>
+2026-03-10 02:01:51,812 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/s3/2006-03-01/service-2.json
+2026-03-10 02:01:51,818 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/s3/2006-03-01/service-2.sdk-extras.json
+2026-03-10 02:01:51,829 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/s3/2006-03-01/endpoint-rule-set-1.json
+2026-03-10 02:01:51,831 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/partitions.json
+2026-03-10 02:01:51,831 - MainThread - botocore.hooks - DEBUG - Event creating-client-class.s3: calling handler <function add_generate_presigned_post at 0x1083a9ee0>
+2026-03-10 02:01:51,831 - MainThread - botocore.hooks - DEBUG - Event creating-client-class.s3: calling handler <function add_generate_presigned_url at 0x1083a9c60>
+2026-03-10 02:01:51,833 - MainThread - botocore.endpoint - DEBUG - Setting s3 timeout as (60, 60)
+2026-03-10 02:01:51,834 - MainThread - botocore.utils - DEBUG - Registering S3 region redirector handler
+2026-03-10 02:01:51,834 - MainThread - botocore.utils - DEBUG - Registering S3Express Identity Resolver
+2026-03-10 02:01:51,844 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/s3/2006-03-01/paginators-1.json
+2026-03-10 02:01:51,844 - MainThread - botocore.loaders - DEBUG - Loading JSON file: /opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/data/s3/2006-03-01/paginators-1.sdk-extras.json
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event provide-client-params.s3.ListBuckets: calling handler <function base64_decode_input_blobs at 0x1094d8d60>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <function validate_bucket_name at 0x10868eca0>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <function remove_bucket_from_url_paths_from_model at 0x1086b4ea0>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <bound method S3RegionRedirectorv2.annotate_request_context of <botocore.utils.S3RegionRedirectorv2 object at 0x10a4e8ad0>>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <bound method S3ExpressIdentityResolver.inject_signing_cache_key of <botocore.utils.S3ExpressIdentityResolver object at 0x10a4e8c20>>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <function generate_idempotent_uuid at 0x10868eac0>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-parameter-build.s3.ListBuckets: calling handler <function _handle_request_validation_mode_member at 0x1086b54e0>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-endpoint-resolution.s3: calling handler <function customize_endpoint_resolver_builtins at 0x1086b5080>
+2026-03-10 02:01:51,844 - MainThread - botocore.hooks - DEBUG - Event before-endpoint-resolution.s3: calling handler <bound method S3RegionRedirectorv2.redirect_from_cache of <botocore.utils.S3RegionRedirectorv2 object at 0x10a4e8ad0>>
+2026-03-10 02:01:51,844 - MainThread - botocore.regions - DEBUG - Calling endpoint provider with parameters: {'Region': 'us-west-1', 'UseFIPS': False, 'UseDualStack': False, 'Endpoint': 'http://localhost:8100', 'ForcePathStyle': True, 'Accelerate': False, 'UseGlobalEndpoint': False, 'DisableMultiRegionAccessPoints': False, 'UseArnRegion': True}
+2026-03-10 02:01:51,844 - MainThread - botocore.regions - DEBUG - Endpoint provider result: http://localhost:8100
+2026-03-10 02:01:51,844 - MainThread - botocore.regions - DEBUG - Selecting from endpoint provider's list of auth schemes: "sigv4". User selected auth scheme is: "None"
+2026-03-10 02:01:51,844 - MainThread - botocore.regions - DEBUG - Selected auth type "v4" as "v4" with signing context params: {'region': 'us-west-1', 'signing_name': 's3', 'disableDoubleEncoding': True}
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-call.s3.ListBuckets: calling handler <function add_expect_header at 0x10868f060>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-call.s3.ListBuckets: calling handler <bound method S3ExpressIdentityResolver.apply_signing_cache_key of <botocore.utils.S3ExpressIdentityResolver object at 0x10a4e8c20>>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-call.s3.ListBuckets: calling handler <function inject_api_version_header_if_needed at 0x1086b45e0>
+2026-03-10 02:01:51,845 - MainThread - botocore.endpoint - DEBUG - Making request for OperationModel(name=ListBuckets) with params: {'url_path': '/', 'query_string': {}, 'method': 'GET', 'headers': {'User-Agent': 'aws-cli/2.31.15 md/awscrt#0.27.6 ua/2.1 os/macos#25.3.0 md/arch#arm64 lang/python#3.13.8 md/pyimpl#CPython m/N,g,C,Z,b,E cfg/retry-mode#standard md/installer#source md/prompt#off md/command#s3.ls'}, 'body': b'', 'url': 'http://localhost:8100/', 'context': {'client_region': 'us-west-1', 'client_config': <botocore.config.Config object at 0x109a87610>, 'has_streaming_input': False, 'auth_type': 'v4', 'unsigned_payload': None, 'auth_options': ['aws.auth#sigv4'], 's3_redirect': {'redirected': False, 'bucket': None, 'params': {}}, 'signing': {'region': 'us-west-1', 'signing_name': 's3', 'disableDoubleEncoding': True}, 'endpoint_properties': {'authSchemes': [{'disableDoubleEncoding': True, 'name': 'sigv4', 'signingName': 's3', 'signingRegion': 'us-west-1'}]}}}
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method RequestSigner.handler of <botocore.signers.RequestSigner object at 0x10a1c6120>>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event choose-signer.s3.ListBuckets: calling handler <function set_operation_specific_signer at 0x10868e8e0>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function remove_arn_from_signing_path at 0x1086b4fe0>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function _set_extra_headers_for_unsigned_request at 0x1086b5760>
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <bound method S3ExpressIdentityResolver.resolve_s3express_identity of <botocore.utils.S3ExpressIdentityResolver object at 0x10a4e8c20>>
+2026-03-10 02:01:51,845 - MainThread - botocore.auth - DEBUG - Calculating signature using v4 auth.
+2026-03-10 02:01:51,845 - MainThread - botocore.auth - DEBUG - CanonicalRequest:
+GET
+/
+
+host:localhost:8100
+x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+x-amz-date:20260309T230151Z
+
+host;x-amz-content-sha256;x-amz-date
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+2026-03-10 02:01:51,845 - MainThread - botocore.auth - DEBUG - StringToSign:
+AWS4-HMAC-SHA256
+20260309T230151Z
+20260309/us-west-1/s3/aws4_request
+49981e74c997f2acd3363103f190f7abafd50a1aebf5996e2fecfea95a54875b
+2026-03-10 02:01:51,845 - MainThread - botocore.auth - DEBUG - Signature:
+879ec2b34665f733ad4617fb9d7f346be706b8b2e0c24d4bccf12d35aaa6f64c
+2026-03-10 02:01:51,845 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method UserAgentString.rebuild_and_replace_user_agent_handler of <botocore.useragent.UserAgentString object at 0x10a4ccb90>>
+2026-03-10 02:01:51,845 - MainThread - botocore.endpoint - DEBUG - Sending http request: <AWSPreparedRequest stream_output=False, method=GET, url=http://localhost:8100/, headers={'User-Agent': b'aws-cli/2.31.15 md/awscrt#0.27.6 ua/2.1 os/macos#25.3.0 md/arch#arm64 lang/python#3.13.8 md/pyimpl#CPython m/N,g,C,Z,b,E cfg/retry-mode#standard md/installer#source md/prompt#off md/command#s3.ls', 'X-Amz-Date': b'20260309T230151Z', 'X-Amz-Content-SHA256': b'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'Authorization': b'AWS4-HMAC-SHA256 Credential=default/20260309/us-west-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=879ec2b34665f733ad4617fb9d7f346be706b8b2e0c24d4bccf12d35aaa6f64c'}>
+2026-03-10 02:01:51,846 - MainThread - urllib3.connectionpool - DEBUG - Starting new HTTP connection (1): localhost:8100
+2026-03-10 02:01:51,858 - MainThread - urllib3.connectionpool - DEBUG - http://localhost:8100 "GET / HTTP/1.1" 500 None
+2026-03-10 02:01:51,858 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function _handle_200_error at 0x1086b5300>
+2026-03-10 02:01:51,858 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function handle_expires_header at 0x1086b5120>
+2026-03-10 02:01:51,859 - MainThread - botocore.parsers - DEBUG - Response headers: {'Connection': 'keep-alive', 'Transfer-Encoding': 'chunked, chunked', 'Content-Type': 'text/plain; charset=utf-8'}
+2026-03-10 02:01:51,859 - MainThread - botocore.parsers - DEBUG - Response body:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:51,859 - MainThread - botocore.parsers - DEBUG - Exception caught when parsing error response body:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 537, in _parse_xml_string_to_dom
+    parser.feed(xml_string)
+    ~~~~~~~~~~~^^^^^^^^^^^^
+xml.etree.ElementTree.ParseError: syntax error: line 1, column 0
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1425, in _do_error_parse
+    return self._parse_error_from_body(response)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1449, in _parse_error_from_body
+    root = self._parse_xml_string_to_dom(xml_contents)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 540, in _parse_xml_string_to_dom
+    raise ResponseParserError(
+    ...<2 lines>...
+    )
+botocore.parsers.ResponseParserError: Unable to parse response (syntax error: line 1, column 0), invalid XML received. Further retries may succeed:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:51,861 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <function _update_status_code at 0x1086b5440>
+2026-03-10 02:01:51,862 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method RetryHandler.needs_retry of <botocore.retries.standard.RetryHandler object at 0x10a4e8980>>
+2026-03-10 02:01:51,862 - MainThread - botocore.retries.standard - DEBUG - Retry needed, retrying request after delay of: 0.23247855849485055
+2026-03-10 02:01:51,862 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method S3RegionRedirectorv2.redirect_from_error of <botocore.utils.S3RegionRedirectorv2 object at 0x10a4e8ad0>>
+2026-03-10 02:01:51,862 - MainThread - botocore.endpoint - DEBUG - Response received to retry, sleeping for 0.23247855849485055 seconds
+2026-03-10 02:01:52,095 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method RequestSigner.handler of <botocore.signers.RequestSigner object at 0x10a1c6120>>
+2026-03-10 02:01:52,096 - MainThread - botocore.hooks - DEBUG - Event choose-signer.s3.ListBuckets: calling handler <function set_operation_specific_signer at 0x10868e8e0>
+2026-03-10 02:01:52,096 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function remove_arn_from_signing_path at 0x1086b4fe0>
+2026-03-10 02:01:52,096 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function _set_extra_headers_for_unsigned_request at 0x1086b5760>
+2026-03-10 02:01:52,096 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <bound method S3ExpressIdentityResolver.resolve_s3express_identity of <botocore.utils.S3ExpressIdentityResolver object at 0x10a4e8c20>>
+2026-03-10 02:01:52,096 - MainThread - botocore.auth - DEBUG - Calculating signature using v4 auth.
+2026-03-10 02:01:52,096 - MainThread - botocore.auth - DEBUG - CanonicalRequest:
+GET
+/
+
+host:localhost:8100
+x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+x-amz-date:20260309T230152Z
+
+host;x-amz-content-sha256;x-amz-date
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+2026-03-10 02:01:52,096 - MainThread - botocore.auth - DEBUG - StringToSign:
+AWS4-HMAC-SHA256
+20260309T230152Z
+20260309/us-west-1/s3/aws4_request
+2ad335acb16226df4b305156a65826d786f1f4a084616deab3435efe40421ed2
+2026-03-10 02:01:52,096 - MainThread - botocore.auth - DEBUG - Signature:
+3c30f4b2298952a873beb182a54948a6d7e6b195443b036daa1f759fea0dcc23
+2026-03-10 02:01:52,096 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method UserAgentString.rebuild_and_replace_user_agent_handler of <botocore.useragent.UserAgentString object at 0x10a4ccb90>>
+2026-03-10 02:01:52,096 - MainThread - botocore.endpoint - DEBUG - Sending http request: <AWSPreparedRequest stream_output=False, method=GET, url=http://localhost:8100/, headers={'User-Agent': b'aws-cli/2.31.15 md/awscrt#0.27.6 ua/2.1 os/macos#25.3.0 md/arch#arm64 lang/python#3.13.8 md/pyimpl#CPython m/N,g,C,Z,b,E cfg/retry-mode#standard md/installer#source md/prompt#off md/command#s3.ls', 'X-Amz-Date': b'20260309T230152Z', 'X-Amz-Content-SHA256': b'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'Authorization': b'AWS4-HMAC-SHA256 Credential=default/20260309/us-west-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=3c30f4b2298952a873beb182a54948a6d7e6b195443b036daa1f759fea0dcc23'}>
+2026-03-10 02:01:52,097 - MainThread - urllib3.connectionpool - DEBUG - http://localhost:8100 "GET / HTTP/1.1" 500 None
+2026-03-10 02:01:52,097 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function _handle_200_error at 0x1086b5300>
+2026-03-10 02:01:52,097 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function handle_expires_header at 0x1086b5120>
+2026-03-10 02:01:52,097 - MainThread - botocore.parsers - DEBUG - Response headers: {'Connection': 'keep-alive', 'Transfer-Encoding': 'chunked, chunked', 'Content-Type': 'text/plain; charset=utf-8'}
+2026-03-10 02:01:52,098 - MainThread - botocore.parsers - DEBUG - Response body:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:52,098 - MainThread - botocore.parsers - DEBUG - Exception caught when parsing error response body:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 537, in _parse_xml_string_to_dom
+    parser.feed(xml_string)
+    ~~~~~~~~~~~^^^^^^^^^^^^
+xml.etree.ElementTree.ParseError: syntax error: line 1, column 0
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1425, in _do_error_parse
+    return self._parse_error_from_body(response)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1449, in _parse_error_from_body
+    root = self._parse_xml_string_to_dom(xml_contents)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 540, in _parse_xml_string_to_dom
+    raise ResponseParserError(
+    ...<2 lines>...
+    )
+botocore.parsers.ResponseParserError: Unable to parse response (syntax error: line 1, column 0), invalid XML received. Further retries may succeed:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:52,098 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <function _update_status_code at 0x1086b5440>
+2026-03-10 02:01:52,098 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method RetryHandler.needs_retry of <botocore.retries.standard.RetryHandler object at 0x10a4e8980>>
+2026-03-10 02:01:52,098 - MainThread - botocore.retries.standard - DEBUG - Retry needed, retrying request after delay of: 0.7945821091855843
+2026-03-10 02:01:52,098 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method S3RegionRedirectorv2.redirect_from_error of <botocore.utils.S3RegionRedirectorv2 object at 0x10a4e8ad0>>
+2026-03-10 02:01:52,098 - MainThread - botocore.endpoint - DEBUG - Response received to retry, sleeping for 0.7945821091855843 seconds
+2026-03-10 02:01:52,898 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method RequestSigner.handler of <botocore.signers.RequestSigner object at 0x10a1c6120>>
+2026-03-10 02:01:52,898 - MainThread - botocore.hooks - DEBUG - Event choose-signer.s3.ListBuckets: calling handler <function set_operation_specific_signer at 0x10868e8e0>
+2026-03-10 02:01:52,899 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function remove_arn_from_signing_path at 0x1086b4fe0>
+2026-03-10 02:01:52,899 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <function _set_extra_headers_for_unsigned_request at 0x1086b5760>
+2026-03-10 02:01:52,899 - MainThread - botocore.hooks - DEBUG - Event before-sign.s3.ListBuckets: calling handler <bound method S3ExpressIdentityResolver.resolve_s3express_identity of <botocore.utils.S3ExpressIdentityResolver object at 0x10a4e8c20>>
+2026-03-10 02:01:52,899 - MainThread - botocore.auth - DEBUG - Calculating signature using v4 auth.
+2026-03-10 02:01:52,899 - MainThread - botocore.auth - DEBUG - CanonicalRequest:
+GET
+/
+
+host:localhost:8100
+x-amz-content-sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+x-amz-date:20260309T230152Z
+
+host;x-amz-content-sha256;x-amz-date
+e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
+2026-03-10 02:01:52,900 - MainThread - botocore.auth - DEBUG - StringToSign:
+AWS4-HMAC-SHA256
+20260309T230152Z
+20260309/us-west-1/s3/aws4_request
+2ad335acb16226df4b305156a65826d786f1f4a084616deab3435efe40421ed2
+2026-03-10 02:01:52,900 - MainThread - botocore.auth - DEBUG - Signature:
+3c30f4b2298952a873beb182a54948a6d7e6b195443b036daa1f759fea0dcc23
+2026-03-10 02:01:52,900 - MainThread - botocore.hooks - DEBUG - Event request-created.s3.ListBuckets: calling handler <bound method UserAgentString.rebuild_and_replace_user_agent_handler of <botocore.useragent.UserAgentString object at 0x10a4ccb90>>
+2026-03-10 02:01:52,900 - MainThread - botocore.endpoint - DEBUG - Sending http request: <AWSPreparedRequest stream_output=False, method=GET, url=http://localhost:8100/, headers={'User-Agent': b'aws-cli/2.31.15 md/awscrt#0.27.6 ua/2.1 os/macos#25.3.0 md/arch#arm64 lang/python#3.13.8 md/pyimpl#CPython m/N,g,C,Z,b,E cfg/retry-mode#standard md/installer#source md/prompt#off md/command#s3.ls', 'X-Amz-Date': b'20260309T230152Z', 'X-Amz-Content-SHA256': b'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855', 'Authorization': b'AWS4-HMAC-SHA256 Credential=default/20260309/us-west-1/s3/aws4_request, SignedHeaders=host;x-amz-content-sha256;x-amz-date, Signature=3c30f4b2298952a873beb182a54948a6d7e6b195443b036daa1f759fea0dcc23'}>
+2026-03-10 02:01:52,903 - MainThread - urllib3.connectionpool - DEBUG - http://localhost:8100 "GET / HTTP/1.1" 500 None
+2026-03-10 02:01:52,903 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function _handle_200_error at 0x1086b5300>
+2026-03-10 02:01:52,903 - MainThread - botocore.hooks - DEBUG - Event before-parse.s3.ListBuckets: calling handler <function handle_expires_header at 0x1086b5120>
+2026-03-10 02:01:52,903 - MainThread - botocore.parsers - DEBUG - Response headers: {'Connection': 'keep-alive', 'Transfer-Encoding': 'chunked, chunked', 'Content-Type': 'text/plain; charset=utf-8'}
+2026-03-10 02:01:52,903 - MainThread - botocore.parsers - DEBUG - Response body:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:52,904 - MainThread - botocore.parsers - DEBUG - Exception caught when parsing error response body:
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 537, in _parse_xml_string_to_dom
+    parser.feed(xml_string)
+    ~~~~~~~~~~~^^^^^^^^^^^^
+xml.etree.ElementTree.ParseError: syntax error: line 1, column 0
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1425, in _do_error_parse
+    return self._parse_error_from_body(response)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 1449, in _parse_error_from_body
+    root = self._parse_xml_string_to_dom(xml_contents)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/parsers.py", line 540, in _parse_xml_string_to_dom
+    raise ResponseParserError(
+    ...<2 lines>...
+    )
+botocore.parsers.ResponseParserError: Unable to parse response (syntax error: line 1, column 0), invalid XML received. Further retries may succeed:
+b"Internal Server Error: Specified argument was out of the range of valid values. (Parameter 'start')"
+2026-03-10 02:01:52,905 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <function _update_status_code at 0x1086b5440>
+2026-03-10 02:01:52,905 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method RetryHandler.needs_retry of <botocore.retries.standard.RetryHandler object at 0x10a4e8980>>
+2026-03-10 02:01:52,905 - MainThread - botocore.retries.standard - DEBUG - Max attempts of 3 reached.
+2026-03-10 02:01:52,905 - MainThread - botocore.retries.standard - DEBUG - Not retrying request.
+2026-03-10 02:01:52,905 - MainThread - botocore.hooks - DEBUG - Event needs-retry.s3.ListBuckets: calling handler <bound method S3RegionRedirectorv2.redirect_from_error of <botocore.utils.S3RegionRedirectorv2 object at 0x10a4e8ad0>>
+2026-03-10 02:01:52,905 - MainThread - botocore.hooks - DEBUG - Event after-call.s3.ListBuckets: calling handler <function enhance_error_msg at 0x1099932e0>
+2026-03-10 02:01:52,905 - MainThread - botocore.hooks - DEBUG - Event after-call.s3.ListBuckets: calling handler <bound method RetryQuotaChecker.release_retry_quota of <botocore.retries.standard.RetryQuotaChecker object at 0x10a1c7770>>
+2026-03-10 02:01:52,906 - MainThread - awscli.clidriver - DEBUG - Exception caught in main()
+Traceback (most recent call last):
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/clidriver.py", line 530, in main
+    return command_table[parsed_args.command](remaining, parsed_args)
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/customizations/commands.py", line 153, in __call__
+    return self._subcommand_table[subcommand_name](
+           ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^
+        new_args, parsed_globals
+        ^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/customizations/commands.py", line 207, in __call__
+    rc = self._run_main(parsed_args, parsed_globals)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/customizations/s3/subcommands.py", line 752, in _run_main
+    self._list_all_buckets(
+    ~~~~~~~~~~~~~~~~~~~~~~^
+        parsed_args.page_size,
+        ^^^^^^^^^^^^^^^^^^^^^^
+        parsed_args.bucket_name_prefix,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        parsed_args.bucket_region,
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/customizations/s3/subcommands.py", line 839, in _list_all_buckets
+    for response_data in iterator:
+                         ^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/paginate.py", line 267, in __iter__
+    response = self._make_request(current_kwargs)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/context.py", line 124, in wrapper
+    return func(*args, **kwargs)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/paginate.py", line 356, in _make_request
+    return self._method(**current_kwargs)
+           ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/client.py", line 438, in _api_call
+    return self._make_api_call(operation_name, kwargs)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/context.py", line 124, in wrapper
+    return func(*args, **kwargs)
+  File "/opt/homebrew/Cellar/awscli/2.31.15/libexec/lib/python3.13/site-packages/awscli/botocore/client.py", line 907, in _make_api_call
+    raise error_class(parsed_response, operation_name)
+botocore.exceptions.ClientError: An error occurred (500) when calling the ListBuckets operation (reached max retries: 2): Internal Server Error
+
+An error occurred (500) when calling the ListBuckets operation (reached max retries: 2): Internal Server Error

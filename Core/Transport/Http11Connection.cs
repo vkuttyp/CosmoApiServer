@@ -294,14 +294,9 @@ internal static class Http11Connection
             if (key == null) { value = string.Empty; return false; }
             if (_cache is not null) return _cache.TryGetValue(key, out value!);
             
-            // Try to find the header using bytes without materializing Name string
-            // Most headers are < 64 chars. Stackalloc to avoid byte[] allocation.
-            Span<byte> keyBytes = key.Length <= 64 ? stackalloc byte[key.Length] : new byte[key.Length];
-            int encoded = Encoding.ASCII.GetBytes(key, keyBytes);
-            
             foreach (var h in source)
             {
-                if (h.IsName(keyBytes))
+                if (h.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
                 { value = h.Value; return true; }
             }
             value = string.Empty;
