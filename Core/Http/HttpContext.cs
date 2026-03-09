@@ -41,6 +41,7 @@ public sealed class HttpContext
     {
         Request = request;
         Response = response;
+        Response.HttpContext = this;
         RequestServices = services;
         RequestAborted = requestAborted;
     }

@@ -295,7 +295,14 @@ public static class ControllerScanner
             {
                 if (!ctx.Items.TryGetValue("__MultipartForm", out var formObj))
                 {
-                    formObj = ctx.Request.ReadMultipart();
+                    if (ctx.Request.Headers.TryGetValue("Content-Type", out var ct) && ct.StartsWith("multipart/form-data"))
+                    {
+                        formObj = ctx.Request.ReadMultipart();
+                    }
+                    else
+                    {
+                        formObj = ctx.Request.ReadForm();
+                    }
                     ctx.Items["__MultipartForm"] = formObj;
                 }
                 var form = (MultipartForm)formObj!;

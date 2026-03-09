@@ -1,0 +1,57 @@
+@using WeatherApp.Models
+@inherits RazorSlice<SqlQueryModel>
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SQL Stream Viewer - Cosmo Slices</title>
+    <!-- Include HTMX for interactivity -->
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; margin: 2rem; background: #f8f9fa; color: #333; }
+        .container { max-width: 1200px; margin: 0 auto; }
+        .header { display: flex; align-items: center; gap: 1rem; margin-bottom: 2rem; }
+        .card { background: white; padding: 1.5rem; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 1.5rem; }
+        .query-box { display: flex; gap: 0.5rem; margin-bottom: 1rem; }
+        input { flex: 1; padding: 0.75rem; border: 1px solid #ddd; border-radius: 4px; font-family: monospace; font-size: 1rem; }
+        button { padding: 0.75rem 1.5rem; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
+        button:hover { background: #0056b3; }
+        button:disabled { background: #ccc; cursor: not_null; }
+        .htmx-indicator { display: none; margin-left: 10px; color: #666; font-style: italic; }
+        .htmx-request .htmx-indicator { display: inline; }
+        .results-container { min-height: 200px; }
+        table { width: 100%; border-collapse: collapse; font-size: 0.9rem; margin-top: 1rem; }
+        th { background: #f1f3f5; position: sticky; top: 0; text-align: left; padding: 0.75rem; border-bottom: 2px solid #dee2e6; }
+        td { padding: 0.5rem 0.75rem; border-bottom: 1px solid #eee; }
+        tr:hover { background: #f8f9fa; }
+        .error { color: #dc3545; background: #f8d7da; padding: 1rem; border-radius: 4px; margin-bottom: 1rem; }
+        .meta { color: #6c757d; font-size: 0.85rem; margin-bottom: 0.5rem; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>SQL Stream Viewer</h1>
+            <span style="background: #e9ecef; padding: 0.25rem 0.75rem; border-radius: 20px; font-size: 0.8rem; font-weight: bold; color: #495057;">PURE COSMO</span>
+        </div>
+
+        <div class="card">
+            <form hx-post="/sql/run" hx-target="#results" hx-indicator="#loading">
+                <div class="query-box">
+                    <input type="text" name="sql" value="@Model.Sql" placeholder="Enter SQL query..." />
+                    <button type="submit">Run Query</button>
+                    <span id="loading" class="htmx-indicator">Executing on server...</span>
+                </div>
+            </form>
+        </div>
+
+        <div id="results" class="results-container">
+            <!-- Results will be injected here by HTMX -->
+            <div style="color: #6c757d; text-align: center; padding: 3rem;">
+                Enter a query and click Run to see results.
+            </div>
+        </div>
+    </div>
+</body>
+</html>

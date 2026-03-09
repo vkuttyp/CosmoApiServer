@@ -12,6 +12,7 @@ public sealed class HttpResponse
     public int StatusCode { get; set; } = 200;
     public string ReasonPhrase { get; set; } = "OK";
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public HttpContext HttpContext { get; internal set; } = null!;
 
     private byte[]? _body;
 

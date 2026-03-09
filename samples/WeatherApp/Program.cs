@@ -51,6 +51,9 @@ Console.WriteLine("  GET  /account-trans              [Authorize] -> stream all 
 Console.WriteLine("  GET  /account-trans/account/{no} [Authorize] -> stream by account");
 Console.WriteLine("  GET  /account-trans/enriched     [Authorize] -> stream with running total");
 Console.WriteLine();
+Console.WriteLine("  GET  /weather/view                   -> weather list (HTML)");
+Console.WriteLine("  GET  /sql                            -> SQL Query Tool (HTML)");
+Console.WriteLine();
 Console.WriteLine("  GET  /health                         -> health check");
 Console.WriteLine();
 Console.WriteLine("  Test users:  admin / admin123   |   viewer / viewer123");

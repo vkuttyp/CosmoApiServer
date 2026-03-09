@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <!-- Use the Razor SDK -->
+    <RazorSdkCurrentVersionTooling>true</RazorSdkCurrentVersionTooling>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- 
+      Ensure .cshtml files are treated as AdditionalFiles so our Source Generator can see them.
+    -->
+    <AdditionalFiles Include="**/*.cshtml" Exclude="bin\**;obj\**;$(DefaultItemExcludes)" />
+  </ItemGroup>
+
+  <!-- 
+    Hook up the Source Generator.
+    In a real NuGet package, this would be in the 'analyzers' folder.
+    For local development, we point to the project output.
+  -->
+  <ItemGroup>
+    <ProjectReference Include="$(MSBuildThisFileDirectory)..\SourceGenerator\CosmoApiServer.SourceGenerator.csproj" 
+                      OutputItemType="Analyzer" 
+                      ReferenceOutputAssembly="false" />
+  </ItemGroup>
+</Project>

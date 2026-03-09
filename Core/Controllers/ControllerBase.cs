@@ -52,6 +52,8 @@ public abstract class ControllerBase
     protected IActionResult File(byte[] contents, string contentType, string? fileName = null) => new FileContentResult(contents, contentType, fileName);
     protected IActionResult StatusCode(int code) => new StatusCodeResult(code);
     protected IActionResult StatusCode(int code, object value) => new JsonResult<object>(value, code);
+
+    protected IActionResult View(Templates.RazorSlice slice) => new Templates.RazorSliceResult(slice);
 }
 
 // ── Built-in IActionResult implementations ─────────────────────────────────

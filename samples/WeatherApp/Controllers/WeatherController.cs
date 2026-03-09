@@ -2,6 +2,7 @@ using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Controllers.Attributes;
 using WeatherApp.Models;
 using WeatherApp.Services;
+using WeatherApp.Views.Weather;
 
 namespace WeatherApp.Controllers;
 
@@ -9,10 +10,19 @@ namespace WeatherApp.Controllers;
 [Authorize]
 public class WeatherController(IWeatherService weatherService) : ControllerBase
 {
-    /// GET /weather — list all forecasts
+    /// GET /weather — list all forecasts (JSON)
     [HttpGet]
     public IActionResult GetAll() =>
         Ok(weatherService.GetAll());
+
+    /// GET /weather/view — list all forecasts (HTML View)
+    [HttpGet("view")]
+    [AllowAnonymous] // Allow viewing without auth for easy testing
+    public IActionResult GetView()
+    {
+        var forecasts = weatherService.GetAll();
+        return View(WeatherList.Create(forecasts));
+    }
 
     /// GET /weather/{id} — get a single forecast
     [HttpGet("{id}")]

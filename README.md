@@ -64,6 +64,7 @@ Key design decisions:
 - Security Middlewares (CSRF, HSTS, HTTPS Redirection)
 - Model Validation via DataAnnotations
 - Global Exception Handling
+- **Razor Slices** — Lightweight, high-performance HTML templating with Razor syntax
 
 ---
 
@@ -466,3 +467,37 @@ Everything else — HTTP parsing, TLS, HTTP/2, HPACK, routing, middleware — is
 
 - **[CosmoS3](src/CosmoS3/README.md)** — Amazon S3–compatible middleware built on CosmoApiServer
 - **[CosmoSQLClient](https://github.com/vkuttyp/CosmoSQLClient-Dotnet)** — Zero-dependency SQL client (SQL Server, PostgreSQL, MySQL, SQLite) used by WeatherApp and CosmoS3
+
+---
+
+## Razor Slices
+
+`CosmoApiServer` includes a first-class, lightweight implementation of Razor templates called **Razor Slices**. This provides the power of Razor syntax (C# + HTML) with the performance of a zero-dependency, standalone framework.
+
+### Why Razor Slices?
+- **High Performance:** Renders directly to `CosmoApiServer`'s `HttpResponse` buffers.
+- **Pure Cosmo:** Does not require the massive `Microsoft.AspNetCore.App` shared framework.
+- **HTMX Ready:** Perfect for building interactive, "Blazor-like" UIs with minimal overhead.
+
+### Usage
+Create a `.cshtml` file in your project:
+```razor
+@using MyApp.Models
+@inherits RazorSlice<MyModel>
+<h1>Hello, @Model.Name!</h1>
+```
+
+Return it from your controller:
+```csharp
+[HttpGet("/hello/{name}")]
+public IActionResult SayHello(string name) =>
+    View(Hello.Create(new MyModel { Name = name }));
+```
+
+---
+
+## Credits
+
+**Razor Slices** in CosmoApiServer is based on the excellent **[RazorSlices](https://github.com/DamianEdwards/RazorSlices)** project by **Damian Edwards**, licensed under the **MIT License**.
+
+We have ported and adapted the runtime and source generator to target **.NET 10.0** and to integrate natively with the **CosmoApiServer** architecture, providing a truly standalone, high-performance templating experience.

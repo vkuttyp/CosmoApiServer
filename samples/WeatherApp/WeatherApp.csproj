@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk.Razor">
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
@@ -7,15 +7,20 @@
     <RootNamespace>WeatherApp</RootNamespace>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <!-- RootNamespace is used by the Source Generator to place the proxies -->
+    <RootNamespace>WeatherApp</RootNamespace>
+    <AddRazorSupportForMvc>true</AddRazorSupportForMvc>
   </PropertyGroup>
 
   <ItemGroup>
-    <Content Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Update="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\..\Core\CosmoApiServer.Core.csproj" />
   </ItemGroup>
+
+  <Import Project="..\..\Core\CosmoApiServer.Core.targets" />
 
   <ItemGroup>
     <PackageReference Include="CosmoSQLClient.MsSql" Version="1.4.6" />
