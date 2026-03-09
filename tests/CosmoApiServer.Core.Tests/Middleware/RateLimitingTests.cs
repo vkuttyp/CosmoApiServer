@@ -23,12 +23,12 @@ public class RateLimitingTests
         var ctx = MakeContext();
 
         // 1st request
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx.Response.StatusCode);
 
         // 2nd request
         ctx = MakeContext();
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx.Response.StatusCode);
     }
 
@@ -40,12 +40,12 @@ public class RateLimitingTests
         
         // 1st request - OK
         var ctx1 = MakeContext();
-        await middleware.InvokeAsync(ctx1, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx1, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx1.Response.StatusCode);
 
         // 2nd request - Blocked
         var ctx2 = MakeContext();
-        await middleware.InvokeAsync(ctx2, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx2, _ => ValueTask.CompletedTask);
         Assert.Equal(429, ctx2.Response.StatusCode);
         Assert.True(ctx2.Response.Headers.ContainsKey("Retry-After"));
         
@@ -61,7 +61,7 @@ public class RateLimitingTests
         
         // 1st request - OK
         var ctx1 = MakeContext();
-        await middleware.InvokeAsync(ctx1, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx1, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx1.Response.StatusCode);
 
         // Wait for window to expire
@@ -69,7 +69,7 @@ public class RateLimitingTests
 
         // 2nd request - OK again
         var ctx2 = MakeContext();
-        await middleware.InvokeAsync(ctx2, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx2, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx2.Response.StatusCode);
     }
 }

@@ -48,7 +48,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, _cts.Token);
     }
 
-    private async Task AcceptLoopAsync(
+    private async ValueTask AcceptLoopAsync(
         RequestDelegate pipeline,
         IServiceProvider services,
         int maxBodySize,
@@ -68,7 +68,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
     }
 
-    private static async Task HandleConnectionAsync(
+    private static async ValueTask HandleConnectionAsync(
         Socket socket,
         RequestDelegate pipeline,
         IServiceProvider services,

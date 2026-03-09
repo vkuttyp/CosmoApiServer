@@ -1,37 +1,61 @@
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
+using System.Collections.Concurrent;
 
 namespace CosmoApiServer.Core.Routing;
 
 public sealed class RouteTable
 {
-    // Group routes by HTTP method for O(1) method dispatch
-    private readonly Dictionary<Http.HttpMethod, List<RouteEntry>> _routesByMethod =
-        new Dictionary<Http.HttpMethod, List<RouteEntry>>();
+    // Group routes by HTTP method
+    private readonly Dictionary<Http.HttpMethod, List<RouteEntry>> _routes = new();
+    
+    // Fast cache for previously matched paths
+    private readonly ConcurrentDictionary<(Http.HttpMethod, string), RouteMatch> _cache = new();
 
     public void Add(Http.HttpMethod method, string template, RequestDelegate handler)
     {
-        if (!_routesByMethod.TryGetValue(method, out var list))
+        if (!_routes.TryGetValue(method, out var list))
         {
             list = new List<RouteEntry>();
-            _routesByMethod[method] = list;
+            _routes[method] = list;
         }
-        list.Add(new RouteEntry(method, new RouteTemplate(template), handler));
+
+        var routeTemplate = new RouteTemplate(template);
+        list.Add(new RouteEntry(method, routeTemplate, handler));
+        
+        // Clear cache when routes change
+        _cache.Clear();
     }
 
     public RouteMatch? Match(Http.HttpMethod method, string path)
     {
-        // Strip query string from path
-        var cleanPath = path.Contains('?') ? path[..path.IndexOf('?')] : path;
+        // 1. Try Cache
+        if (_cache.TryGetValue((method, path), out var cachedMatch))
+        {
+            // Note: For parameterized routes, we still need the actual values for THIS path.
+            if (!cachedMatch.Entry.Template.HasParams) return cachedMatch;
+        }
 
-        if (!_routesByMethod.TryGetValue(method, out var routes))
+        if (!_routes.TryGetValue(method, out var routes))
             return null;
+
+        var cleanPath = path.AsSpan();
+        int qIdx = cleanPath.IndexOf('?');
+        if (qIdx >= 0) cleanPath = cleanPath[..qIdx];
+        cleanPath = cleanPath.Trim('/');
 
         foreach (var entry in routes)
         {
-            var values = entry.Template.TryMatch(cleanPath);
+            var values = entry.Template.TryMatch(cleanPath.ToString());
             if (values is not null)
-                return new RouteMatch(entry, values);
+            {
+                var match = new RouteMatch(entry, values);
+                
+                // 2. Populate Cache (only for static routes or to speed up Entry lookup)
+                _cache.TryAdd((method, path), match);
+                
+                return match;
+            }
         }
 
         return null;

@@ -14,6 +14,7 @@ public sealed class CosmoWebApplicationBuilder
     private readonly IServiceCollection _services = new ServiceCollection();
     private readonly MiddlewarePipeline _middlewarePipeline = new();
     private readonly List<Assembly> _controllerAssemblies = [];
+    private readonly List<Assembly> _componentAssemblies = [];
     private readonly ServerOptions _options = new();
     private readonly IConfiguration _configuration;
 
@@ -168,6 +169,21 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder AddRazorComponents()
+    {
+        var callingAssembly = Assembly.GetCallingAssembly();
+        if (!_componentAssemblies.Contains(callingAssembly))
+            _componentAssemblies.Add(callingAssembly);
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddRazorComponentsFromAssembly(Assembly assembly)
+    {
+        if (!_componentAssemblies.Contains(assembly))
+            _componentAssemblies.Add(assembly);
+        return this;
+    }
+
     public CosmoWebApplicationBuilder ListenOn(int port)
     {
         _options.Port = port;
@@ -209,6 +225,7 @@ public sealed class CosmoWebApplicationBuilder
             _middlewarePipeline,
             routeTable,
             _controllerAssemblies,
+            _componentAssemblies,
             _options);
     }
 }

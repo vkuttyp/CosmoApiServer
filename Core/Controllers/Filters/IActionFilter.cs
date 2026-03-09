@@ -32,8 +32,8 @@ public sealed class ActionExecutedContext(HttpContext httpContext, IActionResult
 /// </summary>
 public interface IActionFilter
 {
-    Task OnActionExecutingAsync(ActionExecutingContext context);
-    Task OnActionExecutedAsync(ActionExecutedContext context);
+    ValueTask OnActionExecutingAsync(ActionExecutingContext context);
+    ValueTask OnActionExecutedAsync(ActionExecutedContext context);
 }
 
 /// <summary>
@@ -42,6 +42,6 @@ public interface IActionFilter
 [AttributeUsage(AttributeTargets.Class | AttributeTargets.Method, AllowMultiple = true)]
 public abstract class ActionFilterAttribute : Attribute, IActionFilter
 {
-    public virtual Task OnActionExecutingAsync(ActionExecutingContext context) => Task.CompletedTask;
-    public virtual Task OnActionExecutedAsync(ActionExecutedContext context) => Task.CompletedTask;
+    public virtual ValueTask OnActionExecutingAsync(ActionExecutingContext context) => ValueTask.CompletedTask;
+    public virtual ValueTask OnActionExecutedAsync(ActionExecutedContext context) => ValueTask.CompletedTask;
 }

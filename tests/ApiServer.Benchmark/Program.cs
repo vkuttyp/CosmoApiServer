@@ -31,7 +31,7 @@ record BenchResult(string Scenario, List<double> Samples)
 class Program
 {
     const int WarmupRounds  = 100;
-    const int MeasureRounds = 2000;
+    const int MeasureRounds = 1000; // Reduced for rendering tests
 
     static readonly string EchoBody = JsonSerializer.Serialize(new
     {
@@ -46,11 +46,13 @@ class Program
         {
             "CosmoApiServer" => "http://127.0.0.1:9001",
             "AspNetCore"     => "http://127.0.0.1:9002",
-            _                => args[0]
+            "CosmoRazor"     => "http://127.0.0.1:9003",
+            "BlazorSSR"      => "http://127.0.0.1:9004",
+            _                => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
         };
 
         Console.WriteLine($"╔══════════════════════════════════════════════╗");
-        Console.WriteLine($"║  HTTP API Benchmark — {target,-24}║");
+        Console.WriteLine($"║  HTTP Benchmark — {target,-27}║");
         Console.WriteLine($"║  Endpoint : {url,-34}║");
         Console.WriteLine($"║  Rounds   : {WarmupRounds} warmup + {MeasureRounds} measured{"",-12}║");
         Console.WriteLine($"╚══════════════════════════════════════════════╝");
@@ -68,19 +70,6 @@ class Program
         try {
             var resp = await http.GetAsync("/ping");
             resp.EnsureSuccessStatusCode();
-            
-            // Get CSRF cookie for subsequent POSTs
-            if (resp.Headers.TryGetValues("Set-Cookie", out var cookies))
-            {
-                var cookie = cookies.FirstOrDefault(c => c.Contains("XSRF-TOKEN"));
-                if (cookie != null)
-                {
-                    var token = cookie.Split(';')[0].Split('=')[1];
-                    http.DefaultRequestHeaders.Add("X-XSRF-TOKEN", token);
-                    // Standard SocketsHttpHandler handles the cookie automatically for subsequent requests if we don't clear it
-                }
-            }
-
             Console.WriteLine($"Server responded: {(int)resp.StatusCode} — ready.\n");
         } catch (Exception ex) {
             Console.Error.WriteLine($"ERROR: Server at {url} is not responding: {ex.Message}");
@@ -92,25 +81,30 @@ class Program
         for (int i = 0; i < WarmupRounds; i++)
         {
             await http.GetAsync("/ping");
-            await http.GetAsync("/json");
-            await http.GetAsync("/route/5");
-            await http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"));
+            if (target.Contains("Razor") || target.Contains("Blazor"))
+                await http.GetAsync("/bench");
+            else
+                await http.GetAsync("/json");
         }
         Console.WriteLine(" done.\n");
 
         // ─── Measured rounds ──────────────────────────────────────────────
         var results = new List<BenchResult>();
 
-        var scenarios = new (string name, Func<Task<HttpResponseMessage>> fn)[]
+        var scenarios = new List<(string name, Func<Task<HttpResponseMessage>> fn)>();
+        
+        if (target == "CosmoRazor" || target == "BlazorSSR")
         {
-            ("GET /ping",      () => http.GetAsync("/ping")),
-            ("GET /json",      () => http.GetAsync("/json")),
-            ("GET /route/{id}", () => http.GetAsync("/route/7")),
-            ("POST /echo",     () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))),
-            ("GET /middleware", () => http.GetAsync("/middleware")),
-            ("GET /complex",    () => http.GetAsync("/complex?page=42&q=benchmark")),
-            ("GET /filtered",   () => http.GetAsync("/filtered"))
-        };
+            scenarios.Add(("GET /ping", () => http.GetAsync("/ping")));
+            scenarios.Add(("GET /bench (100 rows)", () => http.GetAsync("/bench")));
+        }
+        else
+        {
+            scenarios.Add(("GET /ping",      () => http.GetAsync("/ping")));
+            scenarios.Add(("GET /json",      () => http.GetAsync("/json")));
+            scenarios.Add(("GET /route/{id}", () => http.GetAsync("/route/7")));
+            scenarios.Add(("POST /echo",     () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))));
+        }
 
         foreach (var s in scenarios)
         {
@@ -123,10 +117,10 @@ class Program
 
     static async Task<BenchResult> RunScenario(string name, int rounds, Func<Task<HttpResponseMessage>> fn)
     {
-        Console.Write($"  {name,-20} [");
+        Console.Write($"  {name,-25} [");
         var samples = new List<double>(rounds);
         int errors = 0;
-        int progressStep = rounds / 20;
+        int progressStep = Math.Max(1, rounds / 20);
 
         for (int i = 0; i < rounds; i++)
         {
@@ -152,12 +146,12 @@ class Program
     static void PrintReport(string server, List<BenchResult> results)
     {
         Console.WriteLine();
-        Console.WriteLine($"╔══════════════════════╦════════╦═══════╦═══════╦═══════╦═══════╦═════════════╣");
-        Console.WriteLine($"║  Scenario            ║   N    ║  Min  ║  P50  ║  P95  ║  P99  ║   ops/sec   ║");
-        Console.WriteLine($"╠══════════════════════╬════════╬═══════╬═══════╬═══════╬═══════╬═════════════╣");
+        Console.WriteLine($"╔══════════════════════════╦════════╦═══════╦═══════╦═══════╦═══════╦═════════════╣");
+        Console.WriteLine($"║  Scenario                ║   N    ║  Min  ║  P50  ║  P95  ║  P99  ║   ops/sec   ║");
+        Console.WriteLine($"╠══════════════════════════╬════════╬═══════╬═══════╬═══════╬═══════╬═════════════╣");
         foreach (var r in results) {
-            Console.WriteLine($"║  {r.Scenario,-20}║  {r.N,4}  ║ {r.Min,5:F2} ║ {r.P50,5:F2} ║ {r.P95,5:F2} ║ {r.P99,5:F2} ║ {r.OpsPerSec,9:F1}   ║");
+            Console.WriteLine($"║  {r.Scenario,-24}║  {r.N,4}  ║ {r.Min,5:F2} ║ {r.P50,5:F2} ║ {r.P95,5:F2} ║ {r.P99,5:F2} ║ {r.OpsPerSec,9:F1}   ║");
         }
-        Console.WriteLine($"╚══════════════════════╩════════╩═══════╩═══════╩═══════╩═══════╩═════════════╝");
+        Console.WriteLine($"╚══════════════════════════╩════════╩═══════╩═══════╩═══════╩═══════╩═════════════╝");
     }
 }

@@ -28,7 +28,7 @@ public class CompressionTests
         var longMessage = string.Concat(Enumerable.Repeat("This is a long message that should definitely be compressed by the middleware. ", 10));
         ctx.Response.WriteJson(new { message = longMessage });
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.Equal("gzip", ctx.Response.Headers["Content-Encoding"]);
         Assert.Contains("Accept-Encoding", ctx.Response.Headers["Vary"]);
@@ -52,7 +52,7 @@ public class CompressionTests
         ctx.Response.Headers["Content-Type"] = "application/json";
         ctx.Response.WriteJson(new { msg = "small" });
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.False(ctx.Response.Headers.ContainsKey("Content-Encoding"));
     }
@@ -67,7 +67,7 @@ public class CompressionTests
         ctx.Response.Headers["Content-Type"] = "application/json";
         ctx.Response.WriteJson(new { msg = "this is long enough but encoding not accepted" });
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.False(ctx.Response.Headers.ContainsKey("Content-Encoding"));
     }

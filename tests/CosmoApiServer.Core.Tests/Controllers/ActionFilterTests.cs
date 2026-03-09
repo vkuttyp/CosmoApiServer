@@ -13,25 +13,25 @@ public class ActionFilterTests
     private class TestFilter(string id) : ActionFilterAttribute
     {
         public List<string> Log { get; set; } = new();
-        public override Task OnActionExecutingAsync(ActionExecutingContext context)
+        public override ValueTask OnActionExecutingAsync(ActionExecutingContext context)
         {
             Log.Add($"{id}:Executing");
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         }
 
-        public override Task OnActionExecutedAsync(ActionExecutedContext context)
+        public override ValueTask OnActionExecutedAsync(ActionExecutedContext context)
         {
             Log.Add($"{id}:Executed");
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         }
     }
 
     private class ShortCircuitFilter : ActionFilterAttribute
     {
-        public override Task OnActionExecutingAsync(ActionExecutingContext context)
+        public override ValueTask OnActionExecutingAsync(ActionExecutingContext context)
         {
             context.Result = new TextResult(403, "Short-circuited");
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         }
     }
 

@@ -1,5 +1,8 @@
 <Solution>
-   <Project Path="../Core/CosmoApiServer.Core.csproj" />
-   <Project Path="ApiServer.Benchmark/ApiServer.Benchmark.csproj" />
+  <Project Path="../Core/CosmoApiServer.Core.csproj" />
+  <Project Path="../SourceGenerator/CosmoApiServer.SourceGenerator.csproj" />
+  <Project Path="../templates/CosmoApiServer.Templates.csproj" />
+  <Project Path="../samples/BlazorSqlSample/BlazorSqlSample.csproj" />
+  <Project Path="ApiServer.Benchmark/ApiServer.Benchmark.csproj" />
   <Project Path="CosmoApiServer.Core.Tests/CosmoApiServer.Core.Tests.csproj" />
 </Solution>

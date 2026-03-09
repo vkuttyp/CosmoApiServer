@@ -1,0 +1,21 @@
+@page "/test/{id}"
+@page "/test-query"
+@inherits Microsoft.AspNetCore.Components.ComponentBase
+
+<h1>Route Parameter Test</h1>
+<p>ID from route or query: <strong>@Id</strong></p>
+<p>Name from query: <strong>@Name</strong></p>
+
+<hr/>
+<ul>
+    <li><a href="/test/123">Go to /test/123</a></li>
+    <li><a href="/test-query?Id=456&Name=Gemini">Go to /test-query?Id=456&Name=Gemini</a></li>
+</ul>
+
+@code {
+    [Microsoft.AspNetCore.Components.Parameter]
+    public string Id { get; set; }
+
+    [Microsoft.AspNetCore.Components.Parameter]
+    public string Name { get; set; }
+}

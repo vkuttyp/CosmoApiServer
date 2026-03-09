@@ -5,8 +5,8 @@ namespace CosmoApiServer.Core.Http;
 
 public sealed class HttpContext
 {
-    public HttpRequest Request { get; }
-    public HttpResponse Response { get; }
+    public HttpRequest Request { get; private set; }
+    public HttpResponse Response { get; private set; }
     public IServiceProvider RequestServices { get; set; }
 
     /// <summary>
@@ -37,6 +37,14 @@ public sealed class HttpContext
     /// <summary>Lifecycle: the transport disposes this after the response is sent.</summary>
     internal IDisposable? _disposeScope;
 
+    internal HttpContext()
+    {
+        Request = new HttpRequest();
+        Response = new HttpResponse();
+        Response.HttpContext = this;
+        RequestServices = null!;
+    }
+
     public HttpContext(HttpRequest request, HttpResponse response, IServiceProvider services, CancellationToken requestAborted = default)
     {
         Request = request;
@@ -44,6 +52,24 @@ public sealed class HttpContext
         Response.HttpContext = this;
         RequestServices = services;
         RequestAborted = requestAborted;
+    }
+
+    internal void Initialize(IServiceProvider services, CancellationToken ct)
+    {
+        RequestServices = services;
+        RequestAborted = ct;
+    }
+
+    internal void Reset()
+    {
+        Request.Reset();
+        Response.Reset();
+        RequestServices = null!;
+        RequestAborted = default;
+        Items.Clear();
+        User = null;
+        StreamingBodyWriter = null;
+        _disposeScope = null;
     }
 
     /// <summary>

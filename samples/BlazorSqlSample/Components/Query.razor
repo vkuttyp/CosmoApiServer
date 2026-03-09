@@ -1,0 +1,69 @@
+@page "/sql-tool"
+@inherits ComponentBase
+
+<ValidationSummary />
+
+<div class="card mb-4">
+    <div class="card-header bg-primary text-white">
+        <h3 class="mb-0">SQL Stream Viewer (SSR)</h3>
+    </div>
+    <div class="card-body">
+        <form method="post" action="/query/run">
+            <div class="mb-3">
+                <textarea name="sql" class="form-control sql-editor" placeholder="SELECT * FROM sys.objects">@Model.Sql</textarea>
+            </div>
+            <div class="d-flex gap-2">
+                <button type="submit" class="btn btn-success px-4">Run Query</button>
+                <a href="/query" class="btn btn-outline-secondary">Reset</a>
+            </div>
+        </form>
+    </div>
+</div>
+
+@if (Model.Error is not null)
+{
+    <div class="alert alert-danger" role="alert">
+        <strong>Error:</strong> @Model.Error
+    </div>
+}
+
+@if (Model.Columns.Count > 0)
+{
+    <div class="mb-2 text-muted small">
+        <strong>@Model.Rows.Count.ToString("N0")</strong> rows returned in 
+        <strong>@Model.ElapsedSeconds.ToString("F3")s</strong>
+    </div>
+
+    <div class="scroll-container bg-white rounded">
+        <table class="table table-sm table-bordered table-striped results-table mb-0">
+            <thead class="sticky-header">
+                <tr>
+                    @foreach (var col in Model.Columns)
+                    {
+                        <th class="p-2 border">@col</th>
+                    }
+                </tr>
+            </thead>
+            <tbody>
+                @foreach (var row in Model.Rows)
+                {
+                    <tr>
+                        @foreach (var cell in row)
+                        {
+                            <td class="p-2 border text-nowrap">@(cell ?? "NULL")</td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    </div>
+}
+else if (!string.IsNullOrEmpty(Model.Sql) && Model.Error == null && Model.ElapsedSeconds > 0)
+{
+    <div class="alert alert-info">Query executed successfully but returned no rows.</div>
+}
+
+@code {
+    [Parameter]
+    public SqlQueryModel Model { get; set; } = new();
+}

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Net;
 
 namespace CosmoApiServer.Core.Http;
 
@@ -8,12 +9,18 @@ public sealed class HttpRequest
     {
         PropertyNameCaseInsensitive = true
     };
-    public HttpMethod Method { get; init; }
-    public string Path { get; init; } = "/";
-    public string QueryString { get; init; } = string.Empty;
-    public IReadOnlyDictionary<string, string> Headers { get; init; } = new Dictionary<string, string>();
-    public IReadOnlyDictionary<string, string> Query { get; init; } = new Dictionary<string, string>();
-    public byte[] Body { get; init; } = [];
+    public HttpMethod Method { get; set; }
+    public string Path { get; set; } = "/";
+    public string QueryString { get; set; } = string.Empty;
+    public IReadOnlyDictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> Query { get; set; } = new Dictionary<string, string>();
+    public byte[] Body { get; set; } = [];
+
+    // Pre-parsed "well-known" headers for zero-dictionary access
+    public long ContentLength { get; internal set; }
+    public string? ContentType { get; internal set; }
+    public string? Host { get; internal set; }
+    public string? Authorization { get; internal set; }
 
     // Populated by router after route match
     public IReadOnlyDictionary<string, string> RouteValues { get; set; } = new Dictionary<string, string>();
@@ -38,10 +45,25 @@ public sealed class HttpRequest
         {
             var eq = pair.IndexOf('=');
             if (eq < 0)
-                fields[Uri.UnescapeDataString(pair)] = string.Empty;
+                fields[WebUtility.UrlDecode(pair)] = string.Empty;
             else
-                fields[Uri.UnescapeDataString(pair[..eq])] = Uri.UnescapeDataString(pair[(eq + 1)..]);
+                fields[WebUtility.UrlDecode(pair[..eq])] = WebUtility.UrlDecode(pair[(eq + 1)..]);
         }
         return new MultipartForm { Fields = fields };
+    }
+
+    internal void Reset()
+    {
+        Method = HttpMethod.GET;
+        Path = "/";
+        QueryString = string.Empty;
+        Headers = new Dictionary<string, string>();
+        Query = new Dictionary<string, string>();
+        Body = [];
+        RouteValues = new Dictionary<string, string>();
+        ContentLength = 0;
+        ContentType = null;
+        Host = null;
+        Authorization = null;
     }
 }

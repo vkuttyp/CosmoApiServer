@@ -13,7 +13,7 @@ public sealed class RouterMiddleware : IMiddleware
 
     public RouterMiddleware(RouteTable routeTable) => _routeTable = routeTable;
 
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var match = _routeTable.Match(context.Request.Method, context.Request.Path);
 
@@ -27,6 +27,17 @@ public sealed class RouterMiddleware : IMiddleware
         // Inject route values into request
         context.Request.RouteValues = match.RouteValues;
 
-        await match.Entry.Handler(context);
+        try
+        {
+            await match.Entry.Handler(context);
+        }
+        finally
+        {
+            // Return dictionary to pool if it was a real dictionary (and not the shared empty one)
+            if (match.RouteValues is Dictionary<string, string> dict && dict.Count > 0)
+            {
+                RouteValuePool.Return(dict);
+            }
+        }
     }
 }

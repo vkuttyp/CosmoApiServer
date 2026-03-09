@@ -24,7 +24,7 @@ public sealed class CorsMiddleware : IMiddleware
         _allowAll = Array.IndexOf(options.AllowedOrigins, "*") >= 0;
     }
 
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         string origin = context.Request.Headers.TryGetValue("Origin", out var o) ? o : "*";
         bool allowed = _allowAll || Array.IndexOf(_options.AllowedOrigins, origin) >= 0;

@@ -24,16 +24,18 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
 
         var projectInfo = assemblyName.Combine(rootNamespace.Combine(projectDirectory));
 
-        var allCshtmlFiles = context.AdditionalTextsProvider
-            .Where(text => text.Path.EndsWith(".cshtml", StringComparison.OrdinalIgnoreCase));
+        var allRazorFiles = context.AdditionalTextsProvider
+            .Where(text => text.Path.EndsWith(".cshtml", StringComparison.OrdinalIgnoreCase) || 
+                           text.Path.EndsWith(".razor", StringComparison.OrdinalIgnoreCase));
 
-        // Simplified: Slices are any .cshtml that are NOT _ViewImports.cshtml
-        var sliceTexts = allCshtmlFiles
-            .Where(file => !Path.GetFileName(file.Path).Equals("_ViewImports.cshtml", StringComparison.OrdinalIgnoreCase));
+        // Simplified: Slices are any .cshtml/.razor that are NOT _ViewImports.cshtml or _Imports.razor
+        var sliceTexts = allRazorFiles
+            .Where(file => !Path.GetFileName(file.Path).Equals("_ViewImports.cshtml", StringComparison.OrdinalIgnoreCase) &&
+                           !Path.GetFileName(file.Path).Equals("_Imports.razor", StringComparison.OrdinalIgnoreCase));
 
         var combined = projectInfo
             .Combine(sliceTexts.Collect())
-            .Combine(allCshtmlFiles.Collect())
+            .Combine(allRazorFiles.Collect())
             .Combine(context.CompilationProvider);
 
         context.RegisterSourceOutput(combined, static (spc, pair) =>
@@ -59,7 +61,7 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
         string? rootNamespace,
         string? projectDirectory,
         ImmutableArray<AdditionalText> sliceTexts,
-        ImmutableArray<AdditionalText> allCshtmlFiles,
+        ImmutableArray<AdditionalText> allRazorFiles,
         Compilation compilation)
     {
         if (string.IsNullOrEmpty(rootNamespace) || string.IsNullOrEmpty(projectDirectory)) return;
@@ -67,7 +69,7 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
         var distinctTexts = sliceTexts.Distinct();
         if (!distinctTexts.Any()) return;
 
-        var viewImportsMap = ViewImportsResolver.BuildViewImportsMap(allCshtmlFiles);
+        var viewImportsMap = ViewImportsResolver.BuildViewImportsMap(allRazorFiles);
         HashSet<string> generatedClasses = [];
         var codeBuilder = new StringBuilder();
 
@@ -81,6 +83,7 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
 
         foreach (var file in distinctTexts)
         {
+            var isRazor = file.Path.EndsWith(".razor", StringComparison.OrdinalIgnoreCase);
             var fileName = Path.GetFileNameWithoutExtension(file.Path);
             var directory = Path.GetDirectoryName(file.Path);
             var relativeFilePath = PathUtils.GetRelativePath(projectDirectory!, file.Path);
@@ -100,10 +103,16 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
             var sourceText = file.GetText();
             string? resolvedModelType = null;
             bool hasModel = false;
-            var templateNameSpace = "AspNetCoreGeneratedDocument";
+            var templateNameSpace = isRazor ? fullNamespace : "AspNetCoreGeneratedDocument"; // .razor usually keeps namespace
+            var routes = new List<string>();
 
             if (sourceText is not null)
             {
+                if (isRazor)
+                {
+                    routes = RazorDirectiveParser.ParsePageDirectives(sourceText);
+                }
+
                 var directives = ViewImportsResolver.ResolveDirectives(file.Path, projectDirectory!, viewImportsMap, sourceText);
                 if (directives.InheritsDirective is not null)
                 {
@@ -129,31 +138,58 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
             codeBuilder.AppendLine($$"""
                 namespace {{fullNamespace}}
                 {
+                """);
+
+            if (isRazor && routes.Any())
+            {
+                foreach (var route in routes)
+                {
+                    codeBuilder.AppendLine($$"""    [global::Microsoft.AspNetCore.Components.RouteAttribute("{{route}}")]""");
+                }
+            }
+
+            codeBuilder.AppendLine($$"""
                     public sealed partial class {{className}}
                     {
-                        private const string TypeName = "{{templateNameSpace}}.{{(string.IsNullOrEmpty(subNamespaceAsClassName) ? className : $"{subNamespaceAsClassName}_{className}")}}, {{assemblyName}}";
+                        private const string TypeName = "{{(isRazor ? $"{fullNamespace}.{className}" : $"{templateNameSpace}.{(string.IsNullOrEmpty(subNamespaceAsClassName) ? className : $"{subNamespaceAsClassName}_{className}")}")}}, {{assemblyName}}";
                         private static readonly global::System.Type _sliceType = global::System.Type.GetType(TypeName)!;
                 """);
 
-            if (hasModel && resolvedModelType is not null)
+            if (isRazor)
             {
+                // For components, we don't usually have a single 'Model'. We have Parameters.
+                // But for SSR, we might want a factory that sets some initial parameters.
                 codeBuilder.AppendLine($$"""
-                        public static global::CosmoApiServer.Core.Templates.RazorSlice<{{resolvedModelType}}> Create({{resolvedModelType}} model)
+                        public static global::CosmoApiServer.Core.Templates.ComponentBase Create(global::System.Action<{{className}}>? configure = null)
                         {
-                            var slice = (global::CosmoApiServer.Core.Templates.RazorSlice<{{resolvedModelType}}>)global::System.Activator.CreateInstance(_sliceType)!;
-                            slice.Model = model;
-                            return slice;
+                            var component = ({{className}})global::System.Activator.CreateInstance(_sliceType)!;
+                            configure?.Invoke(component);
+                            return component;
                         }
                 """);
             }
             else
             {
-                codeBuilder.AppendLine($$"""
-                        public static global::CosmoApiServer.Core.Templates.RazorSlice Create()
-                        {
-                            return (global::CosmoApiServer.Core.Templates.RazorSlice)global::System.Activator.CreateInstance(_sliceType)!;
-                        }
-                """);
+                if (hasModel && resolvedModelType is not null)
+                {
+                    codeBuilder.AppendLine($$"""
+                            public static global::CosmoApiServer.Core.Templates.RazorSlice<{{resolvedModelType}}> Create({{resolvedModelType}} model)
+                            {
+                                var slice = (global::CosmoApiServer.Core.Templates.RazorSlice<{{resolvedModelType}}>)global::System.Activator.CreateInstance(_sliceType)!;
+                                slice.Model = model;
+                                return slice;
+                            }
+                    """);
+                }
+                else
+                {
+                    codeBuilder.AppendLine($$"""
+                            public static global::CosmoApiServer.Core.Templates.RazorSlice Create()
+                            {
+                                return (global::CosmoApiServer.Core.Templates.RazorSlice)global::System.Activator.CreateInstance(_sliceType)!;
+                            }
+                    """);
+                }
             }
 
             codeBuilder.AppendLine("""

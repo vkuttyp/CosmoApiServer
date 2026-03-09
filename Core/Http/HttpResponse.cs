@@ -1,5 +1,7 @@
+using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using CosmoApiServer.Core.Transport;
 
 namespace CosmoApiServer.Core.Http;
 
@@ -14,36 +16,250 @@ public sealed class HttpResponse
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HttpContext HttpContext { get; internal set; } = null!;
 
+    /// <summary>
+    /// Optional: The underlying buffer writer for the response body.
+    /// If set, data is written directly to the transport instead of being buffered.
+    /// </summary>
+    public IBufferWriter<byte>? BodyWriter { get; set; }
+
     private byte[]? _body;
+    private bool _headersWritten;
+    private bool _isChunked;
 
-    public byte[] Body => _body ?? [];
-
-    public void Write(byte[] data)
+    /// <summary>
+    /// Gets the buffered body. Returns empty if data was written directly to a non-test BodyWriter.
+    /// </summary>
+    public byte[] Body
     {
-        _body = data;
-        if (!Headers.ContainsKey("Content-Length"))
-            Headers["Content-Length"] = data.Length.ToString();
+        get
+        {
+            if (_body != null) return _body;
+            if (BodyWriter is TestBufferWriter tbw) return tbw.ToArray();
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// Ensures that HTTP headers are written to the transport.
+    /// Only applicable when using BodyWriter.
+    /// </summary>
+    public void EnsureHeadersWritten()
+    {
+        if (_headersWritten || BodyWriter == null) return;
+        
+        // Headers only make sense to write automatically if we are on a real PipeWriter.
+        // For TestBufferWriter, we don't need to write HTTP headers into the buffer.
+        if (BodyWriter is System.IO.Pipelines.PipeWriter pw)
+        {
+            _isChunked = !Headers.ContainsKey("Content-Length");
+            if (_isChunked) Headers["Transfer-Encoding"] = "chunked";
+            
+            Http11Writer.WriteHeaders(pw, this, null);
+        }
+        _headersWritten = true;
+    }
+
+    public void Write(byte[] data) => Write(data.AsSpan());
+
+    public void Write(ReadOnlySpan<byte> data)
+    {
+        if (BodyWriter != null)
+        {
+            EnsureHeadersWritten();
+            if (_isChunked) WriteChunk(BodyWriter, data);
+            else BodyWriter.Write(data);
+            _hasStarted = true;
+        }
+        else
+        {
+            // Fallback to buffering
+            if (_body == null) _body = data.ToArray();
+            else
+            {
+                var newBody = new byte[_body.Length + data.Length];
+                _body.CopyTo(newBody, 0);
+                data.CopyTo(newBody.AsSpan(_body.Length));
+                _body = newBody;
+            }
+            if (!Headers.ContainsKey("Content-Length"))
+                Headers["Content-Length"] = _body.Length.ToString();
+        }
+    }
+
+    private static void WriteChunk(IBufferWriter<byte> writer, ReadOnlySpan<byte> data)
+    {
+        if (data.IsEmpty) return;
+        // Hex length
+        var hex = data.Length.ToString("X");
+        writer.Write(Encoding.ASCII.GetBytes(hex));
+        writer.Write("\r\n"u8);
+        writer.Write(data);
+        writer.Write("\r\n"u8);
     }
 
     public void WriteText(string text, string contentType = "text/plain; charset=utf-8")
     {
         Headers["Content-Type"] = contentType;
-        Write(Encoding.UTF8.GetBytes(text));
+        if (BodyWriter != null)
+        {
+            var bytes = Encoding.UTF8.GetBytes(text);
+            Write(bytes);
+            _hasStarted = true;
+        }
+        else
+        {
+            Write(Encoding.UTF8.GetBytes(text));
+        }
     }
 
     public void WriteJson<T>(T value)
     {
         Headers["Content-Type"] = "application/json; charset=utf-8";
-        Write(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions));
+        if (BodyWriter != null)
+        {
+            EnsureHeadersWritten();
+            if (_isChunked)
+            {
+                var bytes = JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions);
+                WriteChunk(BodyWriter, bytes);
+            }
+            else
+            {
+                using var writer = new Utf8JsonWriter(BodyWriter);
+                JsonSerializer.Serialize(writer, value, JsonOptions);
+            }
+            _hasStarted = true;
+        }
+        else
+        {
+            Write(JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions));
+        }
     }
 
     public async Task WriteJsonAsync<T>(T value, CancellationToken ct = default)
     {
         Headers["Content-Type"] = "application/json; charset=utf-8";
-        using var ms = new MemoryStream();
-        await JsonSerializer.SerializeAsync(ms, value, JsonOptions, ct);
-        Write(ms.ToArray());
+        if (BodyWriter != null)
+        {
+            WriteJson(value); 
+            await Task.CompletedTask;
+        }
+        else
+        {
+            using var ms = new MemoryStream();
+            await JsonSerializer.SerializeAsync(ms, value, JsonOptions, ct);
+            Write(ms.ToArray());
+        }
     }
 
-    public bool IsStarted => _body is not null;
+    /// <summary>
+    /// Streams a file directly to the response body.
+    /// </summary>
+    public async Task SendFileAsync(string path, CancellationToken ct = default)
+    {
+        var fileInfo = new FileInfo(path);
+        var length = fileInfo.Length;
+        if (!Headers.ContainsKey("Content-Length"))
+            Headers["Content-Length"] = length.ToString();
+
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+        
+        if (BodyWriter != null)
+        {
+            EnsureHeadersWritten();
+            
+            if (_isChunked)
+            {
+                var buffer = ArrayPool<byte>.Shared.Rent(8192);
+                try
+                {
+                    int bytesRead;
+                    while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+                    {
+                        WriteChunk(BodyWriter, buffer.AsSpan(0, bytesRead));
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buffer);
+                }
+            }
+            else
+            {
+                if (BodyWriter is System.IO.Pipelines.PipeWriter pw)
+                {
+                    await fs.CopyToAsync(pw.AsStream(), ct);
+                }
+                else
+                {
+                    var buffer = ArrayPool<byte>.Shared.Rent(8192);
+                    try
+                    {
+                        int bytesRead;
+                        while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+                        {
+                            this.Write(buffer.AsSpan(0, bytesRead));
+                        }
+                    }
+                    finally
+                    {
+                        ArrayPool<byte>.Shared.Return(buffer);
+                    }
+                }
+            }
+            _hasStarted = true;
+        }
+        else
+        {
+            _body = await File.ReadAllBytesAsync(path, ct);
+        }
+    }
+
+    private bool _hasStarted;
+    public bool IsStarted => _hasStarted || _body is not null;
+    public bool IsBuffered => _body is not null;
+
+    /// <summary>
+    /// Clears the current buffered body.
+    /// </summary>
+    public void ClearBody()
+    {
+        _body = null;
+    }
+
+    /// <summary>
+    /// Finishes the response, writing terminating chunk if needed.
+    /// </summary>
+    public void End()
+    {
+        if (_isChunked && BodyWriter != null)
+        {
+            BodyWriter.Write("0\r\n\r\n"u8);
+        }
+    }
+
+    internal void Reset()
+    {
+        StatusCode = 200;
+        ReasonPhrase = "OK";
+        Headers.Clear();
+        BodyWriter = null;
+        _body = null;
+        _headersWritten = false;
+        _hasStarted = false;
+        _isChunked = false;
+    }
+
+    /// <summary>
+    /// A buffer writer used for testing purposes to capture streamed output.
+    /// </summary>
+    public sealed class TestBufferWriter : IBufferWriter<byte>
+    {
+        private readonly MemoryStream _ms = new();
+        public void Advance(int count) { }
+        public Memory<byte> GetMemory(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
+        public Span<byte> GetSpan(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
+        public void Write(ReadOnlySpan<byte> value) => _ms.Write(value);
+        public byte[] ToArray() => _ms.ToArray();
+    }
 }

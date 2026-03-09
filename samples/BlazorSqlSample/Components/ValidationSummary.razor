@@ -1,0 +1,18 @@
+@inherits Microsoft.AspNetCore.Components.ComponentBase
+
+@if (ValidationErrors != null && ValidationErrors.Count > 0)
+{
+    <div class="alert alert-danger">
+        <ul class="mb-0">
+            @foreach (var error in ValidationErrors)
+            {
+                <li><strong>@error.Key:</strong> @error.Value</li>
+            }
+        </ul>
+    </div>
+}
+
+@code {
+    [Microsoft.AspNetCore.Components.CascadingParameter]
+    public Dictionary<string, string> ValidationErrors { get; set; }
+}

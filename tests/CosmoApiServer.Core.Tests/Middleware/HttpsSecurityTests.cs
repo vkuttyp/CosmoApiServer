@@ -28,7 +28,7 @@ public class HttpsSecurityTests
         var middleware = new HttpsRedirectionMiddleware(new HttpsRedirectionOptions());
         var ctx = MakeContext(false, "example.com:8080");
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.Equal(307, ctx.Response.StatusCode);
         Assert.Equal("https://example.com/test?a=b", ctx.Response.Headers["Location"]);
@@ -41,7 +41,7 @@ public class HttpsSecurityTests
         var ctx = MakeContext(true);
         var nextCalled = false;
 
-        await middleware.InvokeAsync(ctx, _ => { nextCalled = true; return Task.CompletedTask; });
+        await middleware.InvokeAsync(ctx, _ => { nextCalled = true; return ValueTask.CompletedTask; });
 
         Assert.True(nextCalled);
         Assert.Equal(200, ctx.Response.StatusCode);
@@ -53,7 +53,7 @@ public class HttpsSecurityTests
         var middleware = new HstsMiddleware(new HstsOptions());
         var ctx = MakeContext(true);
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.True(ctx.Response.Headers.ContainsKey("Strict-Transport-Security"));
         Assert.Contains("max-age=31536000", ctx.Response.Headers["Strict-Transport-Security"]);
@@ -65,7 +65,7 @@ public class HttpsSecurityTests
         var middleware = new HstsMiddleware(new HstsOptions());
         var ctx = MakeContext(false);
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.False(ctx.Response.Headers.ContainsKey("Strict-Transport-Security"));
     }

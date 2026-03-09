@@ -35,8 +35,7 @@ internal static class Http11Writer
         _   => Encoding.ASCII.GetBytes($"{status} Unknown").AsSpan()
     };
 
-    /// <summary>Write a complete buffered response to the pipe.</summary>
-    public static void WriteResponse(PipeWriter writer, HttpResponse response)
+    public static void WriteHeaders(PipeWriter writer, HttpResponse response, int? contentLength = null)
     {
         // Status line
         writer.Write(Http11Ok);
@@ -69,26 +68,34 @@ internal static class Http11Writer
             writer.Write(Encoding.UTF8.GetBytes(response.Headers["Content-Type"]));
             writer.Write(CrLf);
         }
-        else if (response.Body.Length > 0)
-        {
-            writer.Write(ContentTypeDef);
-        }
 
         // Content-Length
         if (hasContentLength)
         {
             writer.Write("Content-Length: "u8);
             writer.Write(Encoding.ASCII.GetBytes(response.Headers["Content-Length"]));
+            writer.Write(CrLf);
+        }
+        else if (contentLength.HasValue)
+        {
+            writer.Write("Content-Length: "u8);
+            WriteInteger(writer, contentLength.Value);
+            writer.Write(CrLf);
         }
         else
         {
-            writer.Write("Content-Length: "u8);
-            WriteInteger(writer, response.Body.Length);
+            // If no content length, use chunked encoding for HTTP/1.1
+            writer.Write(TransferChunked);
         }
-        writer.Write(CrLf);
 
         // Blank line
         writer.Write(CrLf);
+    }
+
+    /// <summary>Write a complete buffered response to the pipe.</summary>
+    public static void WriteResponse(PipeWriter writer, HttpResponse response)
+    {
+        WriteHeaders(writer, response, response.Body.Length);
 
         // Body
         if (response.Body.Length > 0)

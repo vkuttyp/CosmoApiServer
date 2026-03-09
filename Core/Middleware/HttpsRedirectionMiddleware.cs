@@ -13,7 +13,7 @@ public sealed class HttpsRedirectionOptions
 /// </summary>
 public sealed class HttpsRedirectionMiddleware(HttpsRedirectionOptions options) : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         // Check if the request is already HTTPS. 
         // In this framework, we can check a custom item set by the transport or a header.

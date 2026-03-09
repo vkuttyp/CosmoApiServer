@@ -26,7 +26,7 @@ public class MiddlewarePipelineTests
             await next(ctx);
         }));
 
-        var built = pipeline.Build(_ => Task.CompletedTask);
+        var built = pipeline.Build(_ => ValueTask.CompletedTask);
         await built(MakeContext());
 
         Assert.True(executed);
@@ -42,7 +42,7 @@ public class MiddlewarePipelineTests
         pipeline.UseInstance(new LambdaMiddleware(async (ctx, next) => { order.Add(2); await next(ctx); }));
         pipeline.UseInstance(new LambdaMiddleware(async (ctx, next) => { order.Add(3); await next(ctx); }));
 
-        var built = pipeline.Build(_ => Task.CompletedTask);
+        var built = pipeline.Build(_ => ValueTask.CompletedTask);
         await built(MakeContext());
 
         Assert.Equal([1, 2, 3], order);
@@ -57,10 +57,10 @@ public class MiddlewarePipelineTests
         pipeline.UseInstance(new LambdaMiddleware((ctx, _) =>
         {
             ctx.Response.StatusCode = 401;
-            return Task.CompletedTask; // short-circuit: do not call next
+            return ValueTask.CompletedTask; // short-circuit: do not call next
         }));
 
-        var built = pipeline.Build(ctx => { terminalCalled = true; return Task.CompletedTask; });
+        var built = pipeline.Build(ctx => { terminalCalled = true; return ValueTask.CompletedTask; });
         var ctx = MakeContext();
         await built(ctx);
 
@@ -68,8 +68,8 @@ public class MiddlewarePipelineTests
         Assert.Equal(401, ctx.Response.StatusCode);
     }
 
-    private sealed class LambdaMiddleware(Func<HttpContext, RequestDelegate, Task> fn) : IMiddleware
+    private sealed class LambdaMiddleware(Func<HttpContext, RequestDelegate, ValueTask> fn) : IMiddleware
     {
-        public Task InvokeAsync(HttpContext context, RequestDelegate next) => fn(context, next);
+        public ValueTask InvokeAsync(HttpContext context, RequestDelegate next) => fn(context, next);
     }
 }

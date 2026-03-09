@@ -13,6 +13,7 @@ public sealed class RouteTemplate
     private readonly bool _hasParams;     // fast-path: no params → no dict needed
 
     public string Template { get; }
+    public bool HasParams => _hasParams;
 
     public RouteTemplate(string template)
     {
@@ -46,18 +47,20 @@ public sealed class RouteTemplate
             var tmpl = _segments[i];
             if (tmpl[0] == '{')
             {
-                // Route parameter — capture value (only alloc when route has params)
-                values ??= new Dictionary<string, string>(2, StringComparer.OrdinalIgnoreCase);
+                // Route parameter — capture value (only borrow from pool when needed)
+                values ??= RouteValuePool.Rent();
                 values[tmpl[1..^1]] = seg.ToString();
             }
             else if (!seg.Equals(tmpl.AsSpan(), StringComparison.OrdinalIgnoreCase))
             {
+                // If we rented a dict and then mismatch, return it immediately
+                if (values != null) RouteValuePool.Return(values);
                 return null;
             }
         }
 
-        // For parameterless routes return a shared empty dict (no alloc at all)
-        return _hasParams ? (values ?? new Dictionary<string, string>(0)) : EmptyRouteValues;
+        // For parameterless routes or if no values were captured, return shared empty dict
+        return values ?? EmptyRouteValues;
     }
 
     private static int CountSegments(ReadOnlySpan<char> path)

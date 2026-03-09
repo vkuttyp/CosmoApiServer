@@ -8,7 +8,7 @@ namespace CosmoApiServer.Core.Templates;
 /// </summary>
 public sealed class RazorSliceResult(RazorSlice slice, int statusCode = 200) : IActionResult
 {
-    public async Task ExecuteAsync(HttpResponse response)
+    public async ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
         slice.HttpContext = response.HttpContext; // Assuming HttpResponse has a reference back to HttpContext

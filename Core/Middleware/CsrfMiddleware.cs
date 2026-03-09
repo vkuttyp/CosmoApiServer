@@ -15,7 +15,7 @@ public sealed class CsrfOptions
 /// </summary>
 public sealed class CsrfMiddleware(CsrfOptions options) : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var method = context.Request.Method;
 

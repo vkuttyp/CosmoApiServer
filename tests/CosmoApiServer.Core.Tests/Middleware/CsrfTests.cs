@@ -21,7 +21,7 @@ public class CsrfTests
         var middleware = new CsrfMiddleware(new CsrfOptions());
         var ctx = MakeContext(HttpMethod.GET);
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.Equal(200, ctx.Response.StatusCode);
         Assert.True(ctx.Response.Headers.ContainsKey("Set-Cookie"));
@@ -34,7 +34,7 @@ public class CsrfTests
         var middleware = new CsrfMiddleware(new CsrfOptions());
         var ctx = MakeContext(HttpMethod.POST);
 
-        await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+        await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
         Assert.Equal(403, ctx.Response.StatusCode);
         var body = JsonSerializer.Deserialize<JsonElement>(ctx.Response.Body);
@@ -58,7 +58,7 @@ public class CsrfTests
         await middleware.InvokeAsync(ctx, _ =>
         {
             nextCalled = true;
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         });
 
         Assert.True(nextCalled);

@@ -5,7 +5,7 @@ namespace CosmoApiServer.Core.Middleware;
 
 public sealed class LoggingMiddleware : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         var sw = Stopwatch.StartNew();
         string qs = string.IsNullOrEmpty(context.Request.QueryString) ? "" : $"?{context.Request.QueryString}";

@@ -6,45 +6,59 @@ namespace CosmoApiServer.Core.Transport;
 
 internal static class Http11Parser
 {
+    private static readonly byte Space = (byte)' ';
+    private static readonly byte Colon = (byte)':';
+    private static readonly byte[] CrLf = "\r\n"u8.ToArray();
+
     public static bool TryParse(ref ReadOnlySequence<byte> buffer, out ParsedRequest request)
     {
         request = default;
         var reader = new SequenceReader<byte>(buffer);
 
-        // ── Request line ─────────────────────────────────────────────────
-        string? requestLine = reader.ReadLine();
-        if (requestLine == null) return false;
-
-        int sp1 = requestLine.IndexOf(' ');
-        if (sp1 < 0) return false;
-        int sp2 = requestLine.IndexOf(' ', sp1 + 1);
-        if (sp2 < 0) return false;
-
-        var method    = requestLine[..sp1];
-        var rawTarget = requestLine[(sp1 + 1)..sp2];
+        // ── Request line (e.g. GET /path HTTP/1.1) ──────────────────────
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> methodSeq, Space)) return false;
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> targetSeq, Space)) return false;
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, CrLf)) return false;
 
         // ── Headers ─────────────────────────────────────────────────────
-        var headers = new List<(string name, string value)>(8);
+        var headers = new List<HeaderEntry>(16);
         long contentLength = 0;
+        string? contentType = null;
+        string? host = null;
+        string? auth = null;
         bool chunkedTransfer = false;
 
         while (true)
         {
-            string? line = reader.ReadLine();
-            if (line == null) return false;
-            if (line.Length == 0) break; // end of headers
+            if (reader.IsNext(CrLf, advancePast: true)) break; // End of headers
 
-            int colon = line.IndexOf(':');
-            if (colon < 0) continue;
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> nameSeq, Colon)) return false;
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> valueSeq, CrLf)) return false;
 
-            var name  = line[..colon].Trim();
-            var value = line[(colon + 1)..].Trim();
-            headers.Add((name, value));
+            var entry = new HeaderEntry(nameSeq, valueSeq);
+            headers.Add(entry);
 
-            if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase)) 
-                long.TryParse(value, out contentLength);
-            else if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase) && value.Contains("chunked", StringComparison.OrdinalIgnoreCase))
+            // Fast check for well-known headers using bytes to avoid strings
+            if (entry.IsName("Content-Length"u8))
+            {
+                TryParseInt64(valueSeq, out contentLength);
+            }
+            else if (entry.IsName("Content-Type"u8))
+            {
+                contentType = entry.Value;
+            }
+            else if (entry.IsName("Host"u8))
+            {
+                host = entry.Value;
+            }
+            else if (entry.IsName("Authorization"u8))
+            {
+                auth = entry.Value;
+            }
+            else if (entry.IsName("Transfer-Encoding"u8) && entry.ValueContains("chunked"u8))
+            {
                 chunkedTransfer = true;
+            }
         }
 
         // ── Body ─────────────────────────────────────────────────────────
@@ -61,7 +75,12 @@ internal static class Http11Parser
         }
 
         buffer = buffer.Slice(reader.Position);
-        request = new ParsedRequest(method, rawTarget, headers, body);
+        
+        // Materialize method and target as strings (likely used everywhere)
+        string method = Encoding.ASCII.GetString(methodSeq);
+        string rawTarget = Encoding.UTF8.GetString(targetSeq);
+
+        request = new ParsedRequest(method, rawTarget, headers, body, contentLength, contentType, host, auth);
         return true;
     }
 
@@ -70,15 +89,12 @@ internal static class Http11Parser
         body = [];
         var chunks = new List<byte[]>();
         while (true) {
-            string? sizeLine = reader.ReadLine();
-            if (sizeLine == null) return false;
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> sizeSeq, CrLf)) return false;
             
-            int extIdx = sizeLine.IndexOf(';');
-            string hexPart = extIdx >= 0 ? sizeLine[..extIdx] : sizeLine;
-            if (!long.TryParse(hexPart, System.Globalization.NumberStyles.HexNumber, null, out long chunkSize)) return false;
+            if (!TryParseHex(sizeSeq, out long chunkSize)) return false;
 
             if (chunkSize == 0) {
-                reader.ReadLine(); // skip trailing CRLF
+                reader.Advance(2); // skip trailing CRLF
                 break;
             }
 
@@ -94,23 +110,134 @@ internal static class Http11Parser
         return true;
     }
 
+    private static bool TryParseHex(ReadOnlySequence<byte> sequence, out long result)
+    {
+        result = 0;
+        if (sequence.IsEmpty) return false;
+        
+        foreach (var memory in sequence)
+        {
+            foreach (byte b in memory.Span)
+            {
+                if (b == (byte)';') return true; // Start of extensions
+                result <<= 4;
+                if (b >= '0' && b <= '9') result += b - '0';
+                else if (b >= 'a' && b <= 'f') result += b - 'a' + 10;
+                else if (b >= 'A' && b <= 'F') result += b - 'A' + 10;
+                else return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool TryParseInt64(ReadOnlySequence<byte> sequence, out long result)
+    {
+        result = 0;
+        bool started = false;
+        foreach (var memory in sequence)
+        {
+            foreach (byte b in memory.Span)
+            {
+                if (b >= '0' && b <= '9')
+                {
+                    result = result * 10 + (b - '0');
+                    started = true;
+                }
+                else if (started && b == ' ') continue;
+                else if (started) return true;
+            }
+        }
+        return started;
+    }
+
     public static bool TryDetectExpect100(in ReadOnlySequence<byte> buffer)
     {
         var reader = new SequenceReader<byte>(buffer);
-        if (reader.ReadLine() == null) return false;
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, CrLf)) return false;
+        
         while (true) {
-            string? line = reader.ReadLine();
-            if (line == null) return false;
-            if (line.Length == 0) return false;
-            if (line.StartsWith("Expect:", StringComparison.OrdinalIgnoreCase) && line.Contains("100-continue", StringComparison.OrdinalIgnoreCase)) return true;
+            if (reader.IsNext(CrLf)) return false;
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, CrLf)) return false;
+            
+            // Simple check
+            if (StartsWith(lineSeq, "Expect:"u8) && Contains(lineSeq, "100-continue"u8)) return true;
         }
+    }
+
+    private static bool StartsWith(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> value)
+    {
+        if (sequence.Length < value.Length) return false;
+        Span<byte> buffer = stackalloc byte[value.Length];
+        sequence.Slice(0, value.Length).CopyTo(buffer);
+        return buffer.SequenceEqual(value);
+    }
+
+    private static bool Contains(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> value)
+    {
+        if (sequence.Length < value.Length) return false;
+        var span = sequence.IsSingleSegment ? sequence.First.Span : sequence.ToArray();
+        return span.IndexOf(value) >= 0;
     }
 }
 
-internal readonly struct ParsedRequest(string method, string rawTarget, List<(string name, string value)> headers, byte[] body)
+public readonly struct HeaderEntry(ReadOnlySequence<byte> name, ReadOnlySequence<byte> value)
+{
+    private readonly ReadOnlySequence<byte> _name = name;
+    private readonly ReadOnlySequence<byte> _value = value;
+
+    public string Name => Encoding.ASCII.GetString(_name).Trim();
+    public string Value => Encoding.UTF8.GetString(_value).Trim();
+
+    public bool IsName(ReadOnlySpan<byte> nameUtf8)
+    {
+        var span = _name.IsSingleSegment ? _name.First.Span : _name.ToArray();
+        return AsciiEqualsIgnoreCase(span.Trim((byte)' '), nameUtf8);
+    }
+
+    public bool ValueContains(ReadOnlySpan<byte> valueUtf8)
+    {
+        var span = _value.IsSingleSegment ? _value.First.Span : _value.ToArray();
+        return span.IndexOf(valueUtf8) >= 0;
+    }
+
+    public void Deconstruct(out string name, out string value)
+    {
+        name = Name;
+        value = Value;
+    }
+
+    private static bool AsciiEqualsIgnoreCase(ReadOnlySpan<byte> a, ReadOnlySpan<byte> b)
+    {
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+        {
+            byte charA = a[i];
+            byte charB = b[i];
+            if (charA == charB) continue;
+            if (charA >= 'A' && charA <= 'Z') charA |= 0x20;
+            if (charB >= 'A' && charB <= 'Z') charB |= 0x20;
+            if (charA != charB) return false;
+        }
+        return true;
+    }
+}
+
+internal readonly struct ParsedRequest(
+    string method, 
+    string rawTarget, 
+    List<HeaderEntry> headers, 
+    byte[] body,
+    long contentLength,
+    string? contentType,
+    string? host,
+    string? auth)
 {
     public readonly string Method = method;
     public readonly string RawTarget = rawTarget;
-    public readonly List<(string name, string value)> Headers = headers;
+    public readonly List<HeaderEntry> Headers = headers;
     public readonly byte[] Body = body;
+    public readonly long ContentLength = contentLength;
+    public readonly string? ContentType = contentType;
+    public readonly string? Host = host;
+    public readonly string? Authorization = auth;
 }

@@ -26,7 +26,7 @@ public class StaticFileMiddleware(string rootPath) : IMiddleware
         { ".pdf",  "application/pdf" }
     };
 
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         // Only handle GET requests
         if (context.Request.Method != CosmoApiServer.Core.Http.HttpMethod.GET)
@@ -52,10 +52,9 @@ public class StaticFileMiddleware(string rootPath) : IMiddleware
             var ext = Path.GetExtension(fullPath);
             var contentType = _mimeTypes.GetValueOrDefault(ext, "application/octet-stream");
 
-            var bytes = await File.ReadAllBytesAsync(fullPath);
             context.Response.StatusCode = 200;
             context.Response.Headers["Content-Type"] = contentType;
-            context.Response.Write(bytes);
+            await context.Response.SendFileAsync(fullPath, context.RequestAborted);
             return;
         }
 

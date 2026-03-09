@@ -1,6 +1,8 @@
 using System.Buffers;
 using System.IO.Pipelines;
+using System.Net;
 using System.Net.Sockets;
+using System.Text;
 using CosmoApiServer.Core.Http;
 using Cosmo.Transport.Pipelines;
 using CosmoApiServer.Core.Middleware;
@@ -17,7 +19,7 @@ internal static class Http11Connection
 {
     private static readonly byte[] H2cPreface = "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"u8.ToArray();
 
-    public static async Task RunAsync(
+    public static async ValueTask RunAsync(
         Stream stream,
         RequestDelegate pipeline,
         IServiceProvider services,
@@ -34,12 +36,12 @@ internal static class Http11Connection
         var fillTask    = FillPipeAsync(stream, pipe.Writer, ct);
         var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, ct);
 
-        await Task.WhenAll(fillTask, processTask);
+        await Task.WhenAll(fillTask.AsTask(), processTask.AsTask());
     }
 
     // ── Socket → Pipe ─────────────────────────────────────────────────────
 
-    private static async Task FillPipeAsync(Stream stream, PipeWriter writer, CancellationToken ct)
+    private static async ValueTask FillPipeAsync(Stream stream, PipeWriter writer, CancellationToken ct)
     {
         try
         {
@@ -66,7 +68,7 @@ internal static class Http11Connection
 
     // ── Pipe → HTTP/1.1 requests → responses ─────────────────────────────
 
-    private static async Task ProcessAsync(
+    private static async ValueTask ProcessAsync(
         Stream stream,
         PipeReader reader,
         RequestDelegate pipeline,
@@ -106,9 +108,6 @@ internal static class Http11Connection
                 bool parsed = Http11Parser.TryParse(ref buffer, out var req);
 
                 // ── Expect: 100-continue ──────────────────────────────────────
-                // When a client sends request headers with "Expect: 100-continue"
-                // it waits up to ~1 s for our "100 Continue" before sending the body.
-                // Detect the case (headers complete, body missing) and reply immediately.
                 if (!parsed && Http11Parser.TryDetectExpect100(result.Buffer))
                 {
                     writer.Write(Continue100);
@@ -123,9 +122,12 @@ internal static class Http11Connection
                     continue;
                 }
 
-                // Build HttpContext from parsed request
-                var httpContext = BuildContext(req, services, ct);
+                // Rent and build HttpContext from parsed request
+                var httpContext = HttpContextPool.Rent();
+                PopulateContext(httpContext, req, services, ct);
+                
                 httpContext.Items["__RawStream"] = stream;
+                httpContext.Response.BodyWriter = writer;
 
                 // Run the full middleware + router pipeline
                 try { await pipeline(httpContext); }
@@ -147,13 +149,30 @@ internal static class Http11Connection
                         httpContext.Response.StatusCode,
                         httpContext.StreamingBodyWriter,
                         ct);
+                    
+                    HttpContextPool.Return(httpContext);
                     // streaming uses Connection: close — stop after one response
                     break;
                 }
 
-                // Standard buffered response
-                Http11Writer.WriteResponse(writer, httpContext.Response);
+                // Standard response logic
+                if (!httpContext.Response.IsStarted)
+                {
+                    // If not started, it was buffered. Write everything at once.
+                    Http11Writer.WriteResponse(writer, httpContext.Response);
+                }
+                else
+                {
+                    // If started but headers not yet written (e.g. empty body), write them now
+                    httpContext.Response.EnsureHeadersWritten();
+                    httpContext.Response.End();
+                }
+
                 var flush = await writer.FlushAsync(ct);
+                
+                // Return to pool AFTER sending response
+                HttpContextPool.Return(httpContext);
+
                 if (flush.IsCompleted) break;
 
                 // ── WebSocket Upgrade Handover ───────────────────────────────
@@ -181,7 +200,7 @@ internal static class Http11Connection
 
     // ── Request builder ───────────────────────────────────────────────────
 
-    private static HttpContext BuildContext(ParsedRequest req, IServiceProvider services, CancellationToken ct)
+    private static void PopulateContext(HttpContext ctx, ParsedRequest req, IServiceProvider services, CancellationToken ct)
     {
         // Parse path + query
         string path = req.RawTarget, queryString = string.Empty;
@@ -205,18 +224,22 @@ internal static class Http11Connection
             ? (IReadOnlyDictionary<string, string>)ParsedHeaderDict.Empty
             : ParseQuery(queryString);
 
-        var request = new HttpRequest
-        {
-            Method      = method,
-            Path        = path,
-            QueryString = queryString,
-            Headers     = headers,
-            Query       = query,
-            Body        = req.Body,
-        };
-        var response = new HttpResponse();
-        var scope    = new LazyScopeProvider(services);
-        return new HttpContext(request, response, scope, ct) { _disposeScope = scope };
+        ctx.Request.Method = method;
+        ctx.Request.Path = path;
+        ctx.Request.QueryString = queryString;
+        ctx.Request.Headers = headers;
+        ctx.Request.Query = query;
+        ctx.Request.Body = req.Body;
+        
+        ctx.Request.ContentLength = req.ContentLength;
+        ctx.Request.ContentType = req.ContentType;
+        ctx.Request.Host = req.Host;
+        ctx.Request.Authorization = req.Authorization;
+
+        ctx.Initialize(services, ct);
+        
+        var scope = new LazyScopeProvider(services);
+        ctx._disposeScope = scope;
     }
 
     private static Dictionary<string, string> ParseQuery(string queryString)
@@ -231,10 +254,10 @@ internal static class Http11Connection
             if (pair.IsEmpty) continue;
             int eq = pair.IndexOf('=');
             if (eq < 0)
-                result[Uri.UnescapeDataString(pair.ToString())] = string.Empty;
+                result[WebUtility.UrlDecode(pair.ToString())] = string.Empty;
             else
-                result[Uri.UnescapeDataString(pair[..eq].ToString())] =
-                    Uri.UnescapeDataString(pair[(eq + 1)..].ToString());
+                result[WebUtility.UrlDecode(pair[..eq].ToString())] =
+                    WebUtility.UrlDecode(pair[(eq + 1)..].ToString());
         }
         return result;
     }
@@ -255,7 +278,7 @@ internal static class Http11Connection
 
     // ── Lazy-allocated header dict backed by parsed header list ───────────
 
-    private sealed class ParsedHeaderDict(List<(string name, string value)> source)
+    private sealed class ParsedHeaderDict(List<HeaderEntry> source)
         : IReadOnlyDictionary<string, string>
     {
         internal static readonly IReadOnlyDictionary<string, string> Empty =
@@ -264,15 +287,22 @@ internal static class Http11Connection
         private Dictionary<string, string>? _cache;
 
         private Dictionary<string, string> Materialized =>
-            _cache ??= source.ToDictionary(h => h.name, h => h.value, StringComparer.OrdinalIgnoreCase);
+            _cache ??= source.ToDictionary(h => h.Name, h => h.Value, StringComparer.OrdinalIgnoreCase);
 
         public bool TryGetValue(string key, out string value)
         {
+            if (key == null) { value = string.Empty; return false; }
             if (_cache is not null) return _cache.TryGetValue(key, out value!);
+            
+            // Try to find the header using bytes without materializing Name string
+            // Most headers are < 64 chars. Stackalloc to avoid byte[] allocation.
+            Span<byte> keyBytes = key.Length <= 64 ? stackalloc byte[key.Length] : new byte[key.Length];
+            int encoded = Encoding.ASCII.GetBytes(key, keyBytes);
+            
             foreach (var h in source)
             {
-                if (h.name.Equals(key, StringComparison.OrdinalIgnoreCase))
-                { value = h.value; return true; }
+                if (h.IsName(keyBytes))
+                { value = h.Value; return true; }
             }
             value = string.Empty;
             return false;

@@ -65,6 +65,24 @@ internal static class RazorDirectiveParser
         return null;
     }
 
+    internal static List<string> ParsePageDirectives(SourceText sourceText)
+    {
+        var routes = new List<string>();
+        foreach (var line in sourceText.Lines)
+        {
+            var lineText = line.ToString().TrimStart();
+            if (lineText.StartsWith("@page ", StringComparison.Ordinal))
+            {
+                var value = lineText.Substring("@page ".Length).Trim();
+                if (value.StartsWith("\"", StringComparison.Ordinal) && value.EndsWith("\"", StringComparison.Ordinal))
+                    value = value.Substring(1, value.Length - 2);
+                
+                if (value.Length > 0) routes.Add(value);
+            }
+        }
+        return routes;
+    }
+
     internal static string? ExtractModelType(string baseType)
     {
         var openAngle = baseType.IndexOf('<');

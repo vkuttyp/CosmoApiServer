@@ -39,6 +39,29 @@ public class HttpResponseTests
     }
 
     [Fact]
+    public async Task SendFileAsync_BuffersToBody()
+    {
+        var tempFile = Path.Combine(Path.GetTempPath(), "stream-test-" + Guid.NewGuid().ToString() + ".txt");
+        var content = "Streaming file content test data.";
+        File.WriteAllText(tempFile, content);
+
+        try
+        {
+            var response = new HttpResponse();
+            // No BodyWriter set -> should use buffering path
+            await response.SendFileAsync(tempFile);
+
+            var body = System.Text.Encoding.UTF8.GetString(response.Body);
+            Assert.Equal(content, body);
+            Assert.Equal(content.Length.ToString(), response.Headers["Content-Length"]);
+        }
+        finally
+        {
+            if (File.Exists(tempFile)) File.Delete(tempFile);
+        }
+    }
+
+    [Fact]
     public void IsStarted_TrueAfterWrite()
     {
         var response = new HttpResponse();

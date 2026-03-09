@@ -9,7 +9,7 @@ namespace CosmoApiServer.Core.Auth;
 /// </summary>
 public sealed class JwtMiddleware : Middleware.IMiddleware
 {
-    public Task InvokeAsync(HttpContext context, Middleware.RequestDelegate next)
+    public ValueTask InvokeAsync(HttpContext context, Middleware.RequestDelegate next)
     {
         if (context.Request.Headers.TryGetValue("Authorization", out var authHeader) &&
             authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))

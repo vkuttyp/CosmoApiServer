@@ -7,7 +7,7 @@ namespace CosmoApiServer.Core.Middleware;
 /// </summary>
 public sealed class OpenApiMiddleware(string path, object spec) : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         if (context.Request.Method == CosmoApiServer.Core.Http.HttpMethod.GET && context.Request.Path == path)
         {

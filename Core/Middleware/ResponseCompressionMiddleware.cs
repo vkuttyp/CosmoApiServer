@@ -18,14 +18,14 @@ public sealed class ResponseCompressionOptions
 /// </summary>
 public sealed class ResponseCompressionMiddleware(ResponseCompressionOptions options) : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         await next(context);
 
         var response = context.Response;
 
-        // Skip if already started or too small
-        if (response.Body.Length < options.MinimumSize) return;
+        // Skip if already started/streaming or too small
+        if (!response.IsBuffered || response.Body.Length < options.MinimumSize) return;
 
         // Check for Accept-Encoding: gzip
         if (!context.Request.Headers.TryGetValue("accept-encoding", out var accept) || !accept.Contains("gzip", StringComparison.OrdinalIgnoreCase))
@@ -48,6 +48,7 @@ public sealed class ResponseCompressionMiddleware(ResponseCompressionOptions opt
         // Only update if compression actually reduced the size (rare for small files but possible)
         if (compressed.Length < originalBody.Length)
         {
+            response.ClearBody();
             response.Write(compressed);
             response.Headers["Content-Encoding"] = "gzip";
             response.Headers["Content-Length"] = compressed.Length.ToString();

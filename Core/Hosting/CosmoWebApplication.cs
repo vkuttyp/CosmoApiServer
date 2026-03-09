@@ -19,6 +19,7 @@ public sealed class CosmoWebApplication
     private readonly MiddlewarePipeline _middlewarePipeline;
     private readonly RouteTable _routeTable;
     private readonly List<Assembly> _controllerAssemblies;
+    private readonly List<Assembly> _componentAssemblies;
     private readonly ServerOptions _options;
     private readonly PipelineHttpServer _server;
 
@@ -27,12 +28,14 @@ public sealed class CosmoWebApplication
         MiddlewarePipeline middlewarePipeline,
         RouteTable routeTable,
         List<Assembly> controllerAssemblies,
+        List<Assembly> componentAssemblies,
         ServerOptions options)
     {
         _services = services;
         _middlewarePipeline = middlewarePipeline;
         _routeTable = routeTable;
         _controllerAssemblies = controllerAssemblies;
+        _componentAssemblies = componentAssemblies;
         _options = options;
         _server = new PipelineHttpServer();
     }
@@ -76,6 +79,9 @@ public sealed class CosmoWebApplication
         // Scan + register attribute-based controllers
         ControllerScanner.RegisterControllers(_controllerAssemblies, _routeTable, _services);
 
+        // Scan + register attribute-based components
+        ComponentScanner.RegisterComponents(_componentAssemblies, _routeTable, _services);
+
         // Build the full pipeline: middleware chain → router (terminal)
         var router = new RouterMiddleware(_routeTable);
         _middlewarePipeline.UseInstance(router);
@@ -83,7 +89,7 @@ public sealed class CosmoWebApplication
         {
             ctx.Response.StatusCode = 404;
             ctx.Response.WriteText("Not Found");
-            return Task.CompletedTask;
+            return ValueTask.CompletedTask;
         });
 
         // ── Start IHostedServices ──────────────────────────────────────────

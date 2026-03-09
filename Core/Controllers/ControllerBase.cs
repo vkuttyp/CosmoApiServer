@@ -4,7 +4,7 @@ namespace CosmoApiServer.Core.Controllers;
 
 public interface IActionResult
 {
-    Task ExecuteAsync(HttpResponse response);
+    ValueTask ExecuteAsync(HttpResponse response);
 }
 
 /// <summary>
@@ -54,32 +54,33 @@ public abstract class ControllerBase
     protected IActionResult StatusCode(int code, object value) => new JsonResult<object>(value, code);
 
     protected IActionResult View(Templates.RazorSlice slice) => new Templates.RazorSliceResult(slice);
+    protected IActionResult View(Templates.ComponentBase component) => new Templates.ComponentResult(component);
 }
 
 // ── Built-in IActionResult implementations ─────────────────────────────────
 
 public sealed class StatusCodeResult(int statusCode) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 
 public sealed class TextResult(int statusCode, string message) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
         response.WriteText(message);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 
 public sealed class JsonResult<T>(T value, int statusCode = 200) : IActionResult
 {
-    public async Task ExecuteAsync(HttpResponse response)
+    public async ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
         await response.WriteJsonAsync(value);
@@ -88,7 +89,7 @@ public sealed class JsonResult<T>(T value, int statusCode = 200) : IActionResult
 
 public sealed class CreatedResult<T>(string location, T value) : IActionResult
 {
-    public async Task ExecuteAsync(HttpResponse response)
+    public async ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = 201;
         response.Headers["Location"] = location;
@@ -98,17 +99,17 @@ public sealed class CreatedResult<T>(string location, T value) : IActionResult
 
 public sealed class RedirectResult(string url, int statusCode = 302) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = statusCode;
         response.Headers["Location"] = url;
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }
 
 public sealed class FileContentResult(byte[] contents, string contentType, string? fileName = null) : IActionResult
 {
-    public Task ExecuteAsync(HttpResponse response)
+    public ValueTask ExecuteAsync(HttpResponse response)
     {
         response.StatusCode = 200;
         response.Headers["Content-Type"] = contentType;
@@ -117,6 +118,6 @@ public sealed class FileContentResult(byte[] contents, string contentType, strin
             response.Headers["Content-Disposition"] = $"attachment; filename=\"{fileName}\"";
         }
         response.Write(contents);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

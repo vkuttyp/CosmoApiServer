@@ -8,7 +8,7 @@ namespace CosmoApiServer.Core.Middleware;
 /// </summary>
 public class GlobalExceptionHandlerMiddleware : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         try
         {
@@ -20,7 +20,7 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
         }
     }
 
-    private static Task HandleExceptionAsync(HttpContext context, Exception exception)
+    private static ValueTask HandleExceptionAsync(HttpContext context, Exception exception)
     {
         Console.WriteLine($"[ERROR] {DateTime.UtcNow:O} {context.Request.Method} {context.Request.Path}");
         Console.WriteLine(exception.ToString());
@@ -35,6 +35,6 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
         };
 
         context.Response.WriteJson(errorResponse);
-        return Task.CompletedTask;
+        return ValueTask.CompletedTask;
     }
 }

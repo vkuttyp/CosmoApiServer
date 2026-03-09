@@ -14,7 +14,7 @@ public sealed class HstsOptions
 /// </summary>
 public sealed class HstsMiddleware(HstsOptions options) : IMiddleware
 {
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         // HSTS header only applies over HTTPS. 
         // We only set it if the request is secure or if we know we're being proxied over HTTPS.

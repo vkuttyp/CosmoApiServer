@@ -1,0 +1,14 @@
+{
+  "$schema": "http://json.schemastore.org/template",
+  "author": "vkuttyp",
+  "classifications": [ "Web", "Razor", "UI" ],
+  "name": "Cosmo Razor Server",
+  "identity": "CosmoRazorServer.Template",
+  "shortName": "cosmorazor",
+  "tags": {
+    "language": "C#",
+    "type": "project"
+  },
+  "sourceName": "CosmoRazorServerTemplate",
+  "preferNameDirectory": true
+}

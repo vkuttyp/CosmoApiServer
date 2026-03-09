@@ -3,6 +3,7 @@ using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Pipelines;
 using System.Text;
+using System.Net;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 
@@ -57,7 +58,7 @@ internal sealed class Http2Connection
 
     // ── Entry point ───────────────────────────────────────────────────────
 
-    public static async Task RunAsync(
+    public static async ValueTask RunAsync(
         PipeReader reader,
         PipeWriter writer,
         RequestDelegate pipeline,
@@ -68,7 +69,7 @@ internal sealed class Http2Connection
         await conn.RunAsync();
     }
 
-    public static async Task RunAsync(
+    public static async ValueTask RunAsync(
         System.IO.Stream stream,
         RequestDelegate pipeline,
         IServiceProvider services,
@@ -86,7 +87,7 @@ internal sealed class Http2Connection
         _pipeline = pipeline; _services = services; _ct = ct;
     }
 
-    private async Task RunAsync()
+    private async ValueTask RunAsync()
     {
         try
         {
@@ -120,14 +121,14 @@ internal sealed class Http2Connection
 
     // ── Frame read ────────────────────────────────────────────────────────
 
-    private async Task ConsumeConnectionPreface()
+    private async ValueTask ConsumeConnectionPreface()
     {
         const int prefaceLen = 24;
         var result = await _reader.ReadAtLeastAsync(prefaceLen, _ct);
         _reader.AdvanceTo(result.Buffer.GetPosition(prefaceLen));
     }
 
-    private async Task<Http2Frame?> ReadFrameAsync()
+    private async ValueTask<Http2Frame?> ReadFrameAsync()
     {
         // 9-byte frame header
         var result = await _reader.ReadAtLeastAsync(9, _ct);
@@ -157,7 +158,7 @@ internal sealed class Http2Connection
 
     // ── Frame dispatch ────────────────────────────────────────────────────
 
-    private async Task DispatchFrameAsync(Http2Frame frame)
+    private async ValueTask DispatchFrameAsync(Http2Frame frame)
     {
         switch (frame.Type)
         {
@@ -197,7 +198,7 @@ internal sealed class Http2Connection
         }
     }
 
-    private async Task HandleHeadersFrameAsync(Http2Frame frame)
+    private async ValueTask HandleHeadersFrameAsync(Http2Frame frame)
     {
         var payload = frame.Payload.AsSpan();
         int padLen = 0;
@@ -219,7 +220,10 @@ internal sealed class Http2Connection
 
         if (endHeaders)
         {
-            stream.Headers = _hpack.Decode(stream.HeaderBlock.ToArray());
+            var decodedHeaders = _hpack.Decode(stream.HeaderBlock.ToArray());
+            stream.Headers = decodedHeaders.Select(h => new HeaderEntry(
+                new ReadOnlySequence<byte>(Encoding.ASCII.GetBytes(h.name)),
+                new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes(h.value)))).ToList();
             stream.HeadersComplete = true;
 
             if (endStream)
@@ -261,10 +265,10 @@ internal sealed class Http2Connection
 
     private async Task RunStreamAsync(Http2Stream stream)
     {
-        HttpContext? httpContext = null;
+        var httpContext = HttpContextPool.Rent();
         try
         {
-            httpContext = BuildContext(stream);
+            PopulateContext(httpContext, stream);
 
             try { await _pipeline(httpContext); }
             catch (Exception ex)
@@ -282,24 +286,26 @@ internal sealed class Http2Connection
         }
         finally
         {
-            httpContext?._disposeScope?.Dispose();
+            httpContext._disposeScope?.Dispose();
+            HttpContextPool.Return(httpContext);
         }
     }
 
-    private HttpContext BuildContext(Http2Stream stream)
+    private void PopulateContext(HttpContext ctx, Http2Stream stream)
     {
         string method = "", path = "", scheme = "https", authority = "";
-        var appHeaders = new List<(string, string)>();
+        var appHeaders = new List<HeaderEntry>();
 
-        foreach (var (name, value) in stream.Headers)
+        foreach (var h in stream.Headers)
         {
-            switch (name)
+            // For HTTP/2, name comparison is still string-based here for simplicity in this implementation
+            switch (h.Name)
             {
-                case ":method":    method    = value; break;
-                case ":path":      path      = value; break;
-                case ":scheme":    scheme    = value; break;
-                case ":authority": authority = value; break;
-                default:           appHeaders.Add((name, value)); break;
+                case ":method":    method    = h.Value; break;
+                case ":path":      path      = h.Value; break;
+                case ":scheme":    scheme    = h.Value; break;
+                case ":authority": authority = h.Value; break;
+                default:           appHeaders.Add(h); break;
             }
         }
 
@@ -317,24 +323,29 @@ internal sealed class Http2Connection
         int offset = 0;
         foreach (var seg in stream.BodySegments) { seg.CopyTo(body, offset); offset += seg.Length; }
 
+        // materialization for HTTP/2 simple dictionary
         var headersDict = new Dictionary<string, string>(appHeaders.Count + 1, StringComparer.OrdinalIgnoreCase);
         if (authority.Length > 0) headersDict["Host"] = authority;
-        foreach (var (n, v) in appHeaders) headersDict[n] = v;
+        foreach (var h in appHeaders) headersDict[h.Name] = h.Value;
 
-        var request = new HttpRequest
-        {
-            Method      = httpMethod,
-            Path        = path,
-            QueryString = queryString,
-            Headers     = headersDict,
-            Query       = queryString.Length == 0
+        ctx.Request.Method = httpMethod;
+        ctx.Request.Path = path;
+        ctx.Request.QueryString = queryString;
+        ctx.Request.Headers = headersDict;
+        ctx.Request.Query = queryString.Length == 0
                 ? (IReadOnlyDictionary<string, string>)new Dictionary<string, string>(0)
-                : ParseQuery(queryString),
-            Body        = body,
-        };
-        var response = new HttpResponse();
-        var scope    = new Http11Connection.LazyScopeProvider(_services);
-        return new HttpContext(request, response, scope, _ct) { _disposeScope = scope };
+                : ParseQuery(queryString);
+        ctx.Request.Body = body;
+
+        // Populate well-known headers for H2
+        if (headersDict.TryGetValue("Content-Length", out var cl) && long.TryParse(cl, out var clVal)) ctx.Request.ContentLength = clVal;
+        if (headersDict.TryGetValue("Content-Type", out var ct)) ctx.Request.ContentType = ct;
+        if (headersDict.TryGetValue("Host", out var host)) ctx.Request.Host = host;
+        if (headersDict.TryGetValue("Authorization", out var auth)) ctx.Request.Authorization = auth;
+
+        ctx.Initialize(_services, _ct);
+        var scope = new Http11Connection.LazyScopeProvider(_services);
+        ctx._disposeScope = scope;
     }
 
     private static Dictionary<string, string> ParseQuery(string qs)
@@ -343,15 +354,15 @@ internal sealed class Http2Connection
         foreach (var pair in qs.Split('&', StringSplitOptions.RemoveEmptyEntries))
         {
             int eq = pair.IndexOf('=');
-            if (eq < 0) d[Uri.UnescapeDataString(pair)] = string.Empty;
-            else d[Uri.UnescapeDataString(pair[..eq])] = Uri.UnescapeDataString(pair[(eq + 1)..]);
+            if (eq < 0) d[WebUtility.UrlDecode(pair)] = string.Empty;
+            else d[WebUtility.UrlDecode(pair[..eq])] = WebUtility.UrlDecode(pair[(eq + 1)..]);
         }
         return d;
     }
 
     // ── Response sending ──────────────────────────────────────────────────
 
-    private async Task SendResponseAsync(int streamId, HttpResponse response)
+    private async ValueTask SendResponseAsync(int streamId, HttpResponse response)
     {
         // Build headers block
         var responseHeaders = new Dictionary<string, string>(response.Headers.Count + 1,
@@ -388,7 +399,7 @@ internal sealed class Http2Connection
 
     // ── Frame writers ─────────────────────────────────────────────────────
 
-    private async Task SendSettingsAsync()
+    private async ValueTask SendSettingsAsync()
     {
         await _writeLock.WaitAsync(_ct);
         try
@@ -400,7 +411,7 @@ internal sealed class Http2Connection
         finally { _writeLock.Release(); }
     }
 
-    private async Task SendSettingsAckAsync()
+    private async ValueTask SendSettingsAckAsync()
     {
         await _writeLock.WaitAsync(_ct);
         try
@@ -411,7 +422,7 @@ internal sealed class Http2Connection
         finally { _writeLock.Release(); }
     }
 
-    private async Task SendPingAckAsync(byte[] pingPayload)
+    private async ValueTask SendPingAckAsync(byte[] pingPayload)
     {
         await _writeLock.WaitAsync(_ct);
         try
@@ -423,7 +434,7 @@ internal sealed class Http2Connection
         finally { _writeLock.Release(); }
     }
 
-    private async Task SendWindowUpdateAsync(int streamId, int increment)
+    private async ValueTask SendWindowUpdateAsync(int streamId, int increment)
     {
         await _writeLock.WaitAsync(_ct);
         try
@@ -437,7 +448,7 @@ internal sealed class Http2Connection
         finally { _writeLock.Release(); }
     }
 
-    private async Task SendRstStreamAsync(int streamId, uint errorCode)
+    private async ValueTask SendRstStreamAsync(int streamId, uint errorCode)
     {
         await _writeLock.WaitAsync(_ct);
         try
@@ -477,7 +488,7 @@ internal sealed class Http2Connection
     {
         public int      StreamId        => id;
         public List<byte> HeaderBlock   = new();
-        public List<(string, string)> Headers = new();
+        public List<HeaderEntry> Headers = new();
         public bool HeadersComplete;
         public List<byte[]> BodySegments = new();
     }

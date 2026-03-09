@@ -43,7 +43,7 @@ public class NewMiddlewareTests
             var middleware = new StaticFileMiddleware(tempDir);
             var ctx = MakeContext(HttpMethod.GET, "/test.txt");
 
-            await middleware.InvokeAsync(ctx, _ => Task.CompletedTask);
+            await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
 
             Assert.Equal(200, ctx.Response.StatusCode);
             Assert.Equal("text/plain", ctx.Response.Headers["Content-Type"]);
@@ -70,7 +70,7 @@ public class NewMiddlewareTests
             await middleware.InvokeAsync(ctx, _ =>
             {
                 nextCalled = true;
-                return Task.CompletedTask;
+                return ValueTask.CompletedTask;
             });
 
             Assert.True(nextCalled);

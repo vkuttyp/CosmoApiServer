@@ -29,7 +29,7 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
 {
     private readonly ConcurrentDictionary<string, (int Count, DateTime WindowEnd)> _cache = new();
 
-    public async Task InvokeAsync(HttpContext context, RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
         // Simple IP-based identification. 
         // In production, this might need to respect X-Forwarded-For headers.
