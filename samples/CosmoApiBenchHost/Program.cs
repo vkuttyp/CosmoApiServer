@@ -1,27 +1,20 @@
 using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Text;
 using System.Threading.Tasks;
 using CosmoApiServer.Core.Hosting;
 using CosmoApiServer.Core.Controllers;
-using CosmoApiServer.Core.Controllers.Attributes;
-using CosmoApiServer.Core.Controllers.Filters;
+using CosmoApiBenchHost;
 
-// Benchmark server matching CosmoApiServer-Swift bench routes:
-//   GET  /ping           → "pong"                 (raw throughput)
-//   GET  /json           → {"status":"ok",...}    (JSON serialization)
-//   POST /echo           → body echoed back       (request parsing + body write)
-//   GET  /route/{id}     → route param extraction (routing performance)
-//   GET  /middleware     → full stack traversal   (all middleware)
+var builder = CosmoWebApplicationBuilder.Create()
+    .ListenOn(9001);
 
-var app = CosmoWebApplicationBuilder.Create()
-    .ListenOn(9001)
-    .UseExceptionHandler()
-    .UseRateLimiting(opts => { opts.Limit = 1000000; }) // high limit for bench
-    .UseCsrf()
-    .UseHsts()
-    .UseResponseCompression(opts => { opts.MinimumSize = 0; }) // compress everything for bench
-    .UseOpenApi()
-    .AddControllers()
-    .Build();
+var benchItems = Enumerable.Range(1, 100).Select(i => 
+    new BenchItem(i, $"Item {i}", i * 1.23, DateTime.UtcNow.AddDays(i).ToString("o"))
+).ToList();
+
+var app = builder.Build();
 
 app.MapGet("/ping", ctx => {
     ctx.Response.WriteText("pong");
@@ -37,52 +30,21 @@ app.MapGet("/json", ctx => {
     return ValueTask.CompletedTask;
 });
 
-app.MapPost("/echo", ctx =>
-{
-    var ct = ctx.Request.Headers.TryGetValue("content-type", out var v) ? v : "application/octet-stream";
-    ctx.Response.Headers["Content-Type"] = ct;
-    ctx.Response.Write(ctx.Request.Body);
-    return ValueTask.CompletedTask;
-});
-
-app.MapGet("/route/{id}", ctx =>
-{
-    var id = ctx.Request.RouteValues.TryGetValue("id", out var val) ? val?.ToString() ?? "unknown" : "unknown";
-    ctx.Response.WriteJson(new { id });
-    return ValueTask.CompletedTask;
-});
-
-app.MapGet("/middleware", ctx => {
-    ctx.Response.WriteJson(new { path = ctx.Request.Path, method = ctx.Request.Method });
+app.MapGet("/bench", ctx => {
+    ctx.Response.Headers["Content-Type"] = "text/html; charset=utf-8";
+    var sb = new StringBuilder();
+    sb.Append("<table><thead><tr><th>ID</th><th>Name</th><th>Value</th><th>Date</th></tr></thead><tbody>");
+    foreach (var item in benchItems) {
+        sb.Append("<tr><td>").Append(item.id).Append("</td><td>").Append(item.name).Append("</td><td>").Append(item.value).Append("</td><td>").Append(item.date).Append("</td></tr>");
+    }
+    sb.Append("</tbody></table>");
+    var html = sb.ToString();
+    var bytes = Encoding.UTF8.GetBytes(html);
+    ctx.Response.Headers["Content-Length"] = bytes.Length.ToString();
+    ctx.Response.Write(bytes);
     return ValueTask.CompletedTask;
 });
 
 Console.WriteLine("=== CosmoApiServer-DotNet Benchmark ===");
 Console.WriteLine("HTTP/1.1  → http://127.0.0.1:9001");
-Console.WriteLine($"Threads: {Environment.ProcessorCount}");
 app.Run();
-
-public class SearchModel
-{
-    public int Page { get; set; }
-    public string? Q { get; set; }
-}
-
-public class BenchFilter : ActionFilterAttribute
-{
-    public override ValueTask OnActionExecutingAsync(ActionExecutingContext context) => ValueTask.CompletedTask;
-    public override ValueTask OnActionExecutedAsync(ActionExecutedContext context) => ValueTask.CompletedTask;
-}
-
-public class BenchController : ControllerBase
-{
-    [HttpGet("/complex")]
-    public object Complex([FromQuery] SearchModel search)
-    {
-        return search;
-    }
-
-    [HttpGet("/filtered")]
-    [BenchFilter]
-    public string Filtered() => "filtered";
-}

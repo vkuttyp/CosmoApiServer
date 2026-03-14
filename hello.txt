@@ -1,1 +1,1 @@
-Hello from CosmoS3 1.5.0
+Hello CosmoS3

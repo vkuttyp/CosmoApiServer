@@ -1,6 +1,7 @@
 using System.Buffers;
 using System.Text;
 using System.Text.Json;
+using System.Text.Encodings.Web;
 using CosmoApiServer.Core.Transport;
 
 namespace CosmoApiServer.Core.Http;
@@ -9,7 +10,8 @@ public sealed class HttpResponse
 {
     private static readonly JsonSerializerOptions JsonOptions = new()
     {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase
+        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+        Encoder = JavaScriptEncoder.UnsafeRelaxedJsonEscaping
     };
     public int StatusCode { get; set; } = 200;
     public string ReasonPhrase { get; set; } = "OK";

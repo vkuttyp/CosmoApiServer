@@ -93,7 +93,7 @@ class Program
 
         var scenarios = new List<(string name, Func<Task<HttpResponseMessage>> fn)>();
         
-        if (target == "CosmoRazor" || target == "BlazorSSR")
+        if (target == "CosmoRazor" || target == "BlazorSSR" || target.StartsWith("http"))
         {
             scenarios.Add(("GET /ping", () => http.GetAsync("/ping")));
             scenarios.Add(("GET /bench (100 rows)", () => http.GetAsync("/bench")));
