@@ -47,6 +47,7 @@ internal static class Http11Writer
 
         bool hasContentType = response.Headers.ContainsKey("Content-Type");
         bool hasContentLength = response.Headers.ContainsKey("Content-Length");
+        bool hasTransferEncoding = response.Headers.ContainsKey("Transfer-Encoding");
 
         // Custom headers (skip Content-Type and Content-Length; write after)
         foreach (var (name, value) in response.Headers)
@@ -82,7 +83,7 @@ internal static class Http11Writer
             WriteInteger(writer, contentLength.Value);
             writer.Write(CrLf);
         }
-        else
+        else if (!hasTransferEncoding)
         {
             // If no content length, use chunked encoding for HTTP/1.1
             writer.Write(TransferChunked);
