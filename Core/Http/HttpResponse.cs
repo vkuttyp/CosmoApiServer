@@ -53,8 +53,16 @@ public sealed class HttpResponse
         // For TestBufferWriter, we don't need to write HTTP headers into the buffer.
         if (BodyWriter is System.IO.Pipelines.PipeWriter pw)
         {
-            _isChunked = !Headers.ContainsKey("Content-Length");
-            if (_isChunked) Headers["Transfer-Encoding"] = "chunked";
+            if (Headers.ContainsKey("Content-Length"))
+            {
+                _isChunked = false;
+                Headers.Remove("Transfer-Encoding");
+            }
+            else
+            {
+                _isChunked = true;
+                Headers["Transfer-Encoding"] = "chunked";
+            }
             
             Http11Writer.WriteHeaders(pw, this, null);
         }
