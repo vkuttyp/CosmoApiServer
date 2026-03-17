@@ -114,17 +114,23 @@ internal static class Http11Connection
                     await writer.FlushAsync(ct);
                 }
 
-                reader.AdvanceTo(buffer.Start, buffer.End);
-
                 if (!parsed)
                 {
+                    reader.AdvanceTo(buffer.Start, buffer.End);
                     if (result.IsCompleted) break;
                     continue;
+                }
+                else
+                {
+                    // Headers parsed successfully. 'buffer' is now sliced to the start of the body.
+                    // Advance consumed to buffer.Start, and examined to buffer.Start so the next
+                    // ReadAsync immediately returns the unconsumed body data.
+                    reader.AdvanceTo(buffer.Start, buffer.Start);
                 }
 
                 // Rent and build HttpContext from parsed request
                 var httpContext = HttpContextPool.Rent();
-                PopulateContext(httpContext, req, services, ct);
+                await PopulateContextAsync(httpContext, req, reader, services, ct);
                 
                 httpContext.Items["__RawStream"] = stream;
                 httpContext.Response.BodyWriter = writer;
@@ -138,6 +144,11 @@ internal static class Http11Connection
                 }
                 finally
                 {
+                    // Ensure the body is fully drained if it hasn't been consumed.
+                    if (httpContext.Request.BodyStream is HttpBodyStream bodyStream)
+                    {
+                        await DrainStreamAsync(bodyStream, ct);
+                    }
                     httpContext._disposeScope?.Dispose();
                 }
 
@@ -200,7 +211,7 @@ internal static class Http11Connection
 
     // ── Request builder ───────────────────────────────────────────────────
 
-    private static void PopulateContext(HttpContext ctx, ParsedRequest req, IServiceProvider services, CancellationToken ct)
+    private static async Task PopulateContextAsync(HttpContext ctx, ParsedRequest req, PipeReader reader, IServiceProvider services, CancellationToken ct)
     {
         // Parse path + query
         string path = req.RawTarget, queryString = string.Empty;
@@ -229,17 +240,59 @@ internal static class Http11Connection
         ctx.Request.QueryString = queryString;
         ctx.Request.Headers = headers;
         ctx.Request.Query = query;
-        ctx.Request.Body = req.Body;
         
         ctx.Request.ContentLength = req.ContentLength;
         ctx.Request.ContentType = req.ContentType;
         ctx.Request.Host = req.Host;
         ctx.Request.Authorization = req.Authorization;
 
+        if (req.ContentLength > 0 || req.Chunked)
+        {
+            if (req.ContentLength > 0 && req.ContentLength < 65536 && !req.Chunked)
+            {
+                // Small body — buffer it now for convenience (e.g. S3 metadata)
+                ctx.Request.Body = new byte[req.ContentLength];
+                var bodyStream = new HttpBodyStream(reader, req.ContentLength, false);
+                int totalRead = 0;
+                while (totalRead < req.ContentLength)
+                {
+                    int read = await bodyStream.ReadAsync(ctx.Request.Body, totalRead, (int)req.ContentLength - totalRead, ct);
+                    if (read <= 0) break;
+                    totalRead += read;
+                }
+                ctx.Request.BodyStream = Stream.Null;
+                ctx.Request.BodyReader = null;
+            }
+            else
+            {
+                ctx.Request.BodyStream = new HttpBodyStream(reader, req.ContentLength, req.Chunked);
+                ctx.Request.BodyReader = reader;
+            }
+        }
+        else
+        {
+            ctx.Request.Body = [];
+            ctx.Request.BodyStream = Stream.Null;
+            ctx.Request.BodyReader = null;
+        }
+
         ctx.Initialize(services, ct);
         
         var scope = new LazyScopeProvider(services);
         ctx._disposeScope = scope;
+    }
+
+    private static async ValueTask DrainStreamAsync(Stream stream, CancellationToken ct)
+    {
+        var buffer = ArrayPool<byte>.Shared.Rent(8192);
+        try
+        {
+            while (await stream.ReadAsync(buffer, 0, buffer.Length, ct) > 0) { }
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static Dictionary<string, string> ParseQuery(string queryString)

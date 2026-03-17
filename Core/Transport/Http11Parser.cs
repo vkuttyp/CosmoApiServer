@@ -62,51 +62,13 @@ internal static class Http11Parser
         }
 
         // ── Body ─────────────────────────────────────────────────────────
-        byte[] body;
-        if (chunkedTransfer) {
-            if (!TryReadChunkedBody(ref reader, out body)) return false;
-        } else if (contentLength > 0) {
-            if (reader.Remaining < contentLength) return false;
-            body = new byte[contentLength];
-            reader.TryCopyTo(body);
-            reader.Advance(contentLength);
-        } else {
-            body = [];
-        }
-
         buffer = buffer.Slice(reader.Position);
         
         // Materialize method and target as strings
         string method = Encoding.ASCII.GetString(methodSeq);
         string rawTarget = Encoding.UTF8.GetString(targetSeq);
 
-        request = new ParsedRequest(method, rawTarget, headers, body, contentLength, contentType, host, auth);
-        return true;
-    }
-
-    private static bool TryReadChunkedBody(ref SequenceReader<byte> reader, out byte[] body)
-    {
-        body = [];
-        var chunks = new List<byte[]>();
-        while (true) {
-            if (!reader.TryReadTo(out ReadOnlySequence<byte> sizeSeq, CrLf)) return false;
-            
-            if (!TryParseHex(sizeSeq, out long chunkSize)) return false;
-
-            if (chunkSize == 0) {
-                reader.Advance(2); // skip trailing CRLF
-                break;
-            }
-
-            if (reader.Remaining < chunkSize + 2) return false;
-            byte[] chunk = new byte[chunkSize];
-            reader.TryCopyTo(chunk);
-            reader.Advance(chunkSize + 2); // data + CRLF
-            chunks.Add(chunk);
-        }
-        body = new byte[chunks.Sum(c => c.Length)];
-        int offset = 0;
-        foreach (var c in chunks) { c.CopyTo(body, offset); offset += c.Length; }
+        request = new ParsedRequest(method, rawTarget, headers, contentLength, contentType, host, auth, chunkedTransfer);
         return true;
     }
 
@@ -211,18 +173,19 @@ internal readonly struct ParsedRequest(
     string method, 
     string rawTarget, 
     List<HeaderEntry> headers, 
-    byte[] body,
     long contentLength,
     string? contentType,
     string? host,
-    string? auth)
+    string? auth,
+    bool chunked)
 {
     public readonly string Method = method;
     public readonly string RawTarget = rawTarget;
     public readonly List<HeaderEntry> Headers = headers;
-    public readonly byte[] Body = body;
     public readonly long ContentLength = contentLength;
     public readonly string? ContentType = contentType;
     public readonly string? Host = host;
     public readonly string? Authorization = auth;
+    public readonly bool Chunked = chunked;
 }
+

@@ -15,6 +15,8 @@ public sealed class HttpRequest
     public IReadOnlyDictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
     public IReadOnlyDictionary<string, string> Query { get; set; } = new Dictionary<string, string>();
     public byte[] Body { get; set; } = [];
+    public Stream BodyStream { get; set; } = Stream.Null;
+    public System.IO.Pipelines.PipeReader? BodyReader { get; set; }
 
     // Pre-parsed "well-known" headers for zero-dictionary access
     public long ContentLength { get; internal set; }
@@ -25,10 +27,22 @@ public sealed class HttpRequest
     // Populated by router after route match
     public IReadOnlyDictionary<string, string> RouteValues { get; set; } = new Dictionary<string, string>();
 
-    public T? ReadJson<T>() =>
-        Body.Length > 0
-            ? System.Text.Json.JsonSerializer.Deserialize<T>(Body, JsonOptions)
-            : default;
+    public T? ReadJson<T>()
+    {
+        if (Body.Length > 0)
+            return JsonSerializer.Deserialize<T>(Body, JsonOptions);
+
+        if (BodyStream != Stream.Null)
+        {
+            // For now, if we have a stream, we still buffer it for JSON
+            // In the future, we can use JsonSerializer.DeserializeAsync(BodyStream)
+            using var ms = new MemoryStream();
+            BodyStream.CopyTo(ms);
+            return JsonSerializer.Deserialize<T>(ms.ToArray(), JsonOptions);
+        }
+
+        return default;
+    }
 
     /// <summary>Parse a multipart/form-data body. Throws if Content-Type is not multipart/form-data.</summary>
     public MultipartForm ReadMultipart() => MultipartParser.Parse(this);
@@ -37,9 +51,17 @@ public sealed class HttpRequest
     public MultipartForm ReadForm()
     {
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        if (Body.Length == 0) return new MultipartForm { Fields = fields };
+        byte[] body = Body;
+        if (body.Length == 0 && BodyStream != Stream.Null)
+        {
+            using var ms = new MemoryStream();
+            BodyStream.CopyTo(ms);
+            body = ms.ToArray();
+        }
 
-        var content = System.Text.Encoding.UTF8.GetString(Body);
+        if (body.Length == 0) return new MultipartForm { Fields = fields };
+
+        var content = System.Text.Encoding.UTF8.GetString(body);
         var pairs = content.Split('&');
         foreach (var pair in pairs)
         {
@@ -60,10 +82,13 @@ public sealed class HttpRequest
         Headers = new Dictionary<string, string>();
         Query = new Dictionary<string, string>();
         Body = [];
+        BodyStream = Stream.Null;
+        BodyReader = null;
         RouteValues = new Dictionary<string, string>();
         ContentLength = 0;
         ContentType = null;
         Host = null;
         Authorization = null;
     }
+
 }
