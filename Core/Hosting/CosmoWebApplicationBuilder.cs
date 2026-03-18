@@ -21,20 +21,51 @@ public sealed class CosmoWebApplicationBuilder
     public IServiceCollection Services => _services;
     public ServerOptions ServerOptions => _options;
     public IConfiguration Configuration => _configuration;
+    public static CosmoWebApplicationBuilder Create(string[]? args = null) => new(args);
 
-    public CosmoWebApplicationBuilder()
+    public CosmoWebApplicationBuilder(string[]? args = null)
     {
         // Default configuration loading
         var env = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT") ?? "Production";
-        _configuration = new ConfigurationBuilder()
-            .SetBasePath(Directory.GetCurrentDirectory())
+        var basePath = AppContext.BaseDirectory;
+
+        var configBuilder = new ConfigurationBuilder()
+            .SetBasePath(basePath)
             .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
             .AddJsonFile($"appsettings.{env}.json", optional: true)
-            .AddEnvironmentVariables()
-            .Build();
+            .AddEnvironmentVariables();
+
+        if (args != null && args.Length > 0)
+        {
+            configBuilder.AddCommandLine(args);
+        }
+
+        _configuration = configBuilder.Build();
+
+
+        if (File.Exists(Path.Combine(basePath, "appsettings.json")))
+        {
+            Console.WriteLine($"[Hosting] Loaded configuration from {Path.Combine(basePath, "appsettings.json")}");
+        }
 
         _services.AddSingleton(_configuration);
         _services.AddLogging();
+
+        // ── ASP.NET Core Compatibility: Parse Port from 'Urls' ────────────────
+        var urls = _configuration["Urls"] ?? _configuration["ASPNETCORE_URLS"] ?? _configuration["DOTNET_URLS"];
+        if (!string.IsNullOrEmpty(urls))
+        {
+            var firstUrl = urls.Split(';', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
+            if (firstUrl != null)
+            {
+                var lastColon = firstUrl.LastIndexOf(':');
+                if (lastColon != -1 && int.TryParse(firstUrl.Substring(lastColon + 1), out int p))
+                {
+                    _options.Port = p;
+                    Console.WriteLine($"[Hosting] Configured to listen on port {p} from 'Urls'.");
+                }
+            }
+        }
     }
 
     private string? _openApiPath;
@@ -186,6 +217,7 @@ public sealed class CosmoWebApplicationBuilder
 
     public CosmoWebApplicationBuilder ListenOn(int port)
     {
+        Console.WriteLine($"[Hosting] ListenOn called. Port: {port}");
         _options.Port = port;
         return this;
     }
@@ -217,6 +249,8 @@ public sealed class CosmoWebApplicationBuilder
             var spec = OpenApiGenerator.Generate(controllerTypes, _openApiInfo);
             _middlewarePipeline.UseInstance(new OpenApiMiddleware(_openApiPath, spec));
         }
+
+        Console.WriteLine($"[Hosting] Building application. Target port: {_options.Port}");
 
         var provider = _services.BuildServiceProvider();
 

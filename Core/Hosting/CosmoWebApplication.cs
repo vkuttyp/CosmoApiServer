@@ -16,6 +16,7 @@ namespace CosmoApiServer.Core.Hosting;
 public sealed class CosmoWebApplication
 {
     private readonly IServiceProvider _services;
+    public IServiceProvider Services => _services;
     private readonly MiddlewarePipeline _middlewarePipeline;
     private readonly RouteTable _routeTable;
     private readonly List<Assembly> _controllerAssemblies;
