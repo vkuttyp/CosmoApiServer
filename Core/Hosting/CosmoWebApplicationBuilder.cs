@@ -45,7 +45,6 @@ public sealed class CosmoWebApplicationBuilder
 
         if (File.Exists(Path.Combine(basePath, "appsettings.json")))
         {
-            Console.WriteLine($"[Hosting] Loaded configuration from {Path.Combine(basePath, "appsettings.json")}");
         }
 
         _services.AddSingleton(_configuration);
@@ -62,7 +61,6 @@ public sealed class CosmoWebApplicationBuilder
                 if (lastColon != -1 && int.TryParse(firstUrl.Substring(lastColon + 1), out int p))
                 {
                     _options.Port = p;
-                    Console.WriteLine($"[Hosting] Configured to listen on port {p} from 'Urls'.");
                 }
             }
         }
@@ -217,7 +215,6 @@ public sealed class CosmoWebApplicationBuilder
 
     public CosmoWebApplicationBuilder ListenOn(int port)
     {
-        Console.WriteLine($"[Hosting] ListenOn called. Port: {port}");
         _options.Port = port;
         return this;
     }
@@ -249,8 +246,6 @@ public sealed class CosmoWebApplicationBuilder
             var spec = OpenApiGenerator.Generate(controllerTypes, _openApiInfo);
             _middlewarePipeline.UseInstance(new OpenApiMiddleware(_openApiPath, spec));
         }
-
-        Console.WriteLine($"[Hosting] Building application. Target port: {_options.Port}");
 
         var provider = _services.BuildServiceProvider();
 
