@@ -15,7 +15,8 @@ public sealed class JwtMiddleware : Middleware.IMiddleware
         if (context.Request.Headers.TryGetValue("Authorization", out var authHeader) &&
             authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
         {
-            var token = authHeader["Bearer ".Length..].Trim().Trim('"');
+            // Handle cases like 'Bearer " eyJ... "' or 'Bearer  eyJ...'
+            var token = authHeader["Bearer ".Length..].Trim().Trim('"').Trim();
             var jwtService = context.RequestServices.GetService<JwtService>();
             if (jwtService is not null)
             {
@@ -23,7 +24,7 @@ public sealed class JwtMiddleware : Middleware.IMiddleware
                 if (context.User is null)
                 {
                     var logger = context.RequestServices.GetService<ILogger<JwtMiddleware>>();
-                    logger?.LogWarning("JWT token validation failed for request to {Path}. Ensure the token is a valid Base64Url string and matches the Secret/Issuer/Audience.", context.Request.Path);
+                    logger?.LogWarning("JWT token validation failed for request to {Path}. Token length: {Len}", context.Request.Path, token.Length);
                 }
             }
         }
