@@ -170,6 +170,10 @@ public sealed class CosmoWebApplicationBuilder
 
     public CosmoWebApplicationBuilder UseJwtAuthentication(JwtOptions options)
     {
+        Console.WriteLine($"[JWT Setup] Secret Length: {options.Secret.Length}");
+        Console.WriteLine($"[JWT Setup] Issuer: {options.Issuer}");
+        Console.WriteLine($"[JWT Setup] Audience: {options.Audience}");
+        
         _services.AddSingleton(options);
         _services.AddSingleton<JwtService>();
         _middlewarePipeline.UseInstance(new JwtMiddleware());

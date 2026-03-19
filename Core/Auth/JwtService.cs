@@ -54,6 +54,13 @@ public sealed class JwtService
             };
 
             var result = _handler.ValidateToken(token, parameters);
+            if (!result.IsValid)
+            {
+                Console.WriteLine($"[JWT Error] Validation failed for {token[..10]}...");
+                Console.WriteLine($"[JWT Error] Result Status: {result.Exception?.Message ?? "Unknown"}");
+                if (result.Exception?.InnerException != null)
+                    Console.WriteLine($"[JWT Error] Inner: {result.Exception.InnerException.Message}");
+            }
             return result.IsValid ? new ClaimsPrincipal(result.ClaimsIdentity) : null;
         }
         catch
