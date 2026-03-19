@@ -1,3 +1,4 @@
+using System.Security.Claims;
 using CosmoApiServer.Core.Http;
 
 namespace CosmoApiServer.Core.Controllers;
@@ -15,6 +16,7 @@ public abstract class ControllerBase
     public HttpContext HttpContext { get; internal set; } = null!;
     public HttpRequest Request => HttpContext.Request;
     public HttpResponse Response => HttpContext.Response;
+    public ClaimsPrincipal? User => HttpContext.User;
 
     /// <summary>
     /// Collection of validation errors for the current request.

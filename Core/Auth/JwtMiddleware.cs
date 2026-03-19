@@ -1,5 +1,6 @@
 using CosmoApiServer.Core.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Auth;
 
@@ -17,7 +18,14 @@ public sealed class JwtMiddleware : Middleware.IMiddleware
             var token = authHeader["Bearer ".Length..].Trim();
             var jwtService = context.RequestServices.GetService<JwtService>();
             if (jwtService is not null)
+            {
                 context.User = jwtService.ValidateToken(token);
+                if (context.User is null)
+                {
+                    var logger = context.RequestServices.GetService<ILogger<JwtMiddleware>>();
+                    logger?.LogWarning("JWT token validation failed for request to {Path}", context.Request.Path);
+                }
+            }
         }
 
         return next(context);

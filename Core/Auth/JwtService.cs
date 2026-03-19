@@ -1,6 +1,6 @@
-using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
+using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Tokens;
 
 namespace CosmoApiServer.Core.Auth;
@@ -9,7 +9,7 @@ public sealed class JwtService
 {
     private readonly JwtOptions _options;
     private readonly SymmetricSecurityKey _key;
-    private readonly JwtSecurityTokenHandler _handler = new();
+    private readonly JsonWebTokenHandler _handler = new();
 
     public JwtService(JwtOptions options)
     {
@@ -21,16 +21,17 @@ public sealed class JwtService
     public string GenerateToken(IEnumerable<Claim> claims)
     {
         var credentials = new SigningCredentials(_key, SecurityAlgorithms.HmacSha256);
+        
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = _options.Issuer,
+            Audience = _options.Audience,
+            Subject = new ClaimsIdentity(claims),
+            Expires = DateTime.UtcNow.AddMinutes(_options.ExpiryMinutes),
+            SigningCredentials = credentials
+        };
 
-        var token = new JwtSecurityToken(
-            issuer: _options.Issuer,
-            audience: _options.Audience,
-            claims: claims,
-            notBefore: DateTime.UtcNow,
-            expires: DateTime.UtcNow.AddMinutes(_options.ExpiryMinutes),
-            signingCredentials: credentials);
-
-        return _handler.WriteToken(token);
+        return _handler.CreateToken(descriptor);
     }
 
     /// <summary>
@@ -52,7 +53,8 @@ public sealed class JwtService
                 ClockSkew = TimeSpan.Zero
             };
 
-            return _handler.ValidateToken(token, parameters, out _);
+            var result = _handler.ValidateToken(token, parameters);
+            return result.IsValid ? new ClaimsPrincipal(result.ClaimsIdentity) : null;
         }
         catch
         {
