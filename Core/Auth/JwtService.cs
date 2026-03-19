@@ -41,6 +41,12 @@ public sealed class JwtService
     {
         try
         {
+            if (string.IsNullOrEmpty(token))
+            {
+                Console.WriteLine("[JWT Error] Token is null or empty");
+                return null;
+            }
+
             var parameters = new TokenValidationParameters
             {
                 ValidateIssuerSigningKey = true,
@@ -52,6 +58,11 @@ public sealed class JwtService
                 ValidateLifetime = true,
                 ClockSkew = TimeSpan.FromMinutes(5)
             };
+
+            // Debug: Print hex of first 10 chars to find hidden junk
+            var first10 = token.Length > 10 ? token[..10] : token;
+            var hex = string.Join(" ", first10.Select(c => $"{(int)c:X2}"));
+            Console.WriteLine($"[JWT Debug] Token prefix hex: {hex} (\" {first10} \")");
 
             var result = _handler.ValidateToken(token, parameters);
             if (!result.IsValid)
