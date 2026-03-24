@@ -90,7 +90,8 @@ internal sealed class HttpBodyStream : Stream
                 {
                     if (TryParseHex(line, out long chunkSize))
                     {
-                        _reader.AdvanceTo(line.End, seq.GetPosition(2, line.End)); // Skip CRLF
+                        // Consume past the CRLF delimiter (line.End points before \r\n, advance 2 more bytes)
+                        _reader.AdvanceTo(seq.GetPosition(2, line.End));
                         _remaining = chunkSize;
                         if (chunkSize == 0)
                         {
@@ -158,7 +159,8 @@ internal sealed class HttpBodyStream : Stream
         {
             foreach (byte b in memory.Span)
             {
-                if (b == (byte)';') return true;
+                if (b == (byte)';') return result >= 0; // chunk extension delimiter
+                if (result > (long.MaxValue >> 4)) return false; // overflow protection
                 result <<= 4;
                 if (b >= '0' && b <= '9') result += b - '0';
                 else if (b >= 'a' && b <= 'f') result += b - 'a' + 10;
@@ -166,7 +168,7 @@ internal sealed class HttpBodyStream : Stream
                 else return false;
             }
         }
-        return true;
+        return result >= 0;
     }
 
     public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();

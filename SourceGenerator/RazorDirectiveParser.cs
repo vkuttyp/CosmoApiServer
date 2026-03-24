@@ -83,6 +83,31 @@ internal static class RazorDirectiveParser
         return routes;
     }
 
+    internal static List<InjectDirective> ParseInjectDirectives(SourceText sourceText)
+    {
+        var injects = new List<InjectDirective>();
+        foreach (var line in sourceText.Lines)
+        {
+            var lineText = line.ToString().TrimStart();
+            if (lineText.StartsWith("@inject ", StringComparison.Ordinal))
+            {
+                var value = lineText.Substring("@inject ".Length).Trim();
+                if (value.Length == 0) continue;
+
+                // Format: @inject TypeName PropertyName
+                var lastSpace = value.LastIndexOf(' ');
+                if (lastSpace > 0)
+                {
+                    var typeName = value.Substring(0, lastSpace).Trim();
+                    var propName = value.Substring(lastSpace + 1).Trim();
+                    if (typeName.Length > 0 && propName.Length > 0)
+                        injects.Add(new InjectDirective(typeName, propName));
+                }
+            }
+        }
+        return injects;
+    }
+
     internal static string? ExtractModelType(string baseType)
     {
         var openAngle = baseType.IndexOf('<');
@@ -98,6 +123,19 @@ internal static class RazorDirectiveParser
         var openAngle = baseType.IndexOf('<');
         return openAngle >= 0 ? baseType.Substring(0, openAngle).Trim() : baseType.Trim();
     }
+}
+
+internal readonly struct InjectDirective(string typeName, string propertyName) : IEquatable<InjectDirective>
+{
+    public string TypeName { get; } = typeName;
+    public string PropertyName { get; } = propertyName;
+
+    public bool Equals(InjectDirective other) =>
+        string.Equals(TypeName, other.TypeName, StringComparison.Ordinal) &&
+        string.Equals(PropertyName, other.PropertyName, StringComparison.Ordinal);
+
+    public override bool Equals(object? obj) => obj is InjectDirective other && Equals(other);
+    public override int GetHashCode() => (TypeName.GetHashCode() * 397) ^ PropertyName.GetHashCode();
 }
 
 internal readonly struct UsingDirective(string namespaceOrType, string? alias) : IEquatable<UsingDirective>

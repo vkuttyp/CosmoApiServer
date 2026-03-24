@@ -1,4 +1,5 @@
 using System.Security.Cryptography;
+using System.Text;
 
 namespace CosmoApiServer.Core.Auth;
 
@@ -17,6 +18,9 @@ public static class CsrfTokenHelper
         if (string.IsNullOrEmpty(token) || string.IsNullOrEmpty(expected))
             return false;
 
-        return token == expected;
+        // Use constant-time comparison to prevent timing attacks
+        var tokenBytes = Encoding.UTF8.GetBytes(token);
+        var expectedBytes = Encoding.UTF8.GetBytes(expected);
+        return CryptographicOperations.FixedTimeEquals(tokenBytes, expectedBytes);
     }
 }

@@ -4,6 +4,7 @@ using System.Buffers;
 using System.Threading.Tasks;
 using System.Collections.Generic;
 using System.Reflection;
+using CosmoApiServer.Core.Templates;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Microsoft.AspNetCore.Razor.Hosting
@@ -286,6 +287,20 @@ namespace Microsoft.AspNetCore.Components
                                         if (val != null) prop.SetValue(comp, val);
                                     }
                                 }
+                                // Resolve @inject properties from DI
+                                if (comp.HttpContext?.RequestServices is not null)
+                                {
+                                    foreach (var prop in comp.GetType().GetProperties())
+                                    {
+                                        if (prop.GetCustomAttribute<Microsoft.AspNetCore.Mvc.Razor.Internal.RazorInjectAttribute>() != null)
+                                        {
+                                            var svc = comp.HttpContext.RequestServices.GetService(prop.PropertyType);
+                                            if (svc is CosmoApiServer.Core.Http.NavigationManager nav)
+                                                nav.Initialize(comp.HttpContext);
+                                            if (svc != null) prop.SetValue(comp, svc);
+                                        }
+                                    }
+                                }
                                 await comp.RenderAsync();
                             }
                             break;
@@ -307,13 +322,33 @@ namespace Microsoft.AspNetCore.Components
                 var current = component.Parent;
                 while (current != null)
                 {
-                    if (type.IsAssignableFrom(current.GetType())) return current;
-                    var msProp = current.GetType().GetProperty("ModelState");
+                    // Check if the parent is a CascadingValue<T> component that provides the requested type
+                    var currentType = current.GetType();
+                    if (currentType.IsGenericType && currentType.GetGenericTypeDefinition() == typeof(CascadingValue<>))
+                    {
+                        var valueProp = currentType.GetProperty("Value");
+                        if (valueProp != null && type.IsAssignableFrom(valueProp.PropertyType))
+                        {
+                            var val = valueProp.GetValue(current);
+                            if (val != null) return val;
+                        }
+                    }
+
+                    // Check if the parent itself matches the requested type
+                    if (type.IsAssignableFrom(currentType)) return current;
+
+                    // Check well-known properties (ModelState, EditContext, etc.)
+                    var msProp = currentType.GetProperty("ModelState");
                     if (msProp != null && type.IsAssignableFrom(msProp.PropertyType))
                     {
                         var val = msProp.GetValue(current);
                         if (val != null) return val;
                     }
+
+                    // Check EditForm's Context property
+                    if (current is EditForm form && type == typeof(EditContext) && form.Context is not null)
+                        return form.Context;
+
                     current = current.Parent;
                 }
                 return null;

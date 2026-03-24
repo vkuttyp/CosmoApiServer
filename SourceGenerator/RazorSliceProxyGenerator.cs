@@ -155,6 +155,22 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
                         private static readonly global::System.Type _sliceType = global::System.Type.GetType(TypeName)!;
                 """);
 
+            // Emit @inject properties for components
+            var injectDirectives = sourceText is not null
+                ? ViewImportsResolver.ResolveDirectives(file.Path, projectDirectory!, viewImportsMap, sourceText).InjectDirectives
+                : new List<InjectDirective>();
+
+            if (isRazor && injectDirectives.Count > 0)
+            {
+                foreach (var inject in injectDirectives)
+                {
+                    codeBuilder.AppendLine($$"""
+                        [global::Microsoft.AspNetCore.Mvc.Razor.Internal.RazorInject]
+                        public {{inject.TypeName}} {{inject.PropertyName}} { get; set; } = default!;
+                """);
+                }
+            }
+
             if (isRazor)
             {
                 // For components, we don't usually have a single 'Model'. We have Parameters.

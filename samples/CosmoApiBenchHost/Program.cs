@@ -45,6 +45,18 @@ app.MapGet("/bench", ctx => {
     return ValueTask.CompletedTask;
 });
 
+app.MapGet("/route/{id}", ctx => {
+    var id = ctx.Request.RouteValues.TryGetValue("id", out var v) ? v : "0";
+    ctx.Response.WriteJson(new { id, found = true });
+    return ValueTask.CompletedTask;
+});
+
+app.MapPost("/echo", ctx => {
+    ctx.Response.Headers["Content-Type"] = ctx.Request.ContentType ?? "application/json";
+    ctx.Response.Write(ctx.Request.Body);
+    return ValueTask.CompletedTask;
+});
+
 Console.WriteLine("=== CosmoApiServer-DotNet Benchmark ===");
 Console.WriteLine("HTTP/1.1  → http://127.0.0.1:9001");
 app.Run();

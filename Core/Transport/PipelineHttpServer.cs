@@ -123,10 +123,11 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
     }
 
-    public async Task StopAsync()
+    public Task StopAsync()
     {
         _cts?.Cancel();
         _listener?.Close();
+        return Task.CompletedTask;
     }
 
     public async ValueTask DisposeAsync()

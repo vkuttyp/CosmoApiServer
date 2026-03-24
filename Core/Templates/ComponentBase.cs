@@ -145,9 +145,29 @@ public abstract class ComponentBase
 
     private sealed class StringBuilderBufferWriter(StringBuilder sb) : IBufferWriter<byte>
     {
-        public void Advance(int count) { }
-        public Memory<byte> GetMemory(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
-        public Span<byte> GetSpan(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
+        private byte[]? _pending;
+
+        public void Advance(int count)
+        {
+            if (_pending != null && count > 0)
+            {
+                sb.Append(Encoding.UTF8.GetString(_pending, 0, count));
+                _pending = null;
+            }
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            return _pending;
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            return _pending;
+        }
+
         public void Write(ReadOnlySpan<byte> value) => sb.Append(Encoding.UTF8.GetString(value));
     }
 }

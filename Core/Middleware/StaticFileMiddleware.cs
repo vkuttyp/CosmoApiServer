@@ -8,7 +8,9 @@ namespace CosmoApiServer.Core.Middleware;
 /// </summary>
 public class StaticFileMiddleware(string rootPath) : IMiddleware
 {
-    private readonly string _root = Path.GetFullPath(rootPath);
+    // Ensure root path ends with directory separator to prevent prefix-match bypasses
+    // (e.g., /var/wwwevil passing StartsWith("/var/www"))
+    private readonly string _root = Path.GetFullPath(rootPath).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
     private static readonly Dictionary<string, string> _mimeTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         { ".html", "text/html" },

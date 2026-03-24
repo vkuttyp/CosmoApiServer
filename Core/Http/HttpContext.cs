@@ -69,6 +69,7 @@ public sealed class HttpContext
         Items.Clear();
         User = null;
         StreamingBodyWriter = null;
+        _disposeScope?.Dispose();
         _disposeScope = null;
     }
 

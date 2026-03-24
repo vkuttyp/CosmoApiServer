@@ -50,7 +50,16 @@ public sealed class CsrfMiddleware(CsrfOptions options) : IMiddleware
 
     private bool HasCsrfCookie(HttpContext context)
     {
-        return context.Request.Headers.TryGetValue("cookie", out var v) && v.Contains(options.CookieName);
+        if (!context.Request.Headers.TryGetValue("cookie", out var v)) return false;
+        // Parse cookie pairs properly to avoid substring false positives
+        // (e.g., "MY-XSRF-TOKEN" matching "XSRF-TOKEN")
+        foreach (var part in v.Split(';'))
+        {
+            var trimmed = part.Trim();
+            if (trimmed.StartsWith(options.CookieName + "=", StringComparison.Ordinal))
+                return true;
+        }
+        return false;
     }
 
     private string? GetCsrfCookie(HttpContext context)
@@ -68,6 +77,8 @@ public sealed class CsrfMiddleware(CsrfOptions options) : IMiddleware
     private void SetCsrfCookie(HttpContext context)
     {
         var token = CsrfTokenHelper.GenerateToken();
-        context.Response.Headers["Set-Cookie"] = $"{options.CookieName}={token}; Path=/; HttpOnly; SameSite=Lax";
+        // NOTE: Do NOT set HttpOnly — the Double Submit Cookie pattern requires JavaScript
+        // to read this cookie and send it back as a header. HttpOnly would prevent that.
+        context.Response.Headers["Set-Cookie"] = $"{options.CookieName}={token}; Path=/; SameSite=Lax; Secure";
     }
 }

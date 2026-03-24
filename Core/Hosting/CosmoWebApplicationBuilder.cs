@@ -49,6 +49,7 @@ public sealed class CosmoWebApplicationBuilder
 
         _services.AddSingleton(_configuration);
         _services.AddLogging();
+        _services.AddScoped<Http.NavigationManager>();
 
         // ── ASP.NET Core Compatibility: Parse Port from 'Urls' ────────────────
         var urls = _configuration["Urls"] ?? _configuration["ASPNETCORE_URLS"] ?? _configuration["DOTNET_URLS"];

@@ -22,19 +22,28 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
 
     private static ValueTask HandleExceptionAsync(HttpContext context, Exception exception)
     {
-        Console.WriteLine($"[ERROR] {DateTime.UtcNow:O} {context.Request.Method} {context.Request.Path}");
-        Console.WriteLine(exception.ToString());
+        // Log full details server-side only
+        Console.Error.WriteLine($"[ERROR] {DateTime.UtcNow:O} {context.Request.Method} {context.Request.Path}");
+        Console.Error.WriteLine(exception.ToString());
 
         context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
-        
+
+        // Do NOT expose exception.Message to clients — it may contain sensitive info
+        // (SQL queries, file paths, internal stack details)
         var errorResponse = new
         {
             message = "An unexpected error occurred.",
-            detail = exception.Message,
             status = 500
         };
 
-        context.Response.WriteJson(errorResponse);
+        try
+        {
+            context.Response.WriteJson(errorResponse);
+        }
+        catch
+        {
+            // Response may have already started; swallow to avoid crashing the connection
+        }
         return ValueTask.CompletedTask;
     }
 }

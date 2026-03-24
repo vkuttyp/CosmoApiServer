@@ -33,8 +33,9 @@ public sealed class RouterMiddleware : IMiddleware
         }
         finally
         {
-            // Return dictionary to pool if it was a real dictionary (and not the shared empty one)
-            if (match.RouteValues is Dictionary<string, string> dict && dict.Count > 0)
+            // Return dictionary to pool if it was a rented dictionary (regardless of current count,
+            // since a handler may have cleared it)
+            if (match.RouteValues is Dictionary<string, string> dict && !ReferenceEquals(dict, RouteValuePool.EmptyShared))
             {
                 RouteValuePool.Return(dict);
             }

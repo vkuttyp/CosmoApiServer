@@ -29,11 +29,10 @@ public sealed class RouteTable
 
     public RouteMatch? Match(Http.HttpMethod method, string path)
     {
-        // 1. Try Cache
+        // 1. Try Cache (only static/non-parameterized routes are cached)
         if (_cache.TryGetValue((method, path), out var cachedMatch))
         {
-            // Note: For parameterized routes, we still need the actual values for THIS path.
-            if (!cachedMatch.Entry.Template.HasParams) return cachedMatch;
+            return cachedMatch;
         }
 
         if (!_routes.TryGetValue(method, out var routes))
@@ -50,10 +49,15 @@ public sealed class RouteTable
             if (values is not null)
             {
                 var match = new RouteMatch(entry, values);
-                
-                // 2. Populate Cache (only for static routes or to speed up Entry lookup)
-                _cache.TryAdd((method, path), match);
-                
+
+                // Only cache non-parameterized routes to prevent unbounded memory growth.
+                // Parameterized routes (e.g., /users/{id}) produce unique paths that would
+                // leak memory indefinitely if cached.
+                if (!entry.Template.HasParams)
+                {
+                    _cache.TryAdd((method, path), match);
+                }
+
                 return match;
             }
         }

@@ -10,6 +10,9 @@ internal static class RouteValuePool
     private static readonly ConcurrentQueue<Dictionary<string, string>> _pool = new();
     private const int MaxPoolSize = 1024;
 
+    /// <summary>Shared empty dictionary instance — never return this to the pool.</summary>
+    internal static readonly Dictionary<string, string> EmptyShared = new(0, StringComparer.OrdinalIgnoreCase);
+
     /// <summary>
     /// Borrows a dictionary from the pool or creates a new one.
     /// </summary>

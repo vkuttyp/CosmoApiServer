@@ -10,7 +10,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="CosmoApiServer.Core" Version="1.6.3" />
+    <PackageReference Include="CosmoApiServer.Core" Version="2.0.0" />
   </ItemGroup>
 
 </Project>

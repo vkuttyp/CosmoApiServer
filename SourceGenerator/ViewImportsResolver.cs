@@ -10,7 +10,7 @@ namespace CosmoApiServer.SourceGenerator;
 
 internal static class ViewImportsResolver
 {
-    internal record Directives(string? InheritsDirective, List<UsingDirective> UsingDirectives, string? NamespaceDirective);
+    internal record Directives(string? InheritsDirective, List<UsingDirective> UsingDirectives, string? NamespaceDirective, List<InjectDirective> InjectDirectives);
 
     public static ImmutableDictionary<string, AdditionalText> BuildViewImportsMap(ImmutableArray<AdditionalText> allCshtmlFiles)
     {
@@ -24,6 +24,7 @@ internal static class ViewImportsResolver
         var inherits = RazorDirectiveParser.ParseInheritsDirective(sliceText);
         var usings = RazorDirectiveParser.ParseUsingDirectives(sliceText);
         var ns = RazorDirectiveParser.ParseNamespaceDirective(sliceText);
+        var injects = RazorDirectiveParser.ParseInjectDirectives(sliceText);
 
         var currentDir = Path.GetDirectoryName(filePath);
         while (currentDir != null && currentDir.StartsWith(projectDirectory))
@@ -36,11 +37,12 @@ internal static class ViewImportsResolver
                     inherits ??= RazorDirectiveParser.ParseInheritsDirective(viewImportsText);
                     ns ??= RazorDirectiveParser.ParseNamespaceDirective(viewImportsText);
                     usings.AddRange(RazorDirectiveParser.ParseUsingDirectives(viewImportsText));
+                    injects.AddRange(RazorDirectiveParser.ParseInjectDirectives(viewImportsText));
                 }
             }
             currentDir = Path.GetDirectoryName(currentDir);
         }
 
-        return new Directives(inherits, usings, ns);
+        return new Directives(inherits, usings, ns, injects);
     }
 }

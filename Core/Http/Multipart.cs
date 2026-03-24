@@ -63,9 +63,8 @@ public static class MultipartParser
 
         // Delimiters as bytes
         var delimiter    = Encoding.ASCII.GetBytes("--" + boundary);
-        var terminator   = Encoding.ASCII.GetBytes("--" + boundary + "--");
-        var crlf         = "\r\n"u8.ToArray();
         var doubleCrlf   = "\r\n\r\n"u8.ToArray();
+        var nextDelimPrefix = Encoding.ASCII.GetBytes("\r\n--" + boundary);
 
         int pos = 0;
 
@@ -95,7 +94,6 @@ public static class MultipartParser
 
             // Find next delimiter to bound the part body
             // Next delimiter is \r\n--{boundary}
-            var nextDelimPrefix = Encoding.ASCII.GetBytes("\r\n--" + boundary);
             int nextDelim = IndexOf(body, nextDelimPrefix, pos);
             if (nextDelim < 0) break;
 
@@ -148,9 +146,20 @@ public static class MultipartParser
     private static string? ExtractParam(string header, string param)
     {
         // Handles: name="value" or name=value
+        // Use word-boundary-aware search to avoid matching substrings
+        // (e.g., "name=" must not match inside "filename=")
         var search = param + "=";
-        var idx = header.IndexOf(search, StringComparison.OrdinalIgnoreCase);
-        if (idx < 0) return null;
+        int idx = 0;
+        while (true)
+        {
+            idx = header.IndexOf(search, idx, StringComparison.OrdinalIgnoreCase);
+            if (idx < 0) return null;
+            // Ensure it's not a substring of another parameter name:
+            // the char before must be a delimiter (start of string, space, or semicolon)
+            if (idx == 0 || header[idx - 1] == ' ' || header[idx - 1] == ';')
+                break;
+            idx += search.Length; // skip this false match and try again
+        }
 
         var start = idx + search.Length;
         if (start >= header.Length) return null;

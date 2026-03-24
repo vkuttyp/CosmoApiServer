@@ -180,23 +180,27 @@ internal static class Http11Connection
                 }
 
                 var flush = await writer.FlushAsync(ct);
-                
-                // Return to pool AFTER sending response
+
+                // Read state from context BEFORE returning to pool to avoid use-after-return
+                bool isWebSocketUpgrade = httpContext.Items.TryGetValue("__WebSocketUpgrade", out var upgrade) && upgrade is true;
+                bool isConnectionClose = httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&
+                    conn.Equals("close", StringComparison.OrdinalIgnoreCase);
+
+                // Return to pool AFTER reading all needed state
                 HttpContextPool.Return(httpContext);
 
                 if (flush.IsCompleted) break;
 
                 // ── WebSocket Upgrade Handover ───────────────────────────────
-                if (httpContext.Items.TryGetValue("__WebSocketUpgrade", out var upgrade) && upgrade is true)
+                if (isWebSocketUpgrade)
                 {
                     await writer.CompleteAsync();
                     await reader.CompleteAsync();
-                    return; 
+                    return;
                 }
 
                 // Check if client requested close
-                if (httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&
-                    conn.Equals("close", StringComparison.OrdinalIgnoreCase))
+                if (isConnectionClose)
                     break;
             }
         }
@@ -340,7 +344,21 @@ internal static class Http11Connection
         private Dictionary<string, string>? _cache;
 
         private Dictionary<string, string> Materialized =>
-            _cache ??= source.ToDictionary(h => h.Name, h => h.Value, StringComparer.OrdinalIgnoreCase);
+            _cache ??= BuildDictionary();
+
+        private Dictionary<string, string> BuildDictionary()
+        {
+            var dict = new Dictionary<string, string>(source.Count, StringComparer.OrdinalIgnoreCase);
+            foreach (var h in source)
+            {
+                // HTTP allows duplicate headers — combine with comma per RFC 9110 §5.3
+                if (dict.TryGetValue(h.Name, out var existing))
+                    dict[h.Name] = existing + ", " + h.Value;
+                else
+                    dict[h.Name] = h.Value;
+            }
+            return dict;
+        }
 
         public bool TryGetValue(string key, out string value)
         {

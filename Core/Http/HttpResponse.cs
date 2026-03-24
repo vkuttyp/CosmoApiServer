@@ -91,8 +91,8 @@ public sealed class HttpResponse
                 data.CopyTo(newBody.AsSpan(_body.Length));
                 _body = newBody;
             }
-            if (!Headers.ContainsKey("Content-Length"))
-                Headers["Content-Length"] = _body.Length.ToString();
+            // Always update Content-Length to reflect the total accumulated body size
+            Headers["Content-Length"] = _body.Length.ToString();
         }
     }
 
@@ -266,9 +266,29 @@ public sealed class HttpResponse
     public sealed class TestBufferWriter : IBufferWriter<byte>
     {
         private readonly MemoryStream _ms = new();
-        public void Advance(int count) { }
-        public Memory<byte> GetMemory(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
-        public Span<byte> GetSpan(int sizeHint = 0) => new byte[sizeHint > 0 ? sizeHint : 4096];
+        private byte[]? _pending;
+
+        public void Advance(int count)
+        {
+            if (_pending != null && count > 0)
+            {
+                _ms.Write(_pending, 0, count);
+                _pending = null;
+            }
+        }
+
+        public Memory<byte> GetMemory(int sizeHint = 0)
+        {
+            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            return _pending;
+        }
+
+        public Span<byte> GetSpan(int sizeHint = 0)
+        {
+            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            return _pending;
+        }
+
         public void Write(ReadOnlySpan<byte> value) => _ms.Write(value);
         public byte[] ToArray() => _ms.ToArray();
     }

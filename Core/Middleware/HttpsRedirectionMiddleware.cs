@@ -25,11 +25,20 @@ public sealed class HttpsRedirectionMiddleware(HttpsRedirectionOptions options) 
 
         var request = context.Request;
         var host = request.Headers.TryGetValue("host", out var h) ? h : "localhost";
-        
+
         // Remove existing port if present and append HTTPS port
         if (host.Contains(':'))
         {
             host = host[..host.IndexOf(':')];
+        }
+
+        // Validate host to prevent header injection / open redirect attacks.
+        // Only allow alphanumeric, hyphens, dots, and brackets (for IPv6).
+        if (!IsValidHost(host))
+        {
+            context.Response.StatusCode = 400;
+            context.Response.WriteText("Bad Request");
+            return;
         }
 
         if (options.HttpsPort.HasValue && options.HttpsPort != 443)
@@ -37,10 +46,24 @@ public sealed class HttpsRedirectionMiddleware(HttpsRedirectionOptions options) 
             host += ":" + options.HttpsPort.Value;
         }
 
-        var destination = $"https://{host}{request.Path}{request.QueryString}";
+        var qs = !string.IsNullOrEmpty(request.QueryString) ? request.QueryString : string.Empty;
+        // Prepend '?' if QueryString doesn't already have it
+        if (qs.Length > 0 && qs[0] != '?') qs = "?" + qs;
+        var destination = $"https://{host}{request.Path}{qs}";
         
         context.Response.StatusCode = options.StatusCode;
         context.Response.Headers["Location"] = destination;
+    }
+
+    private static bool IsValidHost(string host)
+    {
+        if (string.IsNullOrEmpty(host) || host.Length > 253) return false;
+        foreach (var c in host)
+        {
+            if (!char.IsLetterOrDigit(c) && c != '-' && c != '.' && c != '[' && c != ']')
+                return false;
+        }
+        return true;
     }
 
     private static bool IsHttps(HttpContext context)

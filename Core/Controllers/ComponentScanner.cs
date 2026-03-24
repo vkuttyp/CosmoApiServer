@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
 using CosmoApiServer.Core.Http;
@@ -5,6 +6,7 @@ using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Mvc.Razor.Internal;
 using RenderFragment = Microsoft.AspNetCore.Components.RenderFragment;
 
 namespace CosmoApiServer.Core.Controllers;
@@ -13,6 +15,10 @@ public static class ComponentScanner
 {
     public static Type? _appType;
     public static Type? _mainLayoutType;
+
+    // Cache reflection metadata per type to avoid per-request reflection
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> _parameterCache = new();
+    private static readonly ConcurrentDictionary<Type, PropertyInfo[]> _injectCache = new();
 
     public static void RegisterComponents(
         IEnumerable<Assembly> assemblies,
@@ -41,18 +47,45 @@ public static class ComponentScanner
         }
     }
 
+    private static PropertyInfo[] GetParameterProperties(Type type) =>
+        _parameterCache.GetOrAdd(type, t =>
+            t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+             .Where(p => p.GetCustomAttribute<ParameterAttribute>() is not null)
+             .ToArray());
+
+    private static PropertyInfo[] GetInjectProperties(Type type) =>
+        _injectCache.GetOrAdd(type, t =>
+            t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+             .Where(p => p.GetCustomAttribute<RazorInjectAttribute>() is not null)
+             .ToArray());
+
     private static void RegisterComponent(Type type, string template, RouteTable routeTable)
     {
+        // Pre-cache reflection metadata at registration time
+        var paramProps = GetParameterProperties(type);
+        var injectProps = GetInjectProperties(type);
+
         RequestDelegate handler = async ctx =>
         {
             var component = (Templates.ComponentBase)ActivatorUtilities.CreateInstance(ctx.RequestServices, type);
             component.HttpContext = ctx;
 
-            // Bind properties from Route and Query
-            foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            // Resolve @inject properties from DI
+            foreach (var prop in injectProps)
             {
-                if (prop.GetCustomAttribute<ParameterAttribute>() is null) continue;
+                var service = ctx.RequestServices.GetService(prop.PropertyType);
+                if (service is not null)
+                {
+                    // Initialize NavigationManager with the current context
+                    if (service is NavigationManager nav)
+                        nav.Initialize(ctx);
+                    prop.SetValue(component, service);
+                }
+            }
 
+            // Bind [Parameter] properties from Route and Query (using cached metadata)
+            foreach (var prop in paramProps)
+            {
                 if (ctx.Request.RouteValues.TryGetValue(prop.Name, out var rv))
                 {
                     prop.SetValue(component, Convert(rv, prop.PropertyType));
@@ -63,14 +96,11 @@ public static class ComponentScanner
                 }
             }
 
-            // Automatic Validation for routable components
-            foreach (var prop in type.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            // Automatic Validation for routable components (using cached metadata)
+            foreach (var prop in paramProps)
             {
-                if (prop.GetCustomAttribute<ParameterAttribute>() != null)
-                {
-                    var val = prop.GetValue(component);
-                    if (val != null) ModelValidator.Validate(val, component.ModelState);
-                }
+                var val = prop.GetValue(component);
+                if (val != null) ModelValidator.Validate(val, component.ModelState);
             }
             ModelValidator.Validate(component, component.ModelState);
 

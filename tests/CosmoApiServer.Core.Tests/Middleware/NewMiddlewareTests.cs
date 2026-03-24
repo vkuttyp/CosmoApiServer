@@ -26,7 +26,8 @@ public class NewMiddlewareTests
         Assert.Equal(500, ctx.Response.StatusCode);
         var body = JsonSerializer.Deserialize<JsonElement>(ctx.Response.Body);
         Assert.Equal("An unexpected error occurred.", body.GetProperty("message").GetString());
-        Assert.Equal("Test exception", body.GetProperty("detail").GetString());
+        // Security: exception details should NOT be exposed to clients
+        Assert.False(body.TryGetProperty("detail", out _));
     }
 
     [Fact]
