@@ -225,6 +225,27 @@ public sealed class HttpResponse
         }
     }
 
+    /// <summary>
+    /// Starts a chunked streaming response and executes the body writer.
+    /// </summary>
+    public async Task WriteStreamingResponseAsync(int statusCode, Func<Stream, Task> bodyWriter, CancellationToken ct = default)
+    {
+        this.StatusCode = statusCode;
+        if (BodyWriter is System.IO.Pipelines.PipeWriter pw)
+        {
+            await Http11Writer.WriteStreamingResponseAsync(pw, statusCode, bodyWriter, ct);
+            _hasStarted = true;
+            _headersWritten = true; // prevents EnsureHeadersWritten from appending duplicate headers
+        }
+        else
+        {
+            // Fallback for non-piped writers (e.g. testing)
+            using var ms = new MemoryStream();
+            await bodyWriter(ms);
+            Write(ms.ToArray());
+        }
+    }
+
     private bool _hasStarted;
     public bool IsStarted => _hasStarted || _body is not null;
     public bool IsBuffered => _body is not null;

@@ -1,0 +1,22 @@
+@page "/"
+@layout MainLayout
+
+<h1>Welcome to CosmoBlazorSample</h1>
+
+<p>This is a high-performance SSR-only Razor Components sample using CosmoApiServer.</p>
+
+<div class="alert alert-info">
+    Current Time: @DateTime.Now.ToLongTimeString()
+</div>
+
+<p>
+    Features demonstrated:
+    <ul>
+        <li><b>Zero-Allocation Rendering:</b> Uses <code>IBufferWriter&lt;byte&gt;</code> for the hot-path.</li>
+        <li><b>Layout Support:</b> <code>MainLayout.razor</code> is applied to all pages.</li>
+        <li><b>Dependency Injection:</b> Services are shared across components.</li>
+        <li><b>Form Validation:</b> Native <code>EditForm</code> support.</li>
+    </ul>
+</p>
+
+<p>Check out the sidebar to explore more features!</p>

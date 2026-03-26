@@ -1,0 +1,12 @@
+@using CosmoApiServer.Core.Templates
+
+<div class="alert @(CurrentTheme == "Dark" ? "alert-dark" : "alert-light") border">
+    <h5>Theme Information (Child Component)</h5>
+    <p>The current theme is: <strong>@CurrentTheme</strong></p>
+    <p>This value was received via <code>[CascadingParameter]</code> from the parent page.</p>
+</div>
+
+@code {
+    [Microsoft.AspNetCore.Components.CascadingParameterAttribute]
+    public string? CurrentTheme { get; set; }
+}

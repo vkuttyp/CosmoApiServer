@@ -1,0 +1,55 @@
+@page "/login"
+@layout MainLayout
+
+<h1>Login</h1>
+
+<p>This component demonstrates the <code>EditForm</code> system with validation.</p>
+
+<EditForm Model="@loginModel" OnValidSubmit="@HandleValidSubmit" Action="/login" CssClass="mt-4">
+    <div class="mb-3">
+        <label for="email" class="form-label">Email address</label>
+        <InputText id="email" @bind-Value="loginModel.Email" Name="Email" class="form-control" placeholder="Enter email" />
+        <ValidationMessage For="Email" />
+    </div>
+
+    <div class="mb-3">
+        <label for="password" class="form-label">Password</label>
+        <InputText id="password" @bind-Value="loginModel.Password" Name="Password" Type="password" class="form-control" placeholder="Password" />
+        <ValidationMessage For="Password" />
+    </div>
+
+    <div class="mb-3 form-check">
+        <InputCheckbox id="remember" @bind-Value="loginModel.RememberMe" Name="RememberMe" class="form-check-input" />
+        <label class="form-check-label" for="remember">Remember me</label>
+    </div>
+
+    <button type="submit" class="btn btn-primary">Submit</button>
+</EditForm>
+
+@if (isSubmitted)
+{
+    <div class="alert alert-success mt-3">
+        Form submitted successfully for @loginModel.Email!
+    </div>
+}
+
+@code {
+    private LoginModel loginModel = new();
+    private bool isSubmitted = false;
+
+    protected override ValueTask OnInitializedAsync()
+    {
+        // In SSR, we check if this is a POST request
+        if (HttpContext.Request.Method == CosmoApiServer.Core.Http.HttpMethod.POST)
+        {
+            isSubmitted = true;
+        }
+        return base.OnInitializedAsync();
+    }
+
+    private ValueTask HandleValidSubmit(CosmoApiServer.Core.Templates.EditContext context)
+    {
+        isSubmitted = true;
+        return ValueTask.CompletedTask;
+    }
+}

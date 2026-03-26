@@ -1,0 +1,50 @@
+@page "/cascading"
+@inherits Microsoft.AspNetCore.Components.ComponentBase
+@layout MainLayout
+
+<h1>Cascading Values</h1>
+
+<p>
+    This page demonstrates the <code>CascadingValue</code> system. 
+    It allows passing data down to all descendant components without having to pass it as a parameter at every level.
+</p>
+
+<div class="mb-4">
+    <label class="form-label">Select Theme:</label>
+    <div class="btn-group" role="group">
+        <a href="/cascading?theme=Light" class="btn btn-outline-secondary @(theme == "Light" ? "active" : "")">Light</a>
+        <a href="/cascading?theme=Dark" class="btn btn-outline-dark @(theme == "Dark" ? "active" : "")">Dark</a>
+    </div>
+</div>
+
+<Microsoft.AspNetCore.Components.CascadingValue TValue="string" Value="@theme">
+    <div class="p-4 border rounded @(theme == "Dark" ? "bg-secondary text-white" : "bg-white")">
+        <h4>Parent Container (@theme Theme)</h4>
+        <p>This container provides the cascading value.</p>
+        
+        <hr />
+        
+        <div class="row">
+            <div class="col-md-6">
+                <ThemeInfo />
+            </div>
+            <div class="col-md-6">
+                <ThemeInfo />
+            </div>
+        </div>
+    </div>
+</Microsoft.AspNetCore.Components.CascadingValue>
+
+@code {
+    private string theme = "Light";
+
+    protected override ValueTask OnInitializedAsync()
+    {
+        if (HttpContext.Request.Query.TryGetValue("theme", out var themeValues))
+        {
+            theme = themeValues.ToString() ?? "Light";
+            if (string.IsNullOrEmpty(theme)) theme = "Light";
+        }
+        return base.OnInitializedAsync();
+    }
+}

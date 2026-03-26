@@ -1,6 +1,7 @@
 using System;
 using System.Text;
 using System.Buffers;
+using System.Runtime.CompilerServices;
 using CosmoApiServer.Core.Http;
 
 namespace CosmoApiServer.Core.Templates;
@@ -12,16 +13,16 @@ namespace CosmoApiServer.Core.Templates;
 public sealed class ParameterAttribute : Attribute;
 
 /// <summary>
-/// A delegate that represents a piece of UI to be rendered.
+/// A delegate that represents a piece of UI to be rendered directly to a buffer.
 /// </summary>
-public delegate ValueTask RenderFragment(StringBuilder buffer);
+public delegate ValueTask RenderToBufferDelegate(IBufferWriter<byte> buffer);
 
 /// <summary>
 /// Base class for Razor Components in CosmoApiServer.
 /// </summary>
 public abstract class ComponentBase
 {
-    internal StringBuilder? _buffer;
+    internal IBufferWriter<byte>? _buffer;
     internal Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder? _activeBuilder;
 
     /// <summary>
@@ -35,7 +36,7 @@ public abstract class ComponentBase
     public HttpContext HttpContext { get; set; } = null!;
 
     /// <summary>
-    /// Collection of validation errors for the current request.
+    /// Dictionary of validation errors for the current component.
     /// </summary>
     public Dictionary<string, string> ModelState { get; set; } = new(StringComparer.OrdinalIgnoreCase);
 
@@ -43,6 +44,11 @@ public abstract class ComponentBase
     /// Gets a value indicating whether the model state is valid.
     /// </summary>
     public bool IsValid => ModelState.Count == 0;
+
+    /// <summary>
+    /// Manually adds an error to the model state.
+    /// </summary>
+    public void AddError(string fieldName, string errorMessage) => ModelState[fieldName] = errorMessage;
 
     /// <summary>
     /// Validates the given model using DataAnnotations.
@@ -53,6 +59,21 @@ public abstract class ComponentBase
         if (model is null) return true;
         return CosmoApiServer.Core.Controllers.ModelValidator.Validate(model, ModelState);
     }
+
+    /// <summary>
+    /// Validates an object against a Zod-like schema.
+    /// Errors are added to <see cref="ModelState"/>.
+    /// </summary>
+    protected bool TryValidate<T>(T model, ObjectSchema<T> schema) where T : new()
+    {
+        var result = schema.SafeParse(model);
+        if (!result.IsValid)
+        {
+            foreach (var err in result.Errors) ModelState[err.Key] = err.Value;
+        }
+        return result.IsValid;
+    }
+
 
     /// <summary>
     /// Lifecycle method called when the component is initialized.
@@ -68,7 +89,7 @@ public abstract class ComponentBase
     /// Executes the component and writes its output to the provided buffer.
     /// In .razor files, this will be overridden by the generated code.
     /// </summary>
-    protected virtual ValueTask BuildRenderTreeAsync(StringBuilder buffer) => ValueTask.CompletedTask;
+    protected virtual ValueTask BuildRenderTreeAsync(IBufferWriter<byte> buffer) => ValueTask.CompletedTask;
 
     /// <summary>
     /// Renders the component to a string.
@@ -76,7 +97,12 @@ public abstract class ComponentBase
     public async ValueTask<string> RenderAsync()
     {
         var isRoot = _buffer == null;
-        if (isRoot) _buffer = new StringBuilder();
+        HttpResponse.TestBufferWriter? rootBuffer = null;
+        if (isRoot)
+        {
+            rootBuffer = new HttpResponse.TestBufferWriter();
+            _buffer = rootBuffer;
+        }
         
         await OnInitializedAsync();
         await OnParametersSetAsync();
@@ -84,7 +110,7 @@ public abstract class ComponentBase
         
         if (isRoot)
         {
-            var result = _buffer!.ToString();
+            var result = Encoding.UTF8.GetString(rootBuffer!.ToArray());
             _buffer = null;
             return result;
         }
@@ -99,39 +125,54 @@ public abstract class ComponentBase
     {
         response.Headers["Content-Type"] = "text/html; charset=utf-8";
         
-        var html = await RenderAsync();
-        response.WriteText(html, "text/html; charset=utf-8");
+        if (response.BodyWriter != null)
+        {
+            _buffer = new ResponseBufferWriter(response);
+            await OnInitializedAsync();
+            await OnParametersSetAsync();
+            await BuildRenderTreeAsync(_buffer);
+            _buffer = null;
+            response.End();
+        }
+        else
+        {
+            var html = await RenderAsync();
+            response.WriteText(html, "text/html; charset=utf-8");
+        }
     }
 
     // ── Rendering methods ─────────────────────────────────────────────
 
-    protected void WriteLiteral(string? value) => _buffer?.Append(value);
+    protected void WriteLiteral(string? value)
+    {
+        if (value == null || _buffer == null) return;
+        _buffer.Write(Utf8LiteralCache.GetEncoded(value));
+    }
 
-    protected void Write(object? value)
+    protected async ValueTask Write(object? value)
     {
         if (value == null || _buffer == null) return;
 
         if (value is HtmlString html)
-            _buffer.Append(html.ToString());
-        else if (value is RenderFragment fragment)
         {
-            fragment(_buffer).GetAwaiter().GetResult();
+            _buffer.Write(Utf8LiteralCache.GetEncoded(html.ToString()));
+        }
+        else if (value is RenderToBufferDelegate fragment)
+        {
+            await fragment(_buffer);
         }
         else
         {
-            var writer = new StringBuilderBufferWriter(_buffer);
-            HtmlEncoder.EncodeToWriter(value, writer);
+            await HtmlEncoder.EncodeToWriterAsync(value, _buffer);
         }
     }
 
-    protected void Write(string? value)
+    protected async ValueTask Write(string? value)
     {
         if (value == null || _buffer == null) return;
-        var writer = new StringBuilderBufferWriter(_buffer);
-        HtmlEncoder.EncodeToWriter(value, writer);
+        HtmlEncoder.EncodeToWriter(value, _buffer);
     }
 
-    // Support for component nesting
     protected async ValueTask RenderComponentAsync<TComponent>(Action<TComponent>? configure = null) 
         where TComponent : ComponentBase, new()
     {
@@ -140,10 +181,13 @@ public abstract class ComponentBase
         component.Parent = this;
         component._buffer = _buffer;
         configure?.Invoke(component);
-        await component.RenderAsync();
+        
+        await component.OnInitializedAsync();
+        await component.OnParametersSetAsync();
+        await component.BuildRenderTreeAsync(_buffer!);
     }
 
-    private sealed class StringBuilderBufferWriter(StringBuilder sb) : IBufferWriter<byte>
+    private sealed class ResponseBufferWriter(HttpResponse response) : IBufferWriter<byte>
     {
         private byte[]? _pending;
 
@@ -151,23 +195,24 @@ public abstract class ComponentBase
         {
             if (_pending != null && count > 0)
             {
-                sb.Append(Encoding.UTF8.GetString(_pending, 0, count));
+                response.Write(_pending.AsSpan(0, count));
+                ArrayPool<byte>.Shared.Return(_pending);
                 _pending = null;
             }
         }
 
         public Memory<byte> GetMemory(int sizeHint = 0)
         {
-            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            _pending = ArrayPool<byte>.Shared.Rent(sizeHint > 0 ? sizeHint : 4096);
             return _pending;
         }
 
         public Span<byte> GetSpan(int sizeHint = 0)
         {
-            _pending = new byte[sizeHint > 0 ? sizeHint : 4096];
+            _pending = ArrayPool<byte>.Shared.Rent(sizeHint > 0 ? sizeHint : 4096);
             return _pending;
         }
 
-        public void Write(ReadOnlySpan<byte> value) => sb.Append(Encoding.UTF8.GetString(value));
+        public void Write(ReadOnlySpan<byte> value) => response.Write(value);
     }
 }

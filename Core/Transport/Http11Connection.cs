@@ -25,17 +25,25 @@ internal static class Http11Connection
         IServiceProvider services,
         int maxBodySize,
         bool enableHttp2,
+        string? remoteIp,
         CancellationToken ct)
     {
-        // Bidirectional pipe: socket fills writer end; we read from reader end.
+        // Linked CTS lets either side cancel the other.
+        // Required for Connection: close streaming: ProcessAsync finishes and needs to unblock
+        // FillPipeAsync which is blocked on stream.ReadAsync waiting for client data.
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
         var pipe = new Pipe(new PipeOptions(
             minimumSegmentSize: 4096,
             pauseWriterThreshold: maxBodySize + 4096,
             resumeWriterThreshold: maxBodySize / 2));
 
-        var fillTask    = FillPipeAsync(stream, pipe.Writer, ct);
-        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, ct);
+        var fillTask    = FillPipeAsync(stream, pipe.Writer, cts.Token);
+        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token);
 
+        // When either side finishes (client disconnect or Connection: close), cancel the other.
+        await Task.WhenAny(fillTask.AsTask(), processTask.AsTask());
+        cts.Cancel();
         await Task.WhenAll(fillTask.AsTask(), processTask.AsTask());
     }
 
@@ -74,6 +82,7 @@ internal static class Http11Connection
         RequestDelegate pipeline,
         IServiceProvider services,
         bool enableHttp2,
+        string? remoteIp,
         CancellationToken ct)
     {
         // Create a PipeWriter for the outbound stream (response side)
@@ -130,7 +139,7 @@ internal static class Http11Connection
 
                 // Rent and build HttpContext from parsed request
                 var httpContext = HttpContextPool.Rent();
-                await PopulateContextAsync(httpContext, req, reader, services, ct);
+                await PopulateContextAsync(httpContext, req, reader, services, remoteIp, ct);
                 
                 httpContext.Items["__RawStream"] = stream;
                 httpContext.Response.BodyWriter = writer;
@@ -183,8 +192,11 @@ internal static class Http11Connection
 
                 // Read state from context BEFORE returning to pool to avoid use-after-return
                 bool isWebSocketUpgrade = httpContext.Items.TryGetValue("__WebSocketUpgrade", out var upgrade) && upgrade is true;
-                bool isConnectionClose = httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&
-                    conn.Equals("close", StringComparison.OrdinalIgnoreCase);
+                bool isConnectionClose =
+                    (httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&
+                     conn.Equals("close", StringComparison.OrdinalIgnoreCase)) ||
+                    (httpContext.Response.Headers.TryGetValue("Connection", out var respConn) &&
+                     respConn.Equals("close", StringComparison.OrdinalIgnoreCase));
 
                 // Return to pool AFTER reading all needed state
                 HttpContextPool.Return(httpContext);
@@ -215,7 +227,7 @@ internal static class Http11Connection
 
     // ── Request builder ───────────────────────────────────────────────────
 
-    private static async Task PopulateContextAsync(HttpContext ctx, ParsedRequest req, PipeReader reader, IServiceProvider services, CancellationToken ct)
+    private static async Task PopulateContextAsync(HttpContext ctx, ParsedRequest req, PipeReader reader, IServiceProvider services, string? remoteIp, CancellationToken ct)
     {
         // Parse path + query
         string path = req.RawTarget, queryString = string.Empty;
@@ -234,16 +246,30 @@ internal static class Http11Connection
         // Lazy header dict (avoids copy when headers not accessed)
         var headers = new ParsedHeaderDict(req.Headers);
 
-        // Query dict (only allocate if present)
-        var query = queryString.Length == 0
-            ? (IReadOnlyDictionary<string, string>)ParsedHeaderDict.Empty
-            : ParseQuery(queryString);
-
         ctx.Request.Method = method;
         ctx.Request.Path = path;
         ctx.Request.QueryString = queryString;
         ctx.Request.Headers = headers;
-        ctx.Request.Query = query;
+
+        // Query dict (only allocate/reuse if present)
+        if (queryString.Length > 0)
+        {
+            if (ctx.Request.Query is not Dictionary<string, string> qd || ReferenceEquals(qd, ParsedHeaderDict.Empty))
+            {
+                var newQd = new Dictionary<string, string>(4, StringComparer.OrdinalIgnoreCase);
+                ParseQuery(queryString, newQd);
+                ctx.Request.Query = newQd;
+            }
+            else
+            {
+                qd.Clear();
+                ParseQuery(queryString, qd);
+            }
+        }
+        else
+        {
+            ctx.Request.Query = ParsedHeaderDict.Empty;
+        }
         
         ctx.Request.ContentLength = req.ContentLength;
         ctx.Request.ContentType = req.ContentType;
@@ -280,8 +306,11 @@ internal static class Http11Connection
             ctx.Request.BodyReader = null;
         }
 
+        if (remoteIp is not null)
+            ctx.Items["__RemoteIP"] = remoteIp;
+
         ctx.Initialize(services, ct);
-        
+
         var scope = new LazyScopeProvider(services);
         ctx._disposeScope = scope;
     }
@@ -299,9 +328,8 @@ internal static class Http11Connection
         }
     }
 
-    private static Dictionary<string, string> ParseQuery(string queryString)
+    private static void ParseQuery(string queryString, IDictionary<string, string> result)
     {
-        var result = new Dictionary<string, string>(4, StringComparer.OrdinalIgnoreCase);
         var span = queryString.AsSpan();
         while (!span.IsEmpty)
         {
@@ -316,7 +344,6 @@ internal static class Http11Connection
                 result[WebUtility.UrlDecode(pair[..eq].ToString())] =
                     WebUtility.UrlDecode(pair[(eq + 1)..].ToString());
         }
-        return result;
     }
 
     private static bool StartsWithPreface(ReadOnlySequence<byte> buffer)
@@ -367,7 +394,7 @@ internal static class Http11Connection
             
             foreach (var h in source)
             {
-                if (h.Name.Equals(key, StringComparison.OrdinalIgnoreCase))
+                if (h.IsName(key))
                 { value = h.Value; return true; }
             }
             value = string.Empty;

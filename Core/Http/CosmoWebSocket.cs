@@ -58,6 +58,70 @@ public sealed class CosmoWebSocket(Stream stream) : IDisposable
         await _stream.FlushAsync();
     }
 
+    public async Task<WebSocketReceiveResult> ReceiveAsync(Memory<byte> buffer, CancellationToken cancellationToken)
+    {
+        if (IsClosed) throw new InvalidOperationException("WebSocket is closed.");
+
+        byte[] header = new byte[2];
+        int read = await _stream.ReadAsync(header.AsMemory(0, 2), cancellationToken);
+        if (read == 0) { IsClosed = true; return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true); }
+
+        bool fin = (header[0] & 0x80) != 0;
+        int opcode = header[0] & 0x0F;
+        bool masked = (header[1] & 0x80) != 0;
+        long payloadLen = header[1] & 0x7F;
+
+        if (opcode == 0x08) // Close
+        {
+            IsClosed = true;
+            return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+        }
+
+        if (payloadLen == 126)
+        {
+            byte[] extendedLen = new byte[2];
+            await _stream.ReadExactlyAsync(extendedLen.AsMemory(), cancellationToken);
+            payloadLen = (extendedLen[0] << 8) | extendedLen[1];
+        }
+        else if (payloadLen == 127)
+        {
+            byte[] extendedLen = new byte[8];
+            await _stream.ReadExactlyAsync(extendedLen.AsMemory(), cancellationToken);
+            payloadLen = 0;
+            for (int i = 0; i < 8; i++) payloadLen = (payloadLen << 8) | extendedLen[i];
+        }
+
+        // RFC 6455 §5.1: server MUST close the connection if a client sends an unmasked frame
+        if (!masked)
+        {
+            IsClosed = true;
+            // Close frame with status 1002 (Protocol Error)
+            await _stream.WriteAsync(new byte[] { 0x88, 0x02, 0x03, 0xEA }, cancellationToken);
+            await _stream.FlushAsync(cancellationToken);
+            return new WebSocketReceiveResult(0, WebSocketMessageType.Close, true);
+        }
+
+        var mask = new byte[4];
+        await _stream.ReadExactlyAsync(mask.AsMemory(), cancellationToken);
+
+        int bytesToRead = (int)Math.Min(payloadLen, buffer.Length);
+        var targetBuffer = buffer.Span[..bytesToRead];
+        
+        int totalRead = 0;
+        while (totalRead < bytesToRead)
+        {
+            int r = await _stream.ReadAsync(buffer.Slice(totalRead, bytesToRead - totalRead), cancellationToken);
+            if (r == 0) break;
+            totalRead += r;
+        }
+
+        for (int i = 0; i < totalRead; i++)
+            buffer.Span[i] = (byte)(buffer.Span[i] ^ mask[i % 4]);
+
+        var type = (opcode == 0x02 || opcode == 0x00) ? WebSocketMessageType.Binary : WebSocketMessageType.Text;
+        return new WebSocketReceiveResult(totalRead, type, fin);
+    }
+
     public async Task CloseAsync(WebSocketCloseStatus status, string? statusDescription)
     {
         if (IsClosed) return;

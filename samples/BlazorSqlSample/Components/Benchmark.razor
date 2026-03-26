@@ -1,0 +1,42 @@
+@page "/bench"
+@using CosmoApiServer.Core.Templates
+
+<table>
+    <thead>
+        <tr>
+            <th>ID</th>
+            <th>Name</th>
+            <th>Value</th>
+            <th>Date</th>
+        </tr>
+    </thead>
+    <tbody>
+        @foreach (var item in Items)
+        {
+            <tr>
+                <td>@item.Id</td>
+                <td>@item.Name</td>
+                <td>@item.Value</td>
+                <td>@item.Date</td>
+            </tr>
+        }
+    </tbody>
+</table>
+
+@code {
+    private List<Item> Items = Enumerable.Range(1, 100).Select(i => new Item 
+    { 
+        Id = i, 
+        Name = $"Item {i}", 
+        Value = i * 1.23, 
+        Date = DateTime.UtcNow.AddDays(i).ToString("o") 
+    }).ToList();
+
+    public class Item
+    {
+        public int Id { get; set; }
+        public string Name { get; set; } = "";
+        public double Value { get; set; }
+        public string Date { get; set; } = "";
+    }
+}

@@ -1,0 +1,56 @@
+<div class="card" style="width: @Width;">
+    @if (Header != null || HeaderContent != null)
+    {
+        <div class="card-header">
+            @if (HeaderContent != null) { @HeaderContent } else { @Header }
+        </div>
+    }
+    <div class="card-body">
+        @if (Title != null)
+        {
+            if (Link != null)
+            {
+                <h5 class="card-title"><a href="@Link" style="text-decoration: none; color: inherit;">@Title</a></h5>
+            }
+            else
+            {
+                <h5 class="card-title">@Title</h5>
+            }
+        }
+        <div class="card-text">
+            @ChildContent
+        </div>
+    </div>
+    @if (Footer != null || FooterContent != null)
+    {
+        <div class="card-footer text-muted">
+            @if (FooterContent != null) { @FooterContent } else { @Footer }
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter]
+    public string? Title { get; set; }
+
+    [Parameter]
+    public string? Link { get; set; }
+
+    [Parameter]
+    public string Width { get; set; } = "18rem";
+
+    [Parameter]
+    public RenderFragment ChildContent { get; set; } = default!;
+
+    [Parameter]
+    public string? Header { get; set; }
+
+    [Parameter]
+    public RenderFragment? HeaderContent { get; set; }
+
+    [Parameter]
+    public string? Footer { get; set; }
+
+    [Parameter]
+    public RenderFragment? FooterContent { get; set; }
+}

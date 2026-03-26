@@ -1,100 +1,521 @@
-using System.Net;
+using System.Buffers;
 using System.Runtime.CompilerServices;
-using System.Text;
 using CosmoApiServer.Core.Http;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.Rendering;
 
-namespace CosmoApiServer.Core.Templates;
-
-// ── EventCallback ────────────────────────────────────────────────────────────
-
-/// <summary>
-/// A callback that can be used by parent components to respond to child events.
-/// </summary>
-public readonly struct EventCallback
+namespace Microsoft.AspNetCore.Components
 {
-    private readonly Func<ValueTask>? _delegate;
+    // ── EventCallback ────────────────────────────────────────────────────────────
 
-    public EventCallback(Func<ValueTask>? callback) => _delegate = callback;
-    public EventCallback(Action? callback) => _delegate = callback is not null ? () => { callback(); return ValueTask.CompletedTask; } : null;
-
-    public bool HasDelegate => _delegate is not null;
-
-    public ValueTask InvokeAsync() => _delegate?.Invoke() ?? ValueTask.CompletedTask;
-
-    public static readonly EventCallback Empty = new((Func<ValueTask>?)null);
-
-    public static implicit operator EventCallback(Func<ValueTask> callback) => new(callback);
-    public static implicit operator EventCallback(Action callback) => new(callback);
-}
-
-/// <summary>
-/// A callback that carries a value, used by parent components to respond to child events.
-/// </summary>
-public readonly struct EventCallback<TValue>
-{
-    private readonly Func<TValue, ValueTask>? _delegate;
-
-    public EventCallback(Func<TValue, ValueTask>? callback) => _delegate = callback;
-    public EventCallback(Action<TValue>? callback) => _delegate = callback is not null ? (v) => { callback(v); return ValueTask.CompletedTask; } : null;
-
-    public bool HasDelegate => _delegate is not null;
-
-    public ValueTask InvokeAsync(TValue arg) => _delegate?.Invoke(arg) ?? ValueTask.CompletedTask;
-
-    public static readonly EventCallback<TValue> Empty = new((Func<TValue, ValueTask>?)null);
-
-    public static implicit operator EventCallback<TValue>(Func<TValue, ValueTask> callback) => new(callback);
-    public static implicit operator EventCallback<TValue>(Action<TValue> callback) => new(callback);
-}
-
-/// <summary>
-/// Factory for creating EventCallback instances. Used by Razor-generated code.
-/// </summary>
-public static class EventCallbackFactory
-{
-    public static EventCallback Create(object receiver, Action callback) => new(callback);
-    public static EventCallback Create(object receiver, Func<ValueTask> callback) => new(callback);
-    public static EventCallback<TValue> Create<TValue>(object receiver, Action<TValue> callback) => new(callback);
-    public static EventCallback<TValue> Create<TValue>(object receiver, Func<TValue, ValueTask> callback) => new(callback);
-}
-
-// ── CascadingValue ───────────────────────────────────────────────────────────
-
-/// <summary>
-/// Supplies a cascading value to all descendant components.
-/// Usage in .razor: &lt;CascadingValue Value="@myValue"&gt;@ChildContent&lt;/CascadingValue&gt;
-/// </summary>
-public class CascadingValue<TValue> : ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public TValue? Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Name { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
-
-    /// <summary>Internal storage for the cascading value, accessible by child components.</summary>
-    internal Dictionary<Type, object?> CascadingValues { get; } = new();
-
-    protected override async ValueTask BuildRenderTreeAsync(StringBuilder buffer)
+    /// <summary>
+    /// A callback that can be used by parent components to respond to child events.
+    /// </summary>
+    public readonly struct EventCallback
     {
-        // Store the value so child components can find it via FindCascadingValue
-        if (Value is not null)
+        private readonly Func<ValueTask>? _delegate;
+
+        public EventCallback(Func<ValueTask>? callback) => _delegate = callback;
+        public EventCallback(Action? callback) => _delegate = callback is not null ? () => { callback(); return ValueTask.CompletedTask; } : null;
+
+        public bool HasDelegate => _delegate is not null;
+
+        public ValueTask InvokeAsync() => _delegate?.Invoke() ?? ValueTask.CompletedTask;
+        public ValueTask InvokeAsync(object? arg) => InvokeAsync();
+
+        public static readonly EventCallback Empty = new((Func<ValueTask>?)null);
+        public static readonly EventCallbackFactory Factory = new();
+
+        public static implicit operator EventCallback(Func<ValueTask> callback) => new(callback);
+        public static implicit operator EventCallback(Action callback) => new(callback);
+    }
+
+    /// <summary>
+    /// A callback that carries a value, used by parent components to respond to child events.
+    /// </summary>
+    public readonly struct EventCallback<TValue>
+    {
+        private readonly Func<TValue, ValueTask>? _delegate;
+
+        public EventCallback(Func<TValue, ValueTask>? callback) => _delegate = callback;
+        public EventCallback(Action<TValue>? callback) => _delegate = callback is not null ? (v) => { callback(v); return ValueTask.CompletedTask; } : null;
+
+        public bool HasDelegate => _delegate is not null;
+
+        public ValueTask InvokeAsync(TValue arg) => _delegate?.Invoke(arg) ?? ValueTask.CompletedTask;
+
+        public static readonly EventCallback<TValue> Empty = new((Func<TValue, ValueTask>?)null);
+
+        public static implicit operator EventCallback<TValue>(Func<TValue, ValueTask> callback) => new(callback);
+        public static implicit operator EventCallback<TValue>(Action<TValue> callback) => new(callback);
+    }
+
+    /// <summary>
+    /// Factory for creating EventCallback instances. Used by Razor-generated code.
+    /// </summary>
+    public sealed class EventCallbackFactory
+    {
+        public EventCallback Create(object receiver, Action callback) => new EventCallback(callback);
+        public EventCallback Create(object receiver, Func<ValueTask> callback) => new EventCallback(callback);
+        public EventCallback<TValue> Create<TValue>(object receiver, Action callback) => new EventCallback<TValue>(_ => { callback(); return ValueTask.CompletedTask; });
+        public EventCallback<TValue> Create<TValue>(object receiver, Action<TValue> callback) => new EventCallback<TValue>(callback);
+        public EventCallback<TValue> Create<TValue>(object receiver, Func<ValueTask> callback) => new EventCallback<TValue>(_ => callback());
+        public EventCallback<TValue> Create<TValue>(object receiver, Func<TValue, ValueTask> callback) => new EventCallback<TValue>(callback);
+    }
+
+    // ── CascadingValue ───────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Supplies a cascading value to all descendant components.
+    /// Usage in .razor: &lt;CascadingValue Value="@myValue"&gt;@ChildContent&lt;/CascadingValue&gt;
+    /// </summary>
+    public class CascadingValue<TValue> : CosmoApiServer.Core.Templates.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Name { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
+
+        /// <summary>Internal storage for the cascading value, accessible by child components.</summary>
+        internal Dictionary<Type, object?> CascadingValues { get; } = new();
+
+        protected override async ValueTask BuildRenderTreeAsync(IBufferWriter<byte> buffer)
         {
-            CascadingValues[typeof(TValue)] = Value;
+            // Store the value so child components can find it via FindCascadingValue
+            if (Value is not null)
+            {
+                CascadingValues[typeof(TValue)] = Value;
+            }
+
+            if (ChildContent is not null && _activeBuilder is not null)
+            {
+                ChildContent(_activeBuilder);
+                await _activeBuilder.ProcessAsync();
+            }
+        }
+    }
+
+    // ── ValidationSummary ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Displays all validation errors as a list.
+    /// Usage: &lt;ValidationSummary /&gt;
+    /// </summary>
+    public class ValidationSummary : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = "validation-errors";
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string ListCssClass { get; set; } = "text-danger";
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            var errors = FindModelState();
+            if (errors is null || errors.Count == 0) return;
+
+            builder.OpenElement(0, "div");
+            builder.AddAttribute(1, "class", CssClass);
+            builder.OpenElement(2, "ul");
+            builder.AddAttribute(3, "class", ListCssClass);
+
+            int seq = 10;
+            foreach (var kvp in errors)
+            {
+                builder.OpenElement(seq++, "li");
+                builder.AddContent(seq++, kvp.Value);
+                builder.CloseElement();
+            }
+
+            builder.CloseElement(); // ul
+            builder.CloseElement(); // div
         }
 
-        if (ChildContent is not null && _activeBuilder is not null)
+        private Dictionary<string, string>? FindModelState()
         {
-            await ChildContent(_activeBuilder);
-            await _activeBuilder.ProcessAsync();
+            var current = Parent;
+            while (current is not null)
+            {
+                if (current.ModelState.Count > 0) return current.ModelState;
+                if (current is EditForm form && form.Context?.ValidationMessages.Count > 0)
+                    return form.Context.ValidationMessages;
+                current = current.Parent;
+            }
+            return null;
+        }
+    }
+
+    // ── EditForm ─────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders a form that validates a model on submission.
+    /// Analogous to Blazor's &lt;EditForm&gt; component.
+    /// </summary>
+    public class EditForm : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public object? Model { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public CosmoApiServer.Core.Templates.EditContext? EditContext { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Action { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Method { get; set; } = "post";
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? CssClass { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<CosmoApiServer.Core.Templates.EditContext> OnValidSubmit { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<CosmoApiServer.Core.Templates.EditContext> OnInvalidSubmit { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public Microsoft.AspNetCore.Components.RenderFragment<CosmoApiServer.Core.Templates.EditContext>? ChildContent { get; set; }
+
+        /// <summary>The edit context for the form, available to child input components.</summary>
+        public CosmoApiServer.Core.Templates.EditContext Context { get; private set; } = null!;
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            Context = EditContext ?? (Model is not null ? new CosmoApiServer.Core.Templates.EditContext(Model) : new CosmoApiServer.Core.Templates.EditContext(new object()));
+
+            // In SSR, if it's a POST and we have a valid model, trigger callbacks
+            if (HttpContext?.Request.Method == CosmoApiServer.Core.Http.HttpMethod.POST)
+            {
+                if (Context.Validate())
+                {
+                    OnValidSubmit.InvokeAsync(Context);
+                }
+                else
+                {
+                    OnInvalidSubmit.InvokeAsync(Context);
+                }
+            }
+
+            builder.OpenElement(0, "form");
+            builder.AddAttribute(1, "method", Method);
+            if (Action is not null)
+                builder.AddAttribute(2, "action", Action);
+            if (CssClass is not null)
+                builder.AddAttribute(3, "class", CssClass);
+
+            if (ChildContent is not null)
+                ChildContent(Context)(builder);
+
+            builder.CloseElement();
+        }
+    }
+
+    // ── InputText ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an &lt;input type="text"&gt; bound to a model property.
+    /// </summary>
+    public class InputText : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<string> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Placeholder { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Type { get; set; } = "text";
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Required { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public Dictionary<string, object>? AdditionalAttributes { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", Type);
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
+            builder.AddAttribute(4, "value", Value ?? string.Empty);
+            if (!string.IsNullOrEmpty(Placeholder)) builder.AddAttribute(5, "placeholder", Placeholder);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(6, "class", CssClass);
+            if (Disabled) builder.AddAttribute(7, "disabled", true);
+            if (Required) builder.AddAttribute(8, "required", true);
+
+            if (AdditionalAttributes is not null)
+            {
+                int seq = 10;
+                foreach (var kvp in AdditionalAttributes)
+                    builder.AddAttribute(seq++, kvp.Key, kvp.Value);
+            }
+
+            builder.CloseElement();
+        }
+    }
+
+    // ── InputNumber ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an &lt;input type="number"&gt; bound to a numeric model property.
+    /// </summary>
+    public class InputNumber<TValue> : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<TValue> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Min { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Max { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Step { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Required { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "number");
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
+            builder.AddAttribute(4, "value", Value?.ToString() ?? string.Empty);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
+            if (Min is not null) builder.AddAttribute(6, "min", Min);
+            if (Max is not null) builder.AddAttribute(7, "max", Max);
+            if (Step is not null) builder.AddAttribute(8, "step", Step);
+            if (Disabled) builder.AddAttribute(9, "disabled", true);
+            if (Required) builder.AddAttribute(10, "required", true);
+            builder.CloseElement();
+        }
+    }
+
+    // ── InputSelect ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders a &lt;select&gt; element bound to a model property.
+    /// </summary>
+    public class InputSelect<TValue> : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<TValue> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Required { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "select");
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(1, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(2, "name", Name);
+            builder.AddAttribute(3, "value", Value?.ToString() ?? string.Empty);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(4, "class", CssClass);
+            if (Disabled) builder.AddAttribute(5, "disabled", true);
+            if (Required) builder.AddAttribute(6, "required", true);
+
+            if (ChildContent is not null)
+                builder.AddContent(7, ChildContent);
+
+            builder.CloseElement();
+        }
+    }
+
+    // ── InputTextArea ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders a &lt;textarea&gt; element bound to a model property.
+    /// </summary>
+    public class InputTextArea : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<string> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Placeholder { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public int Rows { get; set; } = 3;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Required { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "textarea");
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(1, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(2, "name", Name);
+            if (!string.IsNullOrEmpty(Placeholder)) builder.AddAttribute(3, "placeholder", Placeholder);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(4, "class", CssClass);
+            builder.AddAttribute(5, "rows", Rows.ToString());
+            if (Disabled) builder.AddAttribute(6, "disabled", true);
+            if (Required) builder.AddAttribute(7, "required", true);
+            builder.AddContent(8, Value ?? string.Empty);
+            builder.CloseElement();
+        }
+    }
+
+    // ── InputCheckbox ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an &lt;input type="checkbox"&gt; bound to a boolean model property.
+    /// </summary>
+    public class InputCheckbox : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<bool> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "checkbox");
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
+            builder.AddAttribute(4, "checked", Value);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
+            if (Disabled) builder.AddAttribute(6, "disabled", true);
+            // Hidden field for form submission (unchecked checkboxes don't submit)
+            builder.CloseElement();
+            if (!string.IsNullOrEmpty(Name))
+            {
+                builder.OpenElement(7, "input");
+                builder.AddAttribute(8, "type", "hidden");
+                builder.AddAttribute(9, "name", Name);
+                builder.AddAttribute(10, "value", Value ? "true" : "false");
+                builder.CloseElement();
+            }
+        }
+    }
+
+    // ── ValidationMessage ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Displays a validation message for a specific field.
+    /// Usage: &lt;ValidationMessage For="FieldName" /&gt;
+    /// </summary>
+    public class ValidationMessage : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string For { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = "validation-message text-danger";
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            // Walk up the parent chain to find a ModelState or EditContext
+            var errors = FindModelState();
+            if (errors is null || !errors.TryGetValue(For, out var message)) return;
+
+            builder.OpenElement(0, "span");
+            builder.AddAttribute(1, "class", CssClass);
+            builder.AddContent(2, message);
+            builder.CloseElement();
+        }
+
+        private Dictionary<string, string>? FindModelState()
+        {
+            var current = Parent;
+            while (current is not null)
+            {
+                if (current.ModelState.Count > 0) return current.ModelState;
+                if (current is EditForm form && form.Context?.ValidationMessages.Count > 0)
+                    return form.Context.ValidationMessages;
+                current = current.Parent;
+            }
+            return null;
         }
     }
 }
+
+namespace CosmoApiServer.Core.Templates
+{
 
 // ── FieldIdentifier ──────────────────────────────────────────────────────────
 
@@ -384,7 +805,7 @@ public sealed class EditContext
     {
         OnValidationRequested?.Invoke();
         ValidationMessages.Clear();
-        var result = Controllers.ModelValidator.Validate(Model, ValidationMessages);
+        var result = CosmoApiServer.Core.Controllers.ModelValidator.Validate(Model, ValidationMessages);
 
         // Update field states with validation results
         foreach (var kvp in _fieldStates)
@@ -453,407 +874,6 @@ public sealed class EditContext
     }
 }
 
-// ── EditForm ─────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders a form that validates a model on submission.
-/// Analogous to Blazor's &lt;EditForm&gt; component.
-/// </summary>
-public class EditForm : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public object? Model { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EditContext? EditContext { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Action { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Method { get; set; } = "post";
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? CssClass { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<EditContext> OnValidSubmit { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<EditContext> OnInvalidSubmit { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
-
-    /// <summary>The edit context for the form, available to child input components.</summary>
-    public EditContext Context { get; private set; } = null!;
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        Context = EditContext ?? (Model is not null ? new EditContext(Model) : new EditContext(new object()));
-
-        builder.OpenElement(0, "form");
-        builder.AddAttribute(1, "method", Method);
-        if (Action is not null)
-            builder.AddAttribute(2, "action", Action);
-        if (CssClass is not null)
-            builder.AddAttribute(3, "class", CssClass);
-
-        if (ChildContent is not null)
-            builder.AddContent(4, ChildContent);
-
-        builder.CloseElement();
-    }
-}
-
-// ── InputText ────────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders an &lt;input type="text"&gt; bound to a model property.
-/// </summary>
-public class InputText : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<string> ValueChanged { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Id { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Name { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Placeholder { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Type { get; set; } = "text";
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Disabled { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Required { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public Dictionary<string, object>? AdditionalAttributes { get; set; }
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "input");
-        builder.AddAttribute(1, "type", Type);
-        if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
-        if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
-        builder.AddAttribute(4, "value", Value ?? string.Empty);
-        if (!string.IsNullOrEmpty(Placeholder)) builder.AddAttribute(5, "placeholder", Placeholder);
-        if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(6, "class", CssClass);
-        if (Disabled) builder.AddAttribute(7, "disabled", true);
-        if (Required) builder.AddAttribute(8, "required", true);
-
-        if (AdditionalAttributes is not null)
-        {
-            int seq = 10;
-            foreach (var kvp in AdditionalAttributes)
-                builder.AddAttribute(seq++, kvp.Key, kvp.Value);
-        }
-
-        builder.CloseElement();
-    }
-}
-
-// ── InputNumber ──────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders an &lt;input type="number"&gt; bound to a numeric model property.
-/// </summary>
-public class InputNumber<TValue> : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public TValue? Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<TValue> ValueChanged { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Id { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Name { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Min { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Max { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Step { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Disabled { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Required { get; set; }
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "input");
-        builder.AddAttribute(1, "type", "number");
-        if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
-        if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
-        builder.AddAttribute(4, "value", Value?.ToString() ?? string.Empty);
-        if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
-        if (Min is not null) builder.AddAttribute(6, "min", Min);
-        if (Max is not null) builder.AddAttribute(7, "max", Max);
-        if (Step is not null) builder.AddAttribute(8, "step", Step);
-        if (Disabled) builder.AddAttribute(9, "disabled", true);
-        if (Required) builder.AddAttribute(10, "required", true);
-        builder.CloseElement();
-    }
-}
-
-// ── InputSelect ──────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders a &lt;select&gt; element bound to a model property.
-/// </summary>
-public class InputSelect<TValue> : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public TValue? Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<TValue> ValueChanged { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Id { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Name { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Disabled { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Required { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "select");
-        if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(1, "id", Id);
-        if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(2, "name", Name);
-        builder.AddAttribute(3, "value", Value?.ToString() ?? string.Empty);
-        if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(4, "class", CssClass);
-        if (Disabled) builder.AddAttribute(5, "disabled", true);
-        if (Required) builder.AddAttribute(6, "required", true);
-
-        if (ChildContent is not null)
-            builder.AddContent(7, ChildContent);
-
-        builder.CloseElement();
-    }
-}
-
-// ── InputTextArea ────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders a &lt;textarea&gt; element bound to a model property.
-/// </summary>
-public class InputTextArea : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<string> ValueChanged { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Id { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Name { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string? Placeholder { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public int Rows { get; set; } = 3;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Disabled { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Required { get; set; }
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "textarea");
-        if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(1, "id", Id);
-        if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(2, "name", Name);
-        if (!string.IsNullOrEmpty(Placeholder)) builder.AddAttribute(3, "placeholder", Placeholder);
-        if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(4, "class", CssClass);
-        builder.AddAttribute(5, "rows", Rows.ToString());
-        if (Disabled) builder.AddAttribute(6, "disabled", true);
-        if (Required) builder.AddAttribute(7, "required", true);
-        builder.AddContent(8, Value ?? string.Empty);
-        builder.CloseElement();
-    }
-}
-
-// ── InputCheckbox ────────────────────────────────────────────────────────────
-
-/// <summary>
-/// Renders an &lt;input type="checkbox"&gt; bound to a boolean model property.
-/// </summary>
-public class InputCheckbox : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Value { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public EventCallback<bool> ValueChanged { get; set; }
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Id { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string Name { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public bool Disabled { get; set; }
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        builder.OpenElement(0, "input");
-        builder.AddAttribute(1, "type", "checkbox");
-        if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
-        if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
-        builder.AddAttribute(4, "checked", Value);
-        if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
-        if (Disabled) builder.AddAttribute(6, "disabled", true);
-        // Hidden field for form submission (unchecked checkboxes don't submit)
-        builder.CloseElement();
-        if (!string.IsNullOrEmpty(Name))
-        {
-            builder.OpenElement(7, "input");
-            builder.AddAttribute(8, "type", "hidden");
-            builder.AddAttribute(9, "name", Name);
-            builder.AddAttribute(10, "value", Value ? "true" : "false");
-            builder.CloseElement();
-        }
-    }
-}
-
-// ── ValidationMessage ────────────────────────────────────────────────────────
-
-/// <summary>
-/// Displays a validation message for a specific field.
-/// Usage: &lt;ValidationMessage For="FieldName" /&gt;
-/// </summary>
-public class ValidationMessage : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string For { get; set; } = string.Empty;
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = "validation-message text-danger";
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        // Walk up the parent chain to find a ModelState or EditContext
-        var errors = FindModelState();
-        if (errors is null || !errors.TryGetValue(For, out var message)) return;
-
-        builder.OpenElement(0, "span");
-        builder.AddAttribute(1, "class", CssClass);
-        builder.AddContent(2, message);
-        builder.CloseElement();
-    }
-
-    private Dictionary<string, string>? FindModelState()
-    {
-        var current = Parent;
-        while (current is not null)
-        {
-            if (current.ModelState.Count > 0) return current.ModelState;
-            if (current is EditForm form && form.Context?.ValidationMessages.Count > 0)
-                return form.Context.ValidationMessages;
-            current = current.Parent;
-        }
-        return null;
-    }
-}
-
-// ── ValidationSummary ────────────────────────────────────────────────────────
-
-/// <summary>
-/// Displays all validation errors as a list.
-/// Usage: &lt;ValidationSummary /&gt;
-/// </summary>
-public class ValidationSummaryComponent : Microsoft.AspNetCore.Components.ComponentBase
-{
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string CssClass { get; set; } = "validation-errors";
-
-    [Microsoft.AspNetCore.Components.Parameter]
-    public string ListCssClass { get; set; } = "text-danger";
-
-    protected override void BuildRenderTree(RenderTreeBuilder builder)
-    {
-        var errors = FindModelState();
-        if (errors is null || errors.Count == 0) return;
-
-        builder.OpenElement(0, "div");
-        builder.AddAttribute(1, "class", CssClass);
-        builder.OpenElement(2, "ul");
-        builder.AddAttribute(3, "class", ListCssClass);
-
-        int seq = 10;
-        foreach (var kvp in errors)
-        {
-            builder.OpenElement(seq++, "li");
-            builder.AddContent(seq++, kvp.Value);
-            builder.CloseElement();
-        }
-
-        builder.CloseElement(); // ul
-        builder.CloseElement(); // div
-    }
-
-    private Dictionary<string, string>? FindModelState()
-    {
-        var current = Parent;
-        while (current is not null)
-        {
-            if (current.ModelState.Count > 0) return current.ModelState;
-            if (current is EditForm form && form.Context?.ValidationMessages.Count > 0)
-                return form.Context.ValidationMessages;
-            current = current.Parent;
-        }
-        return null;
-    }
-}
-
 // ── BindConverter ────────────────────────────────────────────────────────────
 
 /// <summary>
@@ -890,4 +910,5 @@ public static class BindConverter
     public static string FormatValue(DateTimeOffset value, string? format = null) =>
         format is not null ? value.ToString(format) : value.ToString("yyyy-MM-dd");
     public static string FormatValue<T>(T value) => value?.ToString() ?? string.Empty;
+}
 }

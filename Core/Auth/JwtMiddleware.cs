@@ -10,7 +10,7 @@ namespace CosmoApiServer.Core.Auth;
 /// </summary>
 public sealed class JwtMiddleware : Middleware.IMiddleware
 {
-    public ValueTask InvokeAsync(HttpContext context, Middleware.RequestDelegate next)
+    public async ValueTask InvokeAsync(HttpContext context, Middleware.RequestDelegate next)
     {
         if (context.Request.Headers.TryGetValue("Authorization", out var authHeader) &&
             authHeader.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
@@ -20,7 +20,7 @@ public sealed class JwtMiddleware : Middleware.IMiddleware
             var jwtService = context.RequestServices.GetService<JwtService>();
             if (jwtService is not null)
             {
-                context.User = jwtService.ValidateToken(token);
+                context.User = await jwtService.ValidateTokenAsync(token);
                 if (context.User is null)
                 {
                     var logger = context.RequestServices.GetService<ILogger<JwtMiddleware>>();
@@ -29,6 +29,6 @@ public sealed class JwtMiddleware : Middleware.IMiddleware
             }
         }
 
-        return next(context);
+        await next(context);
     }
 }

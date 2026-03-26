@@ -1,0 +1,57 @@
+@page "/counter"
+@layout MainLayout
+
+<h1>Counter</h1>
+
+<p role="status">Current count: <strong>@CurrentCount</strong></p>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">Method 1: Query String</div>
+            <div class="card-body">
+                <p class="card-text">
+                    Increment by navigating to a new URL with a query parameter. 
+                    The framework automatically binds <code>?CurrentCount=X</code> to the property.
+                </p>
+                <a href="/counter?CurrentCount=@(CurrentCount + IncrementAmount)" class="btn btn-primary">Increment (Link)</a>
+                <a href="/counter" class="btn btn-secondary">Reset</a>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white">Method 2: Form Post</div>
+            <div class="card-body">
+                <p class="card-text">
+                    Use a standard HTML form to submit the state. 
+                    The framework now binds form fields to <code>[Parameter]</code> properties on POST.
+                </p>
+                <form action="/counter" method="post" class="row g-3">
+                    <input type="hidden" name="CurrentCount" value="@(CurrentCount + IncrementAmount)" />
+                    <div class="col-auto">
+                        <label class="visually-hidden">Increment Amount</label>
+                        <input type="number" name="IncrementAmount" class="form-control" value="@IncrementAmount" />
+                    </div>
+                    <div class="col-auto">
+                        <button type="submit" class="btn btn-success">Increment (Form)</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="alert alert-info mt-3">
+    <strong>Note:</strong> Since there is no SignalR or WebAssembly in this zero-dependency implementation, 
+    every "interaction" results in a clean, fast SSR page refresh.
+</div>
+
+@code {
+    [Parameter]
+    public int CurrentCount { get; set; }
+
+    [Parameter]
+    public int IncrementAmount { get; set; } = 1;
+}

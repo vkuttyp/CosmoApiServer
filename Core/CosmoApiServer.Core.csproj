@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <PackageId>CosmoApiServer.Core</PackageId>
-    <Version Condition="'$(Version)' == ''">2.0.0</Version>
+    <Version Condition="'$(Version)' == ''">2.0.1</Version>
     <Description>A lightweight, high-performance HTTP API server framework for .NET.</Description>
     <Authors>vkuttyp</Authors>
     <RepositoryUrl>https://github.com/vkuttyp/CosmoApiServer</RepositoryUrl>
@@ -38,4 +38,9 @@
     <PackageReference Include="Cosmo.Transport" Version="1.0.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleTo">
+      <_Parameter1>CosmoApiServer.Core.Tests</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
 </Project>

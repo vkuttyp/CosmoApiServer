@@ -1,0 +1,41 @@
+@page "/user/{Id:int}"
+@layout MainLayout
+@inject DataService DataService
+
+<h1>User Profile</h1>
+
+<div class="card mt-4">
+    <div class="card-header bg-primary text-white">
+        Profile Details for User ID: @Id
+    </div>
+    <div class="card-body">
+        <h5 class="card-title">Display Name: @displayName</h5>
+        <p class="card-text">
+            This page demonstrates dynamic routing with typed parameters. 
+            The ID <code>@Id</code> was extracted from the URL and used to fetch data from a singleton service.
+        </p>
+        <div class="btn-group" role="group">
+            <a href="/user/1" class="btn btn-outline-primary @(Id == 1 ? "active" : "")">User 1</a>
+            <a href="/user/2" class="btn btn-outline-primary @(Id == 2 ? "active" : "")">User 2</a>
+            <a href="/user/3" class="btn btn-outline-primary @(Id == 3 ? "active" : "")">User 3</a>
+        </div>
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public int Id { get; set; }
+
+    private string displayName = "Loading...";
+
+    protected override async ValueTask OnInitializedAsync()
+    {
+        displayName = await DataService.GetUserDisplayNameAsync(Id);
+    }
+
+    protected override async ValueTask OnParametersSetAsync()
+    {
+        // Re-fetch data if the ID parameter changes
+        displayName = await DataService.GetUserDisplayNameAsync(Id);
+    }
+}

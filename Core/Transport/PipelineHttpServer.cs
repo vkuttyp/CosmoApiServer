@@ -25,6 +25,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         string? certPath = null,
         string? certPassword = null,
         bool enableHttp2 = false,
+        int connectionTimeoutSeconds = 120,
         CancellationToken cancellationToken = default)
     {
 #pragma warning disable SYSLIB0057
@@ -45,7 +46,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         Console.WriteLine($"CosmoApiServer listening on {scheme}://0.0.0.0:{port}");
 
         // Accept loop runs in background — fire and forget (bounded by OS)
-        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, _cts.Token);
+        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, _cts.Token);
     }
 
     private async ValueTask AcceptLoopAsync(
@@ -54,6 +55,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         int maxBodySize,
         X509Certificate2? cert,
         bool enableHttp2,
+        int connectionTimeoutSeconds,
         CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -64,7 +66,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             catch { continue; } // transient accept errors
 
             // Handle each connection independently; don't await (keep accepting)
-            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, ct);
+            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, ct);
         }
     }
 
@@ -75,10 +77,19 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         int maxBodySize,
         X509Certificate2? cert,
         bool enableHttp2,
+        int connectionTimeoutSeconds,
         CancellationToken ct)
     {
         socket.NoDelay = true;
+        var remoteIp = (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? "unknown";
         Stream stream = new NetworkStream(socket, ownsSocket: true);
+
+        // Per-connection timeout — prevents slowloris and idle connection exhaustion
+        using var connectionCts = connectionTimeoutSeconds > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        connectionCts?.CancelAfter(TimeSpan.FromSeconds(connectionTimeoutSeconds));
+        var connectionCt = connectionCts?.Token ?? ct;
 
         try
         {
@@ -94,18 +105,18 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                         ? [SslApplicationProtocol.Http2, SslApplicationProtocol.Http11]
                         : [SslApplicationProtocol.Http11],
                 };
-                await ssl.AuthenticateAsServerAsync(sslOptions, ct);
+                await ssl.AuthenticateAsServerAsync(sslOptions, connectionCt);
                 stream = ssl;
 
                 if (enableHttp2 && ssl.NegotiatedApplicationProtocol == SslApplicationProtocol.Http2)
                 {
-                    await Http2Connection.RunAsync(ssl, pipeline, services, ct);
+                    await Http2Connection.RunAsync(ssl, pipeline, services, connectionCt);
                     return;
                 }
             }
 
             // HTTP/1.1 (with optional h2c upgrade detection inside)
-            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, ct);
+            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, remoteIp, connectionCt);
         }
         catch (AuthenticationException ex)
         {

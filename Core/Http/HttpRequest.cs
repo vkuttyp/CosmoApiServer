@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Net;
+using System.Text;
 
 namespace CosmoApiServer.Core.Http;
 
@@ -51,9 +52,12 @@ public sealed class HttpRequest
     public MultipartForm ReadForm()
     {
         var fields = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        byte[] body = Body;
+        ReadOnlySpan<byte> body = Body;
+        
         if (body.Length == 0 && BodyStream != Stream.Null)
         {
+            // For now, if it's a stream, we still buffer it. 
+            // In a deep-dive, we might want a streaming form parser.
             using var ms = new MemoryStream();
             BodyStream.CopyTo(ms);
             body = ms.ToArray();
@@ -61,34 +65,56 @@ public sealed class HttpRequest
 
         if (body.Length == 0) return new MultipartForm { Fields = fields };
 
-        var content = System.Text.Encoding.UTF8.GetString(body);
-        var pairs = content.Split('&');
-        foreach (var pair in pairs)
+        var remaining = body;
+        while (!remaining.IsEmpty)
         {
-            var eq = pair.IndexOf('=');
+            int amp = remaining.IndexOf((byte)'&');
+            var pair = amp < 0 ? remaining : remaining[..amp];
+            remaining = amp < 0 ? ReadOnlySpan<byte>.Empty : remaining[(amp + 1)..];
+
+            if (pair.IsEmpty) continue;
+
+            int eq = pair.IndexOf((byte)'=');
             if (eq < 0)
-                fields[WebUtility.UrlDecode(pair)] = string.Empty;
+            {
+                var key = WebUtility.UrlDecode(Encoding.UTF8.GetString(pair));
+                fields[key] = string.Empty;
+            }
             else
-                fields[WebUtility.UrlDecode(pair[..eq])] = WebUtility.UrlDecode(pair[(eq + 1)..]);
+            {
+                var key = WebUtility.UrlDecode(Encoding.UTF8.GetString(pair[..eq]));
+                var val = WebUtility.UrlDecode(Encoding.UTF8.GetString(pair[(eq + 1)..]));
+                fields[key] = val;
+            }
         }
+        
         return new MultipartForm { Fields = fields };
     }
+
+    public Task<MultipartForm> ReadFormAsync() => Task.FromResult(ReadForm());
 
     internal void Reset()
     {
         Method = HttpMethod.GET;
         Path = "/";
         QueryString = string.Empty;
-        Headers = new Dictionary<string, string>();
-        Query = new Dictionary<string, string>();
+        
+        // Try to reuse dictionaries if they are the mutable implementation
+        if (Headers is Dictionary<string, string> hd) hd.Clear();
+        else Headers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (Query is Dictionary<string, string> qd) qd.Clear();
+        else Query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (RouteValues is Dictionary<string, string> rd) rd.Clear();
+        else RouteValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
         Body = [];
         BodyStream = Stream.Null;
         BodyReader = null;
-        RouteValues = new Dictionary<string, string>();
         ContentLength = 0;
         ContentType = null;
         Host = null;
         Authorization = null;
     }
-
 }

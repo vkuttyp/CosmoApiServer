@@ -8,15 +8,22 @@ No DotNetty. No ASP.NET. No Kestrel. Just raw sockets → pipes → your handler
 
 ## Benchmark
 
-ApacheBench · c=50 concurrent · n=5,000 requests · keep-alive · macOS arm64
+Sequential · 1,000 rounds · keep-alive · macOS arm64
 
-| Scenario | CosmoApiServer | ASP.NET Core Kestrel | Advantage |
-|---|---|---|---|
-| GET /ping | **53,159 req/s** | 17,053 req/s | **+212%** |
-| GET /items (20-item list) | **42,752 req/s** | 15,759 req/s | **+171%** |
-| POST /echo (JSON body) | **54,624 req/s** | 17,943 req/s | **+204%** |
+| Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
+|---|---|---|---|---|
+| GET /ping | **13,423 ops/s** | 10,695 ops/s | 0.07 ms | **+26%** |
+| GET /json | **13,158 ops/s** | 10,091 ops/s | 0.08 ms | **+30%** |
+| GET /route/{id} | **15,083 ops/s** | 10,225 ops/s | 0.07 ms | **+48%** |
+| POST /echo | **14,045 ops/s** | 10,000 ops/s | 0.07 ms | **+40%** |
+| GET /large-json (1000 items) | **2,312 ops/s** | 1,897 ops/s | 0.43 ms | **+22%** |
+| GET /query | **14,771 ops/s** | 11,161 ops/s | 0.07 ms | **+32%** |
+| POST /form | **13,986 ops/s** | 9,551 ops/s | 0.07 ms | **+46%** |
+| GET /headers | **13,106 ops/s** | 10,395 ops/s | 0.08 ms | **+26%** |
+| GET /stream (NDJSON, 10 items) | **8,224 ops/s** | 9,443 ops/s | 0.12 ms | −13% |
+| GET /file (64 KB) | **7,424 ops/s** | 5,519 ops/s | 0.13 ms | **+35%** |
 
-Zero failed requests. Performance holds at c=200 (53,874 req/s).
+**9 of 10 scenarios win.** The `/stream` gap is chunked-encoding overhead vs Kestrel's tuned chunked encoder.
 
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |
@@ -373,7 +380,21 @@ Share values with all descendant components without explicit parameter passing:
 | `samples/BlazorSqlSample` | Replicated Blazor structure with SQL streaming and components |
 | `samples/WeatherApp` | Full REST API: JWT auth, DI, streaming, CosmoSQLClient |
 | `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` template |
-| `tests/CosmoApiServer.Core.Tests` | 102 unit tests for routing, middleware, components, forms, change detection |
+| `tests/CosmoApiServer.Core.Tests` | 108 unit tests for routing, middleware, components, forms, change detection |
+
+---
+
+## Changelog
+
+### v2.0.1
+- **Streaming performance** — `ChunkedBodyStream` now stages multiple `WriteAsync` calls into a single chunk per `FlushAsync`, eliminating one chunk-header per write. NDJSON streaming throughput improved from ~4,300 to ~8,200 ops/s.
+- **Fixed `Flush()` blocking** — Sync `Flush()` on stream writers was calling `.GetAwaiter().GetResult()` on an async pipe flush, risking thread-pool starvation. Now a no-op; callers must use `FlushAsync`.
+- **Fixed duplicate response headers** — `WriteStreamingResponseAsync` did not set `_headersWritten`, causing `EnsureHeadersWritten()` to append a second set of HTTP headers after the body.
+- **Fixed connection lifecycle** — `Http11Connection` now shares a `CancellationTokenSource` between `FillPipeAsync` and `ProcessAsync`. When either side finishes, the other is cancelled, preventing `FillPipeAsync` from blocking indefinitely on `stream.ReadAsync` after a `Connection: close` response.
+- **WebSocket masked frames** — Server now enforces RFC 6455 client-to-server masking requirement.
+- **Component validation on all HTTP methods** — `ComponentScanner` previously only validated form parameters on `POST`; now runs on all methods.
+- **`CascadingParameter` ModelState** — `FindCascadingValue` now cascades parent `ModelState` to child components that request `Dictionary<string, string>`.
+- 108 unit tests (up from 102).
 
 ---
 

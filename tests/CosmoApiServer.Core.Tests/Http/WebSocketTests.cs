@@ -70,4 +70,43 @@ public class WebSocketTests
         Assert.Equal(0, result[2]);
         Assert.Equal(200, result[3]);
     }
+
+    [Fact]
+    public async Task ReceiveAsync_ReadsCorrectFrame_SmallText()
+    {
+        // 0x81 (Text, Fin), 0x85 (Masked, Length 5), mask 0x00*4 (XOR identity), payload "Hello"
+        var data = new byte[] { 0x81, 0x85, 0x00, 0x00, 0x00, 0x00, (byte)'H', (byte)'e', (byte)'l', (byte)'l', (byte)'o' };
+        var ms = new MemoryStream(data);
+        using var ws = new CosmoWebSocket(ms);
+        var buffer = new byte[10];
+
+        var result = await ws.ReceiveAsync(buffer, CancellationToken.None);
+
+        Assert.Equal(5, result.Count);
+        Assert.Equal(WebSocketMessageType.Text, result.MessageType);
+        Assert.True(result.EndOfMessage);
+        Assert.Equal("Hello", Encoding.UTF8.GetString(buffer, 0, 5));
+    }
+
+    [Fact]
+    public async Task ReceiveAsync_UnmasksPayload()
+    {
+        // 0x81 (Text, Fin), 0x85 (Masked, Length 5)
+        // Mask: 0x01 0x02 0x03 0x04
+        // Data: "Hello"
+        // H (0x48) ^ 0x01 = 0x49
+        // e (0x65) ^ 0x02 = 0x67
+        // l (0x6C) ^ 0x03 = 0x6F
+        // l (0x6C) ^ 0x04 = 0x68
+        // o (0x6F) ^ 0x01 = 0x6E
+        var data = new byte[] { 0x81, 0x85, 0x01, 0x02, 0x03, 0x04, 0x49, 0x67, 0x6F, 0x68, 0x6E };
+        var ms = new MemoryStream(data);
+        using var ws = new CosmoWebSocket(ms);
+        var buffer = new byte[10];
+
+        var result = await ws.ReceiveAsync(buffer, CancellationToken.None);
+
+        Assert.Equal(5, result.Count);
+        Assert.Equal("Hello", Encoding.UTF8.GetString(buffer, 0, 5));
+    }
 }

@@ -63,25 +63,30 @@ public abstract class RazorSlice
         _bufferWriter.Write(Utf8LiteralCache.GetEncoded(value));
     }
 
-    protected void Write(object? value)
+    protected async ValueTask Write(object? value)
     {
         if (value == null || _bufferWriter == null) return;
 
         if (value is HtmlString html)
         {
-            WriteLiteral(html.ToString());
+            _bufferWriter.Write(Utf8LiteralCache.GetEncoded(html.ToString()));
+        }
+        else if (value is RenderToBufferDelegate fragment)
+        {
+            await fragment(_bufferWriter);
         }
         else
         {
-            HtmlEncoder.EncodeToWriter(value, _bufferWriter);
+            await HtmlEncoder.EncodeToWriterAsync(value, _bufferWriter);
         }
     }
 
-    protected void Write(string? value)
+    protected async ValueTask Write(string? value)
     {
         if (value == null || _bufferWriter == null) return;
         HtmlEncoder.EncodeToWriter(value, _bufferWriter);
     }
+
 
     // ── Attribute and Tag Helper support (stubs) ───────────────────────────
 

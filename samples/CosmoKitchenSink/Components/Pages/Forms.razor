@@ -1,0 +1,98 @@
+@page "/forms"
+@inherits Microsoft.AspNetCore.Components.ComponentBase
+@layout MainLayout
+
+<h1>Forms & Validation (Zod-like)</h1>
+
+<p>This page demonstrates the new fluent, Zod-inspired validation engine for CosmoApiServer.</p>
+
+<div class="row">
+    <div class="col-md-7">
+        <EditForm Model="@Model" OnValidSubmit="@HandleValidSubmit" Action="/forms" CssClass="border p-4 rounded bg-white shadow-sm">
+            <ValidationSummary />
+
+            <div class="mb-3">
+                <label for="name" class="form-label">Name (min 3, max 10)</label>
+                <InputText id="name" @bind-Value="Model.Name" Name="Name" CssClass="form-control" />
+                <ValidationMessage For="Name" />
+            </div>
+
+            <div class="mb-3">
+                <label for="age" class="form-label">Age (18-99)</label>
+                <InputNumber TValue="int" id="age" @bind-Value="Model.Age" Name="Age" CssClass="form-control" />
+                <ValidationMessage For="Age" />
+            </div>
+
+            <div class="mb-3">
+                <label for="email" class="form-label">Email Address</label>
+                <InputText id="email" @bind-Value="Model.Email" Name="Email" Type="email" CssClass="form-control" />
+                <ValidationMessage For="Email" />
+            </div>
+
+            <div class="mb-3 form-check">
+                <InputCheckbox id="sub" @bind-Value="Model.Subscribe" Name="Subscribe" CssClass="form-check-input" />
+                <label class="form-check-label" for="sub">I agree to terms (Required)</label>
+                <ValidationMessage For="Subscribe" />
+            </div>
+
+            <button type="submit" class="btn btn-success">Submit Form</button>
+        </EditForm>
+    </div>
+
+    <div class="col-md-5">
+        @if (isSuccess)
+        {
+            <div class="alert alert-success">
+                <h4>Form Validated with Zod!</h4>
+                <p><strong>Name:</strong> @Model.Name</p>
+                <p><strong>Age:</strong> @Model.Age</p>
+                <p><strong>Email:</strong> @Model.Email</p>
+                <p><strong>Subscribed:</strong> @(Model.Subscribe ? "Yes" : "No")</p>
+                <hr />
+                <a href="/forms" class="btn btn-outline-success btn-sm">Clear and Reset</a>
+            </div>
+        }
+        else
+        {
+            <div class="alert alert-info">
+                The Zod-like engine runs on the server and preserves your input values even when validation fails.
+            </div>
+        }
+    </div>
+</div>
+
+@code {
+    [Parameter]
+    public KitchenSinkModel Model { get; set; } = new();
+
+    private bool isSuccess = false;
+
+    // Define the schema once
+    private static readonly ObjectSchema<KitchenSinkModel> UserSchema = v.Object<KitchenSinkModel>()
+        .Field("Name", v.String().Min(3).Max(10).Required())
+        .Field("Age", v.Number().Min(18).Max(99))
+        .Field("Email", v.String().Email().Required())
+        .Field("Subscribe", v.Bool().Required("You must agree to the terms."));
+
+    protected override ValueTask OnInitializedAsync()
+    {
+        if (HttpContext.Request.Method == CosmoApiServer.Core.Http.HttpMethod.POST)
+        {
+            // Clear automatic DataAnnotations errors to use our Zod schema instead
+            ModelState.Clear();
+
+            // Run Zod-like validation
+            if (TryValidate(Model, UserSchema)) 
+            {
+                isSuccess = true;
+            }
+        }
+        return base.OnInitializedAsync();
+    }
+
+    private ValueTask HandleValidSubmit(CosmoApiServer.Core.Templates.EditContext context)
+    {
+        // For SSR, OnInitializedAsync already handled the logic, but we keep this for compatibility
+        return ValueTask.CompletedTask;
+    }
+}

@@ -38,7 +38,7 @@ public sealed class CsrfMiddleware(CsrfOptions options) : IMiddleware
         var cookieToken = GetCsrfCookie(context);
         var headerToken = context.Request.Headers.TryGetValue(options.HeaderName, out var v) ? v : null;
 
-        if (string.IsNullOrEmpty(cookieToken) || !CsrfTokenHelper.Validate(headerToken!, cookieToken))
+        if (string.IsNullOrEmpty(cookieToken) || string.IsNullOrEmpty(headerToken) || !CsrfTokenHelper.Validate(headerToken, cookieToken))
         {
             context.Response.StatusCode = 403;
             context.Response.WriteJson(new { error = "CsrfValidationFailed", message = "CSRF token validation failed." });

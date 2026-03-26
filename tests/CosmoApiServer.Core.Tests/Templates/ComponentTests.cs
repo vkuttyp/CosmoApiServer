@@ -377,7 +377,7 @@ public class ComponentTests
     {
         var called = false;
         var factory = new object(); // receiver
-        var cb = EventCallbackFactory.Create(factory, () => { called = true; });
+        var cb = EventCallback.Factory.Create(factory, (Action)(() => { called = true; }));
         cb.InvokeAsync().GetAwaiter().GetResult();
         Assert.True(called);
     }

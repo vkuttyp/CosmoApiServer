@@ -18,6 +18,7 @@ public static class OpenApiGenerator
     public static Dictionary<string, object> Generate(IEnumerable<Type> controllerTypes, OpenApiInfo info)
     {
         var paths = new Dictionary<string, object>();
+        var schemas = new Dictionary<string, object>();
 
         foreach (var type in controllerTypes)
         {
@@ -62,7 +63,7 @@ public static class OpenApiGenerator
                         {
                             ["content"] = new Dictionary<string, object>
                             {
-                                ["application/json"] = new Dictionary<string, object> { ["schema"] = MapType(param.ParameterType) }
+                                ["application/json"] = new Dictionary<string, object> { ["schema"] = MapType(param.ParameterType, schemas) }
                             }
                         };
                     }
@@ -73,7 +74,7 @@ public static class OpenApiGenerator
                             ["name"] = param.Name!,
                             ["in"] = paramIn,
                             ["required"] = paramIn == "path" || !IsNullable(param.ParameterType),
-                            ["schema"] = MapType(param.ParameterType)
+                            ["schema"] = MapType(param.ParameterType, schemas)
                         });
                     }
                 }
@@ -84,12 +85,19 @@ public static class OpenApiGenerator
             }
         }
 
-        return new Dictionary<string, object>
+        var result = new Dictionary<string, object>
         {
             ["openapi"] = "3.0.0",
             ["info"] = info,
             ["paths"] = paths
         };
+
+        if (schemas.Count > 0)
+        {
+            result["components"] = new Dictionary<string, object> { ["schemas"] = schemas };
+        }
+
+        return result;
     }
 
     private static string GetHttpVerb(HttpMethodAttribute attr) => attr switch
@@ -117,13 +125,32 @@ public static class OpenApiGenerator
         return null;
     }
 
-    private static Dictionary<string, object> MapType(Type type)
+    private static Dictionary<string, object> MapType(Type type, Dictionary<string, object> schemas)
     {
         var underlying = Nullable.GetUnderlyingType(type) ?? type;
         if (underlying == typeof(int) || underlying == typeof(long)) return new() { ["type"] = "integer" };
         if (underlying == typeof(bool)) return new() { ["type"] = "boolean" };
         if (underlying == typeof(double) || underlying == typeof(float) || underlying == typeof(decimal)) return new() { ["type"] = "number" };
-        return new() { ["type"] = "string" };
+        if (underlying == typeof(string)) return new() { ["type"] = "string" };
+
+        // Complex type -> Schema + Ref
+        var typeName = underlying.Name;
+        if (!schemas.ContainsKey(typeName))
+        {
+            var properties = new Dictionary<string, object>();
+            schemas[typeName] = new Dictionary<string, object>
+            {
+                ["type"] = "object",
+                ["properties"] = properties
+            };
+
+            foreach (var prop in underlying.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+            {
+                properties[prop.Name] = MapType(prop.PropertyType, schemas);
+            }
+        }
+
+        return new() { ["$ref"] = $"#/components/schemas/{typeName}" };
     }
 
     private static bool IsNullable(Type type) => !type.IsValueType || Nullable.GetUnderlyingType(type) != null;

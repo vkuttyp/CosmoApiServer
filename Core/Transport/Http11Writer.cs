@@ -14,6 +14,7 @@ internal static class Http11Writer
     private static readonly byte[] CrLf             = "\r\n"u8.ToArray();
     private static readonly byte[] HeaderSep        = ": "u8.ToArray();
     private static readonly byte[] ConnectionKA     = "Connection: keep-alive\r\n"u8.ToArray();
+    private static readonly byte[] ConnectionClose  = "Connection: close\r\n"u8.ToArray();
     private static readonly byte[] ContentTypeDef   = "Content-Type: text/plain\r\n"u8.ToArray();
     private static readonly byte[] TransferChunked  = "Transfer-Encoding: chunked\r\n"u8.ToArray();
     private static readonly byte[] ContentTypeNdjson= "Content-Type: application/x-ndjson\r\n"u8.ToArray();
@@ -105,7 +106,10 @@ internal static class Http11Writer
 
     /// <summary>
     /// Write HTTP/1.1 response headers for a chunked streaming response,
-    /// then return a <see cref="ChunkedBodyStream"/> the caller writes items into.
+    /// then stream body bytes via a staging <see cref="ChunkedBodyStream"/>.
+    /// Multiple small <see cref="Stream.WriteAsync"/> calls (e.g. from <see cref="System.Text.Json.JsonSerializer"/>)
+    /// are coalesced into a single chunk per <see cref="Stream.FlushAsync"/> call,
+    /// keeping the connection alive for subsequent requests.
     /// </summary>
     public static async Task WriteStreamingResponseAsync(
         PipeWriter writer,
@@ -113,17 +117,16 @@ internal static class Http11Writer
         Func<Stream, Task> bodyWriter,
         CancellationToken ct)
     {
-        // Response headers
+        // Response headers — chunked keep-alive to amortise TCP setup across requests.
         writer.Write(Http11Ok);
         writer.Write(ReasonPhrase(statusCode));
         writer.Write(CrLf);
         writer.Write(TransferChunked);
         writer.Write(ContentTypeNdjson);
-        writer.Write("Connection: close\r\n"u8);  // client knows end-of-body when connection closes
         writer.Write(CrLf);
         await writer.FlushAsync(ct);
 
-        // Let the application write chunks
+        // Stage all writes between FlushAsync calls into a single chunk each.
         var chunkStream = new ChunkedBodyStream(writer);
         try
         {
@@ -131,7 +134,8 @@ internal static class Http11Writer
         }
         finally
         {
-            // Terminating chunk
+            // Drain any unflushed staged bytes before the terminating chunk.
+            await chunkStream.FlushAsync(ct);
             writer.Write(ChunkTerminator);
             await writer.FlushAsync(ct);
         }
@@ -148,31 +152,56 @@ internal static class Http11Writer
     }
 
     /// <summary>
-    /// A write-only <see cref="Stream"/> that wraps each write as an HTTP/1.1 chunked segment.
+    /// A write-only <see cref="Stream"/> that batches all writes into a staging buffer and
+    /// emits a single HTTP/1.1 chunk per <see cref="FlushAsync"/> call.
+    /// This avoids one chunk-header per <see cref="WriteAsync"/> call, which is the pattern
+    /// used by <see cref="System.Text.Json.JsonSerializer.SerializeAsync"/> internally.
     /// </summary>
     internal sealed class ChunkedBodyStream(PipeWriter writer) : Stream
     {
+        private readonly ArrayBufferWriter<byte> _staging = new(4096);
+
         public override bool CanRead  => false;
         public override bool CanSeek  => false;
         public override bool CanWrite => true;
         public override long Length   => throw new NotSupportedException();
         public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
-        public override void Flush() { }
-        public override int  Read(byte[] buffer, int offset, int count)  => throw new NotSupportedException();
-        public override long Seek(long offset, SeekOrigin origin)         => throw new NotSupportedException();
-        public override void SetLength(long value)                         => throw new NotSupportedException();
+        public override int  Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)        => throw new NotSupportedException();
+        public override void SetLength(long value)                        => throw new NotSupportedException();
 
-        public override void Write(byte[] buffer, int offset, int count) =>
-            WriteAsync(buffer.AsMemory(offset, count), CancellationToken.None).GetAwaiter().GetResult();
-
-        public override async ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct)
+        // Stage bytes — no chunk headers written yet
+        public override void Write(byte[] buffer, int offset, int count)
         {
-            if (buffer.IsEmpty) return;
-            // chunk-size in hex
-            WriteHex(writer, buffer.Length);
-            writer.Write("\r\n"u8);
-            writer.Write(buffer.Span);
-            writer.Write("\r\n"u8);
+            if (count > 0) _staging.Write(buffer.AsSpan(offset, count));
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct)
+        {
+            if (!buffer.IsEmpty) _staging.Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
+
+        public override void WriteByte(byte value)
+        {
+            _staging.GetSpan(1)[0] = value;
+            _staging.Advance(1);
+        }
+
+        // Sync Flush is a no-op — callers must use FlushAsync to emit a chunk.
+        // Blocking on FlushAsync here would risk thread-pool starvation.
+        public override void Flush() { }
+
+        public override async Task FlushAsync(CancellationToken ct)
+        {
+            if (_staging.WrittenCount > 0)
+            {
+                WriteHex(writer, _staging.WrittenCount);
+                writer.Write("\r\n"u8);
+                writer.Write(_staging.WrittenSpan);
+                writer.Write("\r\n"u8);
+                _staging.Clear();
+            }
             await writer.FlushAsync(ct);
         }
 
@@ -188,6 +217,48 @@ internal static class Http11Writer
             }
             while (value > 0);
             w.Write(hex[pos..]);
+        }
+    }
+
+    /// <summary>
+    /// A write-only <see cref="Stream"/> that passes bytes directly into a <see cref="PipeWriter"/>
+    /// without any chunk framing. Used for <c>Connection: close</c> streaming responses where
+    /// end-of-body is signalled by TCP close rather than a chunk terminator.
+    /// </summary>
+    internal sealed class DirectBodyStream(PipeWriter writer) : Stream
+    {
+        public override bool CanRead  => false;
+        public override bool CanSeek  => false;
+        public override bool CanWrite => true;
+        public override long Length   => throw new NotSupportedException();
+        public override long Position { get => throw new NotSupportedException(); set => throw new NotSupportedException(); }
+        public override int  Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin)        => throw new NotSupportedException();
+        public override void SetLength(long value)                        => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            if (count > 0) writer.Write(buffer.AsSpan(offset, count));
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct)
+        {
+            if (!buffer.IsEmpty) writer.Write(buffer.Span);
+            return ValueTask.CompletedTask;
+        }
+
+        public override void WriteByte(byte value)
+        {
+            var span = writer.GetSpan(1);
+            span[0] = value;
+            writer.Advance(1);
+        }
+
+        public override void Flush() { } // no-op — use FlushAsync
+
+        public override async Task FlushAsync(CancellationToken ct)
+        {
+            await writer.FlushAsync(ct);
         }
     }
 }

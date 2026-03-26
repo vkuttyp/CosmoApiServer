@@ -1,0 +1,47 @@
+@page "/"
+@layout MainLayout
+
+<h1>Hello, Cosmo!</h1>
+
+<p>Welcome to the comprehensive <strong>CosmoKitchenSink</strong> sample application. This project demonstrates all the Blazor-like features currently supported by CosmoApiServer.</p>
+
+<div class="row">
+    <div class="col-md-6">
+        <Card Title="Core Components" Link="/counter" Header="Framework Base" Width="100%">
+            <p>Leverage the custom <code>ComponentBase</code> for lifecycle methods and state management.</p>
+            <ul>
+                <li><code>OnInitializedAsync</code></li>
+                <li><code>OnParametersSetAsync</code></li>
+                <li><code>BuildRenderTreeAsync</code></li>
+            </ul>
+            <a href="/counter" class="btn btn-outline-primary mt-2">Try Counter Demo</a>
+        </Card>
+    </div>
+    <div class="col-md-6">
+        <Card Title="Form System" Link="/forms" Header="Validation & Inputs" Width="100%">
+            <p>Full support for <code>EditForm</code> and standard input components with DataAnnotations validation.</p>
+            <a href="/forms" class="btn btn-primary mt-2">Try Forms & Validation</a>
+        </Card>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-4">
+        <Card Title="Cascading Values" Link="/cascading" Width="100%">
+            <p>Pass data down the component tree without explicit parameters.</p>
+            <a href="/cascading" class="btn btn-secondary">Learn More</a>
+        </Card>
+    </div>
+    <div class="col-md-4">
+        <Card Title="Route Parameters" Link="/user/1" Width="100%">
+            <p>Dynamic routing with typed parameters from the URL.</p>
+            <a href="/user/1" class="btn btn-secondary">View Profile</a>
+        </Card>
+    </div>
+    <div class="col-md-4">
+        <Card Title="Async Loading" Link="/fetchdata" Width="100%">
+            <p>Seamlessly inject and use services to load data asynchronously.</p>
+            <a href="/fetchdata" class="btn btn-secondary">Fetch Data</a>
+        </Card>
+    </div>
+</div>

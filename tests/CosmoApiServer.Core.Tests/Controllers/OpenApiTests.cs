@@ -5,6 +5,12 @@ namespace CosmoApiServer.Core.Tests.Controllers;
 
 public class OpenApiTests
 {
+    public class UserDto
+    {
+        public string Name { get; set; } = "";
+        public int Age { get; set; }
+    }
+
     [Route("api/test")]
     public class SampleController : ControllerBase
     {
@@ -12,7 +18,7 @@ public class OpenApiTests
         public string GetById([FromRoute] int id, [FromQuery] string filter) => "ok";
 
         [HttpPost("")]
-        public void Create([FromBody] string data) { }
+        public void Create([FromBody] UserDto user) { }
     }
 
     [Fact]
@@ -38,5 +44,14 @@ public class OpenApiTests
         
         var postOp = (Dictionary<string, object>)((Dictionary<string, object>)paths["/api/test"])["post"];
         Assert.True(postOp.ContainsKey("requestBody"));
+
+        var components = (Dictionary<string, object>)spec["components"];
+        var schemas = (Dictionary<string, object>)components["schemas"];
+        Assert.True(schemas.ContainsKey("UserDto"));
+        
+        var userSchema = (Dictionary<string, object>)schemas["UserDto"];
+        var properties = (Dictionary<string, object>)userSchema["properties"];
+        Assert.True(properties.ContainsKey("Name"));
+        Assert.True(properties.ContainsKey("Age"));
     }
 }

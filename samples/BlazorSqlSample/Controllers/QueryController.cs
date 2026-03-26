@@ -13,7 +13,7 @@ namespace BlazorSqlSample.Controllers;
 public class QueryController(MsSqlConnectionPool pool) : ControllerBase
 {
     [HttpGet]
-    public IActionResult Index()
+    public Task<IActionResult> Index()
     {
         return RenderPage(new SqlQueryModel());
     }
@@ -55,10 +55,10 @@ public class QueryController(MsSqlConnectionPool pool) : ControllerBase
             }
         }
 
-        return RenderPage(model);
+        return await RenderPage(model);
     }
 
-    private IActionResult RenderPage(SqlQueryModel model)
+    private async Task<IActionResult> RenderPage(SqlQueryModel model)
     {
         var component = Query.Create(c => c.Model = model);
         component.HttpContext = HttpContext;
@@ -76,22 +76,21 @@ public class QueryController(MsSqlConnectionPool pool) : ControllerBase
             var childContentProp = ComponentScanner._appType.GetProperty("ChildContent");
             if (childContentProp != null)
             {
-                childContentProp.SetValue(app, (RenderFragment)(async builder => 
+                var componentHtml = await component.RenderAsync();
+                childContentProp.SetValue(app, (Microsoft.AspNetCore.Components.RenderFragment)(builder => 
                 {
                     if (ComponentScanner._mainLayoutType != null)
                     {
                         builder.OpenComponent(0, ComponentScanner._mainLayoutType);
-                        builder.AddComponentParameter(1, "Body", (RenderFragment)(async bodyBuilder => 
+                        builder.AddComponentParameter(1, "Body", (Microsoft.AspNetCore.Components.RenderFragment)(bodyBuilder => 
                         {
-                            var html = await component.RenderAsync();
-                            bodyBuilder.AddMarkupContent(0, html);
+                            bodyBuilder.AddMarkupContent(0, componentHtml);
                         }));
                         builder.CloseComponent();
                     }
                     else
                     {
-                        var html = await component.RenderAsync();
-                        builder.AddMarkupContent(0, html);
+                        builder.AddMarkupContent(0, componentHtml);
                     }
                 }));
             }

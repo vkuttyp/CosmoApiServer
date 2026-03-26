@@ -1,62 +1,13 @@
-using System;
-using System.Text;
 using System.Buffers;
-using System.Threading.Tasks;
-using System.Collections.Generic;
+using System.Text;
 using System.Reflection;
-using CosmoApiServer.Core.Templates;
 using Microsoft.Extensions.DependencyInjection;
-
-namespace Microsoft.AspNetCore.Razor.Hosting
-{
-    [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class, AllowMultiple = true)]
-    public sealed class RazorCompiledItemAttribute(Type type, string kind, string identifier) : Attribute
-    {
-        public Type Type { get; } = type;
-        public string Kind { get; } = kind;
-        public string Identifier { get; } = identifier;
-    }
-
-    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
-    public sealed class RazorSourceChecksumAttribute(string checksumAlgorithm, string checksum, string identifier) : Attribute
-    {
-        public string ChecksumAlgorithm { get; } = checksumAlgorithm;
-        public string Checksum { get; } = checksum;
-        public string Identifier { get; } = identifier;
-    }
-
-    [AttributeUsage(AttributeTargets.Assembly | AttributeTargets.Class, AllowMultiple = true)]
-    public sealed class RazorCompiledItemMetadataAttribute(string key, string value) : Attribute
-    {
-        public string Key { get; } = key;
-        public string Value { get; } = value;
-    }
-}
-
-namespace Microsoft.AspNetCore.Mvc.ApplicationParts
-{
-    [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = true)]
-    public sealed class RelatedAssemblyAttribute(string assemblyName) : Attribute
-    {
-        public string AssemblyName { get; } = assemblyName;
-    }
-
-    [AttributeUsage(AttributeTargets.Assembly, AllowMultiple = false)]
-    public sealed class ProvideApplicationPartFactoryAttribute(string typeName) : Attribute
-    {
-        public string TypeName { get; } = typeName;
-    }
-}
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Rendering;
 
 namespace Microsoft.AspNetCore.Mvc.Razor.Internal
 {
-    [AttributeUsage(AttributeTargets.Property)]
     public sealed class RazorInjectAttribute : Attribute;
-}
-
-namespace Microsoft.AspNetCore.Mvc.ViewFeatures
-{
-    public interface IModelExpressionProvider;
 }
 
 namespace Microsoft.AspNetCore.Mvc
@@ -77,21 +28,19 @@ namespace Microsoft.AspNetCore.Components
     {
         protected virtual void BuildRenderTree(Rendering.RenderTreeBuilder builder) { }
 
-        protected override async ValueTask BuildRenderTreeAsync(StringBuilder buffer)
+        protected override async ValueTask BuildRenderTreeAsync(IBufferWriter<byte> buffer)
         {
-            var builder = new Rendering.RenderTreeBuilder(buffer);
+            this._buffer = buffer;
+            // Pass 'this' as the root component so that when the generated code calls
+            // OpenComponent<InputText> etc., the parent stack is non-empty and the shared buffer propagates.
+            var builder = new Rendering.RenderTreeBuilder(buffer, this);
             this._activeBuilder = builder;
-            
-            var field = typeof(Rendering.RenderTreeBuilder).GetField("_componentStack", BindingFlags.NonPublic | BindingFlags.Instance);
-            var stack = (Stack<CosmoApiServer.Core.Templates.ComponentBase>)field!.GetValue(builder)!;
-            stack.Push(this);
 
             BuildRenderTree(builder);
             
             // ASYNC DRAIN: Process the frames recorded by the builder
             await builder.ProcessAsync();
             
-            stack.Pop(); 
             builder.CloseAll();
         }
     }
@@ -102,12 +51,8 @@ namespace Microsoft.AspNetCore.Components
         public RenderFragment Body { get; set; }
     }
 
-    public interface IComponent;
-
-    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true, Inherited = false)]
-    public sealed class RouteAttribute(string template) : Attribute
+    public interface IComponent
     {
-        public string Template { get; } = template;
     }
 
     [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
@@ -115,9 +60,23 @@ namespace Microsoft.AspNetCore.Components
 
     [AttributeUsage(AttributeTargets.Property, AllowMultiple = false, Inherited = true)]
     public sealed class CascadingParameterAttribute : Attribute;
+    
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = true)]
+    public sealed class RouteAttribute(string template) : Attribute
+    {
+        public string Template { get; } = template;
+    }
 
-    public delegate ValueTask RenderFragment(Rendering.RenderTreeBuilder builder);
-    public delegate ValueTask RenderFragment<TValue>(Rendering.RenderTreeBuilder builder, TValue value);
+    [AttributeUsage(AttributeTargets.Class, AllowMultiple = false)]
+    public sealed class LayoutAttribute(Type layoutType) : Attribute
+    {
+        public Type LayoutType { get; } = layoutType;
+    }
+
+    public sealed class InjectAttribute : Attribute;
+
+    public delegate void RenderFragment(Rendering.RenderTreeBuilder builder);
+    public delegate RenderFragment RenderFragment<TValue>(TValue value);
 
     namespace Rendering
     {
@@ -141,19 +100,31 @@ namespace Microsoft.AspNetCore.Components
             public Type? ComponentType;
         }
 
-        public sealed class RenderTreeBuilder(StringBuilder buffer)
+        public sealed class RenderTreeBuilder
         {
             private readonly Stack<string> _elementStack = new();
             private readonly Stack<CosmoApiServer.Core.Templates.ComponentBase> _componentStack = new();
             private readonly List<RenderFrame> _frames = new(128);
+            private readonly IBufferWriter<byte> _buffer;
+            private readonly CosmoApiServer.Core.Templates.ComponentBase? _owner;
             private bool _inTag;
+
+            public RenderTreeBuilder(IBufferWriter<byte> buffer)
+            {
+                _buffer = buffer;
+            }
+
+            public RenderTreeBuilder(IBufferWriter<byte> buffer, CosmoApiServer.Core.Templates.ComponentBase owner)
+            {
+                _buffer = buffer;
+                _owner = owner;
+                _componentStack.Push(owner);
+            }
 
             private void Write(string? s)
             {
                 if (s == null) return;
-                // Since RenderTreeBuilder here works with StringBuilder (to match old CSHTML generator),
-                // we just append the string. If we update to byte-based generator, we'd use Utf8LiteralCache.
-                buffer.Append(s);
+                _buffer.Write(CosmoApiServer.Core.Templates.Utf8LiteralCache.GetEncoded(s));
             }
 
             private void CloseOpeningTag()
@@ -167,6 +138,9 @@ namespace Microsoft.AspNetCore.Components
 
             public void AddContent(int sequence, string? text) =>
                 _frames.Add(new RenderFrame { Type = RenderFrameType.AddContent, Text = text });
+
+            public void AddContent(int sequence, RenderFragment? fragment) =>
+                _frames.Add(new RenderFrame { Type = RenderFrameType.AddContent, Value = fragment });
 
             public void AddContent(int sequence, object? content) =>
                 _frames.Add(new RenderFrame { Type = RenderFrameType.AddContent, Value = content });
@@ -209,17 +183,21 @@ namespace Microsoft.AspNetCore.Components
                     {
                         case RenderFrameType.OpenElement:
                             CloseOpeningTag();
-                            buffer.Append($"<{frame.Text}");
+                            pendingComponent = null;
+                            Write("<");
+                            Write(frame.Text);
                             _elementStack.Push(frame.Text!);
                             _inTag = true;
                             break;
 
                         case RenderFrameType.CloseElement:
-                            if (_inTag) { buffer.Append(">"); _inTag = false; }
+                            if (_inTag) { Write(">"); _inTag = false; }
                             if (_elementStack.Count > 0)
                             {
                                 var name = _elementStack.Pop();
-                                buffer.Append($"</{name}>");
+                                Write("</");
+                                Write(name);
+                                Write(">");
                             }
                             break;
 
@@ -227,20 +205,33 @@ namespace Microsoft.AspNetCore.Components
                             CloseOpeningTag();
                             if (frame.Text != null)
                             {
-                                buffer.Append(CosmoApiServer.Core.Templates.HtmlEncoder.Encode(frame.Text));
+                                await CosmoApiServer.Core.Templates.HtmlEncoder.EncodeToWriterAsync(frame.Text, _buffer);
                             }
                             else if (frame.Value != null)
                             {
-                                if (frame.Value is string s) buffer.Append(CosmoApiServer.Core.Templates.HtmlEncoder.Encode(s));
-                                else if (frame.Value is RenderFragment fragment) await fragment(this);
-                                else if (frame.Value is CosmoApiServer.Core.Templates.HtmlString html) buffer.Append(html.ToString());
-                                else buffer.Append(CosmoApiServer.Core.Templates.HtmlEncoder.Encode(frame.Value.ToString()));
+                                if (frame.Value is string s) await CosmoApiServer.Core.Templates.HtmlEncoder.EncodeToWriterAsync(s, _buffer);
+                                else if (frame.Value is RenderFragment fragment)
+                                {
+                                    var beforeCount = _frames.Count;
+                                    fragment(this);
+                                    var addedCount = _frames.Count - beforeCount;
+                                    if (addedCount > 0)
+                                    {
+                                        var newFrames = _frames.GetRange(beforeCount, addedCount);
+                                        _frames.RemoveRange(beforeCount, addedCount);
+                                        _frames.InsertRange(i + 1, newFrames);
+                                    }
+                                }
+                                else
+                                {
+                                    await CosmoApiServer.Core.Templates.HtmlEncoder.EncodeToWriterAsync(frame.Value, _buffer);
+                                }
                             }
                             break;
 
                         case RenderFrameType.AddMarkupContent:
                             CloseOpeningTag();
-                            buffer.Append(frame.Text);
+                            Write(frame.Text);
                             break;
 
                         case RenderFrameType.AddAttribute:
@@ -248,23 +239,36 @@ namespace Microsoft.AspNetCore.Components
                             {
                                 if (frame.Value is bool b)
                                 {
-                                    if (b) buffer.Append($" {frame.Text}");
+                                    if (b) { Write(" "); Write(frame.Text); }
                                 }
                                 else
                                 {
-                                    buffer.Append($" {frame.Text}=\"{CosmoApiServer.Core.Templates.HtmlEncoder.Encode(frame.Value?.ToString())}\"");
+                                    Write(" ");
+                                    Write(frame.Text);
+                                    Write("=\"");
+                                    await CosmoApiServer.Core.Templates.HtmlEncoder.EncodeToWriterAsync(frame.Value, _buffer);
+                                    Write("\"");
+                                }
+                            }
+                            else if (pendingComponent != null)
+                            {
+                                var prop = pendingComponent.GetType().GetProperty(frame.Text!, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                                if (prop != null)
+                                {
+                                    prop.SetValue(pendingComponent, frame.Value);
                                 }
                             }
                             break;
 
                         case RenderFrameType.OpenComponent:
                             CloseOpeningTag();
-                            var parent = _componentStack.Count > 0 ? _componentStack.Peek() : null;
+                            var parent = _componentStack.Count > 0 ? _componentStack.Peek() : _owner;
+                            
                             var component = (parent != null && parent.HttpContext != null) 
                                 ? (CosmoApiServer.Core.Templates.ComponentBase)ActivatorUtilities.CreateInstance(parent.HttpContext.RequestServices, frame.ComponentType!)
                                 : (CosmoApiServer.Core.Templates.ComponentBase)Activator.CreateInstance(frame.ComponentType!)!;
 
-                            component._buffer = parent?._buffer;
+                            component._buffer = _buffer;
                             if (parent != null)
                             {
                                 component.Parent = parent;
@@ -287,12 +291,12 @@ namespace Microsoft.AspNetCore.Components
                                         if (val != null) prop.SetValue(comp, val);
                                     }
                                 }
-                                // Resolve @inject properties from DI
                                 if (comp.HttpContext?.RequestServices is not null)
                                 {
-                                    foreach (var prop in comp.GetType().GetProperties())
+                                    foreach (var prop in comp.GetType().GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance))
                                     {
-                                        if (prop.GetCustomAttribute<Microsoft.AspNetCore.Mvc.Razor.Internal.RazorInjectAttribute>() != null)
+                                        if (prop.GetCustomAttribute<Microsoft.AspNetCore.Mvc.Razor.Internal.RazorInjectAttribute>() != null ||
+                                            prop.GetCustomAttribute<InjectAttribute>() != null)
                                         {
                                             var svc = comp.HttpContext.RequestServices.GetService(prop.PropertyType);
                                             if (svc is CosmoApiServer.Core.Http.NavigationManager nav)
@@ -302,14 +306,18 @@ namespace Microsoft.AspNetCore.Components
                                     }
                                 }
                                 await comp.RenderAsync();
+                                pendingComponent = null;
                             }
                             break;
 
                         case RenderFrameType.AddComponentParameter:
                             if (pendingComponent != null)
                             {
-                                var prop = pendingComponent.GetType().GetProperty(frame.Text!);
-                                prop?.SetValue(pendingComponent, frame.Value);
+                                var prop = pendingComponent.GetType().GetProperty(frame.Text!, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                                if (prop != null)
+                                {
+                                    prop.SetValue(pendingComponent, frame.Value);
+                                }
                             }
                             break;
                     }
@@ -322,46 +330,42 @@ namespace Microsoft.AspNetCore.Components
                 var current = component.Parent;
                 while (current != null)
                 {
-                    // Check if the parent is a CascadingValue<T> component that provides the requested type
-                    var currentType = current.GetType();
-                    if (currentType.IsGenericType && currentType.GetGenericTypeDefinition() == typeof(CascadingValue<>))
+                    if (current is CascadingValue<object> cv)
                     {
-                        var valueProp = currentType.GetProperty("Value");
-                        if (valueProp != null && type.IsAssignableFrom(valueProp.PropertyType))
+                        var prop = cv.GetType().GetProperty("CascadingValues", BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Public);
+                        if (prop != null)
                         {
-                            var val = valueProp.GetValue(current);
-                            if (val != null) return val;
+                            var dict = prop.GetValue(cv) as Dictionary<Type, object?>;
+                            if (dict != null && dict.TryGetValue(type, out var val)) return val;
                         }
                     }
-
-                    // Check if the parent itself matches the requested type
-                    if (type.IsAssignableFrom(currentType)) return current;
-
-                    // Check well-known properties (ModelState, EditContext, etc.)
-                    var msProp = currentType.GetProperty("ModelState");
-                    if (msProp != null && type.IsAssignableFrom(msProp.PropertyType))
-                    {
-                        var val = msProp.GetValue(current);
-                        if (val != null) return val;
-                    }
-
-                    // Check EditForm's Context property
-                    if (current is EditForm form && type == typeof(EditContext) && form.Context is not null)
-                        return form.Context;
-
+                    // Also cascade ModelState from any parent ComponentBase
+                    if (type == typeof(Dictionary<string, string>) && current.ModelState.Count > 0)
+                        return current.ModelState;
                     current = current.Parent;
                 }
                 return null;
             }
 
-            internal void CloseAll()
+            public void CloseAll()
             {
+                CloseOpeningTag();
                 while (_elementStack.Count > 0)
                 {
                     var name = _elementStack.Pop();
-                    buffer.Append($"</{name}>");
+                    Write("</");
+                    Write(name);
+                    Write(">");
                 }
             }
         }
+    }
+}
+
+namespace Microsoft.AspNetCore.Components.CompilerServices
+{
+    public static class RuntimeHelpers
+    {
+        public static T TypeCheck<T>(T value) => value;
     }
 }

@@ -1,3 +1,4 @@
+using System.Buffers;
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Text;
@@ -7,7 +8,6 @@ using CosmoApiServer.Core.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Mvc.Razor.Internal;
-using RenderFragment = Microsoft.AspNetCore.Components.RenderFragment;
 
 namespace CosmoApiServer.Core.Controllers;
 
@@ -55,12 +55,16 @@ public static class ComponentScanner
 
     private static PropertyInfo[] GetInjectProperties(Type type) =>
         _injectCache.GetOrAdd(type, t =>
-            t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
-             .Where(p => p.GetCustomAttribute<RazorInjectAttribute>() is not null)
+            t.GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+             .Where(p => p.GetCustomAttribute<RazorInjectAttribute>() is not null || 
+                         p.GetCustomAttribute<InjectAttribute>() is not null)
              .ToArray());
 
     private static void RegisterComponent(Type type, string template, RouteTable routeTable)
     {
+        // Avoid duplicate registrations for same method/template (e.g. if already registered)
+        // We match exactly on template string here
+        
         // Pre-cache reflection metadata at registration time
         var paramProps = GetParameterProperties(type);
         var injectProps = GetInjectProperties(type);
@@ -83,26 +87,84 @@ public static class ComponentScanner
                 }
             }
 
-            // Bind [Parameter] properties from Route and Query (using cached metadata)
+            // Bind [Parameter] properties from Route, Query, and Form (using cached metadata)
+            CosmoApiServer.Core.Http.MultipartForm? form = null;
+            if (ctx.Request.Method == CosmoApiServer.Core.Http.HttpMethod.POST)
+            {
+                form = await ctx.Request.ReadFormAsync();
+            }
+
             foreach (var prop in paramProps)
             {
                 if (ctx.Request.RouteValues.TryGetValue(prop.Name, out var rv))
                 {
-                    prop.SetValue(component, Convert(rv, prop.PropertyType));
+                    prop.SetValue(component, ConvertValue(rv, prop.PropertyType));
                 }
                 else if (ctx.Request.Query.TryGetValue(prop.Name, out var qv))
                 {
-                    prop.SetValue(component, Convert(qv, prop.PropertyType));
+                    prop.SetValue(component, ConvertValue(qv, prop.PropertyType));
+                }
+                else if (form != null)
+                {
+                    var isComplex = !prop.PropertyType.IsPrimitive && 
+                                    prop.PropertyType != typeof(string) && 
+                                    !prop.PropertyType.IsValueType;
+
+                    if (form.Fields.TryGetValue(prop.Name, out var fv))
+                    {
+                        prop.SetValue(component, ConvertValue(fv, prop.PropertyType));
+                    }
+                    else if (isComplex)
+                    {
+                        // Complex object binding from form fields (e.g. Model.Name)
+                        var obj = prop.GetValue(component);
+                        if (obj == null)
+                        {
+                            try {
+                                obj = Activator.CreateInstance(prop.PropertyType);
+                                prop.SetValue(component, obj);
+                            } catch (Exception ex) { 
+                                Console.WriteLine($"[ERROR] Could not create instance of {prop.PropertyType.Name}: {ex.Message}");
+                            }
+                        }
+
+                        if (obj != null)
+                        {
+                            Console.WriteLine($"[DEBUG] Binding complex property '{prop.Name}' of type '{obj.GetType().Name}'");
+                            foreach (var field in form.Fields)
+                            {
+                                var fieldName = field.Key;
+                                // Support both "PropertyName" and "ModelName.PropertyName"
+                                if (fieldName.StartsWith(prop.Name + ".", StringComparison.OrdinalIgnoreCase))
+                                {
+                                    fieldName = fieldName.Substring(prop.Name.Length + 1);
+                                }
+
+                                var subProp = obj.GetType().GetProperty(fieldName, BindingFlags.Public | BindingFlags.Instance | BindingFlags.IgnoreCase);
+                                if (subProp != null && subProp.CanWrite)
+                                {
+                                    var converted = ConvertValue(field.Value, subProp.PropertyType);
+                                    Console.WriteLine($"[DEBUG]   -> Setting {obj.GetType().Name}.{subProp.Name} = '{converted}'");
+                                    subProp.SetValue(obj, converted);
+                                }
+                            }
+                        }
+                    }
                 }
             }
 
             // Automatic Validation for routable components (using cached metadata)
-            foreach (var prop in paramProps)
             {
-                var val = prop.GetValue(component);
-                if (val != null) ModelValidator.Validate(val, component.ModelState);
+                foreach (var prop in paramProps)
+                {
+                    var val = prop.GetValue(component);
+                    if (val != null)
+                    {
+                        ModelValidator.Validate(val, component.ModelState);
+                    }
+                }
+                ModelValidator.Validate(component, component.ModelState);
             }
-            ModelValidator.Validate(component, component.ModelState);
 
             // Automatic Wrapping: Component -> MainLayout -> App
             if (_appType != null)
@@ -113,22 +175,22 @@ public static class ComponentScanner
                 var childContentProp = _appType.GetProperty("ChildContent");
                 if (childContentProp != null)
                 {
-                    childContentProp.SetValue(app, (RenderFragment)(builder => 
+                    var componentHtml = await component.RenderAsync();
+                    childContentProp.SetValue(app, (Microsoft.AspNetCore.Components.RenderFragment)(builder => 
                     {
                         if (_mainLayoutType != null)
                         {
                             builder.OpenComponent(0, _mainLayoutType);
-                            builder.AddComponentParameter(1, "Body", (RenderFragment)(async bodyBuilder => 
+                            builder.AddComponentParameter(1, "Body", (Microsoft.AspNetCore.Components.RenderFragment)(bodyBuilder => 
                             {
-                                await RenderToBuilder(component, bodyBuilder);
+                                bodyBuilder.AddMarkupContent(0, componentHtml);
                             }));
                             builder.CloseComponent();
                         }
                         else
                         {
-                            return RenderToBuilder(component, builder);
+                            builder.AddMarkupContent(0, componentHtml);
                         }
-                        return ValueTask.CompletedTask;
                     }));
                 }
                 
@@ -138,7 +200,8 @@ public static class ComponentScanner
             {
                 var layout = (Microsoft.AspNetCore.Components.LayoutComponentBase)ActivatorUtilities.CreateInstance(ctx.RequestServices, _mainLayoutType);
                 layout.HttpContext = ctx;
-                layout.Body = (builder) => RenderToBuilder(component, builder);
+                var componentHtml = await component.RenderAsync();
+                layout.Body = (builder) => builder.AddMarkupContent(0, componentHtml);
                 await layout.RenderToResponseAsync(ctx.Response);
             }
             else
@@ -148,30 +211,39 @@ public static class ComponentScanner
         };
 
         routeTable.Add(Http.HttpMethod.GET, template, handler);
+        routeTable.Add(Http.HttpMethod.POST, template, handler);
     }
 
-    private static async ValueTask RenderToBuilder(Templates.ComponentBase component, Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder builder)
+    private static object? ConvertValue(string value, Type targetType)
     {
-        // Set the builder's buffer on the component so it writes directly to it
-        var field = typeof(Microsoft.AspNetCore.Components.Rendering.RenderTreeBuilder).GetField("buffer", BindingFlags.NonPublic | BindingFlags.Instance);
-        var buffer = (StringBuilder)field!.GetValue(builder)!;
-        
-        component._buffer = buffer;
-        await component.RenderAsync();
-    }
-
-    private static object? Convert(string value, Type targetType)
-    {
-        if (string.IsNullOrEmpty(value)) return null;
+        if (string.IsNullOrEmpty(value)) 
+        {
+            if (targetType == typeof(string)) return string.Empty;
+            return null;
+        }
 
         var underlyingType = Nullable.GetUnderlyingType(targetType) ?? targetType;
 
-        if (underlyingType == typeof(string)) return value;
-        if (underlyingType == typeof(int))    return int.Parse(value);
-        if (underlyingType == typeof(long))   return long.Parse(value);
-        if (underlyingType == typeof(bool))   return bool.Parse(value);
-        if (underlyingType == typeof(Guid))   return Guid.Parse(value);
+        try
+        {
+            if (underlyingType == typeof(string)) return value;
+            if (underlyingType == typeof(int))    return int.TryParse(value, out var i) ? i : 0;
+            if (underlyingType == typeof(long))   return long.TryParse(value, out var l) ? l : 0L;
+            if (underlyingType == typeof(bool))   
+            {
+                if (bool.TryParse(value, out var b)) return b;
+                if (value == "true,false") return true; // Handle checkbox quirk
+                return value == "true" || value == "1" || value == "on";
+            }
+            if (underlyingType == typeof(Guid))   return Guid.TryParse(value, out var g) ? g : Guid.Empty;
+            if (underlyingType.IsEnum)            return Enum.Parse(underlyingType, value, true);
 
-        return System.Convert.ChangeType(value, underlyingType);
+            return System.Convert.ChangeType(value, underlyingType);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ERROR] Failed to convert '{value}' to {targetType.Name}: {ex.Message}");
+            return null;
+        }
     }
 }

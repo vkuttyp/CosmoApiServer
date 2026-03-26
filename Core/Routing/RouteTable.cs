@@ -45,7 +45,7 @@ public sealed class RouteTable
 
         foreach (var entry in routes)
         {
-            var values = entry.Template.TryMatch(cleanPath.ToString());
+            var values = entry.Template.TryMatch(cleanPath);
             if (values is not null)
             {
                 var match = new RouteMatch(entry, values);

@@ -8,6 +8,7 @@ namespace CosmoApiServer.Core.Http;
 internal static class HttpContextPool
 {
     private static readonly ConcurrentQueue<HttpContext> _pool = new();
+    private static int _count;
     private const int MaxPoolSize = 1024;
 
     /// <summary>
@@ -17,6 +18,7 @@ internal static class HttpContextPool
     {
         if (_pool.TryDequeue(out var context))
         {
+            Interlocked.Decrement(ref _count);
             return context;
         }
         return new HttpContext();
@@ -27,8 +29,11 @@ internal static class HttpContextPool
     /// </summary>
     public static void Return(HttpContext? context)
     {
-        if (context == null || _pool.Count >= MaxPoolSize) return;
+        if (context is null) return;
+        // Volatile.Read is a cheap ordered read — avoids the O(n) ConcurrentQueue.Count traversal
+        if (Volatile.Read(ref _count) >= MaxPoolSize) return;
         context.Reset();
         _pool.Enqueue(context);
+        Interlocked.Increment(ref _count);
     }
 }

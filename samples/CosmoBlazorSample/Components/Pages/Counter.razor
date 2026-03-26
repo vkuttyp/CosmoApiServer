@@ -1,0 +1,36 @@
+@page "/counter"
+@layout MainLayout
+
+<h1>Counter</h1>
+
+<p role="status">Current count: @CurrentCount</p>
+
+<p>
+    This component demonstrates parameters. In this SSR implementation, 
+    clicking a button would typically require a form post or a page refresh 
+    since there is no client-side runtime.
+</p>
+
+<div class="mb-3">
+    <label>Increment Amount:</label>
+    <input type="number" @bind="IncrementAmount" class="form-control" style="width: 100px" />
+</div>
+
+<a href="/counter?current=@(CurrentCount + IncrementAmount)" class="btn btn-primary">Increment</a>
+
+@code {
+    [Microsoft.AspNetCore.Components.Parameter]
+    public int CurrentCount { get; set; }
+
+    [Microsoft.AspNetCore.Components.Parameter]
+    public int IncrementAmount { get; set; } = 1;
+
+    protected override ValueTask OnInitializedAsync()
+    {
+        if (HttpContext.Request.Query.TryGetValue("current", out var c) && int.TryParse(c, out var val))
+        {
+            CurrentCount = val;
+        }
+        return base.OnInitializedAsync();
+    }
+}

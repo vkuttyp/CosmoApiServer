@@ -19,6 +19,14 @@ public sealed class RateLimitOptions
 
     /// <summary>Message returned in the response body when rate limited.</summary>
     public string Message { get; set; } = "Rate limit exceeded. Try again later.";
+
+    /// <summary>
+    /// Set to true when the server sits behind a trusted reverse proxy (e.g. nginx) that
+    /// appends the real client IP to X-Forwarded-For. When true, the rightmost XFF value
+    /// is used (added by the trusted proxy) instead of the leftmost (client-controlled).
+    /// Default false — uses the socket remote IP from __RemoteIP.
+    /// </summary>
+    public bool TrustProxy { get; set; } = false;
 }
 
 /// <summary>
@@ -72,19 +80,24 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
         }
     }
 
-    private static string GetClientIp(HttpContext context)
+    private string GetClientIp(HttpContext context)
     {
-        // Check X-Forwarded-For first (for reverse proxy setups)
-        if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var xff) && !string.IsNullOrEmpty(xff))
+        // Always prefer the real socket IP when available
+        if (context.Items.TryGetValue("__RemoteIP", out var remoteIp) && remoteIp is string socketIp)
         {
-            // Take the first (leftmost) IP which is the original client
-            var commaIdx = xff.IndexOf(',');
-            return commaIdx > 0 ? xff[..commaIdx].Trim() : xff.Trim();
-        }
+            if (!options.TrustProxy)
+                return socketIp;
 
-        // Fall back to remote endpoint from context items (set by transport)
-        if (context.Items.TryGetValue("__RemoteIP", out var remoteIp) && remoteIp is string ip)
-            return ip;
+            // Behind a trusted proxy: use X-Forwarded-For but take the rightmost value,
+            // which is appended by the trusted proxy (leftmost values are client-controlled).
+            if (context.Request.Headers.TryGetValue("X-Forwarded-For", out var xff) && !string.IsNullOrEmpty(xff))
+            {
+                var commaIdx = xff.LastIndexOf(',');
+                return commaIdx >= 0 ? xff[(commaIdx + 1)..].Trim() : xff.Trim();
+            }
+
+            return socketIp;
+        }
 
         return "unknown";
     }
@@ -93,14 +106,19 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
     private sealed class RateLimitEntry(DateTime windowEnd)
     {
         private int _count;
-        public DateTime WindowEnd { get; private set; } = windowEnd;
+        // Store ticks as long so WindowEnd reads/writes are atomic via Interlocked
+        private long _windowEndTicks = windowEnd.Ticks;
+
+        public DateTime WindowEnd => new(Interlocked.Read(ref _windowEndTicks), DateTimeKind.Utc);
 
         public int Increment() => Interlocked.Increment(ref _count);
 
         public void Reset(DateTime newWindowEnd)
         {
-            WindowEnd = newWindowEnd;
+            // Reset count first, then update window — any increments between the two
+            // belong to the new window, which is acceptable for a fixed-window limiter.
             Interlocked.Exchange(ref _count, 0);
+            Interlocked.Exchange(ref _windowEndTicks, newWindowEnd.Ticks);
         }
     }
 }

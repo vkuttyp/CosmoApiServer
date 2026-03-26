@@ -115,17 +115,70 @@ internal static class Http11Parser
     public static bool TryDetectExpect100(in ReadOnlySequence<byte> buffer)
     {
         var reader = new SequenceReader<byte>(buffer);
-        if (!reader.TryReadTo(out ReadOnlySequence<byte> _, CrLf)) return false;
+        // Skip request line
+        if (!reader.TryReadTo(out ReadOnlySequence<byte> discard1, CrLf)) return false;
         
         while (true) {
-            if (reader.IsNext(CrLf)) return false;
-            if (!reader.TryReadTo(out ReadOnlySequence<byte> lineSeq, CrLf)) return false;
+            if (reader.IsNext(CrLf)) return false; // End of headers
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> nameSeq, Colon)) return false;
             
-            var lineBytes = lineSeq.ToArray();
-            var lineString = Encoding.ASCII.GetString(lineBytes);
-            if (lineString.StartsWith("Expect:", StringComparison.OrdinalIgnoreCase) && 
-                lineString.Contains("100-continue", StringComparison.OrdinalIgnoreCase)) return true;
+            // Fast check for "Expect"
+            if (IsEqual(nameSeq, "Expect"u8))
+            {
+                if (!reader.TryReadTo(out ReadOnlySequence<byte> valueSeq, CrLf)) return false;
+                if (Contains(valueSeq, "100-continue"u8)) return true;
+                continue;
+            }
+
+            // Skip rest of header line
+            if (!reader.TryReadTo(out ReadOnlySequence<byte> discard2, CrLf)) return false;
         }
+    }
+
+    private static bool IsEqual(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> expected)
+    {
+        if (sequence.Length != expected.Length) return false;
+        
+        int i = 0;
+        foreach (var memory in sequence)
+        {
+            foreach (byte b in memory.Span)
+            {
+                byte c1 = b;
+                byte c2 = expected[i++];
+                if (c1 == c2) continue;
+                if (c1 >= 'A' && c1 <= 'Z') c1 |= 0x20;
+                if (c2 >= 'A' && c2 <= 'Z') c2 |= 0x20;
+                if (c1 != c2) return false;
+            }
+        }
+        return true;
+    }
+
+    private static bool Contains(ReadOnlySequence<byte> sequence, ReadOnlySpan<byte> value)
+    {
+        // Simple case-insensitive contains for ASCII
+        if (sequence.Length < value.Length) return false;
+        
+        // Materializing small value sequences for simple 'Contains' is acceptable
+        // but let's try to be a bit better.
+        var full = sequence.IsSingleSegment ? sequence.FirstSpan : sequence.ToArray();
+        
+        for (int i = 0; i <= full.Length - value.Length; i++)
+        {
+            bool match = true;
+            for (int j = 0; j < value.Length; j++)
+            {
+                byte c1 = full[i + j];
+                byte c2 = value[j];
+                if (c1 == c2) continue;
+                if (c1 >= 'A' && c1 <= 'Z') c1 |= 0x20;
+                if (c2 >= 'A' && c2 <= 'Z') c2 |= 0x20;
+                if (c1 != c2) { match = false; break; }
+            }
+            if (match) return true;
+        }
+        return false;
     }
 }
 
@@ -140,9 +193,10 @@ public readonly struct HeaderEntry
         Value = Encoding.UTF8.GetString(value).Trim();
     }
 
+    public bool IsName(string name) => Name.Equals(name, StringComparison.OrdinalIgnoreCase);
+
     public bool IsName(ReadOnlySpan<byte> nameUtf8)
     {
-        // Compare using the materialized string but without new allocations
         if (Name.Length != nameUtf8.Length) return false;
         
         for (int i = 0; i < Name.Length; i++)
@@ -161,7 +215,6 @@ public readonly struct HeaderEntry
     {
         return Value.Contains(Encoding.UTF8.GetString(valueUtf8), StringComparison.OrdinalIgnoreCase);
     }
-
     public void Deconstruct(out string name, out string value)
     {
         name = Name;

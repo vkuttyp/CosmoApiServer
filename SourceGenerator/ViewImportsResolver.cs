@@ -15,7 +15,11 @@ internal static class ViewImportsResolver
     public static ImmutableDictionary<string, AdditionalText> BuildViewImportsMap(ImmutableArray<AdditionalText> allCshtmlFiles)
     {
         return allCshtmlFiles
-            .Where(f => Path.GetFileName(f.Path).Equals("_ViewImports.cshtml", StringComparison.OrdinalIgnoreCase))
+            .Where(f => {
+                var name = Path.GetFileName(f.Path);
+                return name.Equals("_ViewImports.cshtml", StringComparison.OrdinalIgnoreCase) ||
+                       name.Equals("_Imports.razor", StringComparison.OrdinalIgnoreCase);
+            })
             .ToImmutableDictionary(f => Path.GetDirectoryName(f.Path), f => f);
     }
 

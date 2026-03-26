@@ -155,12 +155,12 @@ internal class RazorSliceProxyGenerator : IIncrementalGenerator
                         private static readonly global::System.Type _sliceType = global::System.Type.GetType(TypeName)!;
                 """);
 
-            // Emit @inject properties for components
+            // Emit @inject properties for components (.cshtml only, .razor SDK handles .razor)
             var injectDirectives = sourceText is not null
                 ? ViewImportsResolver.ResolveDirectives(file.Path, projectDirectory!, viewImportsMap, sourceText).InjectDirectives
                 : new List<InjectDirective>();
 
-            if (isRazor && injectDirectives.Count > 0)
+            if (!isRazor && injectDirectives.Count > 0)
             {
                 foreach (var inject in injectDirectives)
                 {

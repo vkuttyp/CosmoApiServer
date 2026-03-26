@@ -44,8 +44,8 @@ class Program
         string target = args.Length > 0 ? args[0] : "CosmoApiServer";
         string url = target switch
         {
-            "CosmoApiServer" => "http://127.0.0.1:9001",
-            "AspNetCore"     => "http://127.0.0.1:9002",
+            "CosmoApiServer" => "http://127.0.0.1:9102",
+            "AspNetCore"     => "http://127.0.0.1:9103",
             "CosmoRazor"     => "http://127.0.0.1:9003",
             "BlazorSSR"      => "http://127.0.0.1:9004",
             _                => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
@@ -104,6 +104,19 @@ class Program
             scenarios.Add(("GET /json",      () => http.GetAsync("/json")));
             scenarios.Add(("GET /route/{id}", () => http.GetAsync("/route/7")));
             scenarios.Add(("POST /echo",     () => http.PostAsync("/echo", new StringContent(EchoBody, Encoding.UTF8, "application/json"))));
+            
+            scenarios.Add(("GET /large-json", () => http.GetAsync("/large-json")));
+            scenarios.Add(("GET /query",      () => http.GetAsync("/query?name=bench&id=123")));
+            scenarios.Add(("POST /form",     () => http.PostAsync("/form", new FormUrlEncodedContent(new[] { new KeyValuePair<string, string>("test", "value") }))));
+            
+            scenarios.Add(("GET /headers", () => {
+                var req = new HttpRequestMessage(System.Net.Http.HttpMethod.Get, "/headers");
+                for (int i = 0; i < 10; i++) req.Headers.Add($"X-Custom-{i}", $"value-{i}");
+                return http.SendAsync(req);
+            }));
+
+            scenarios.Add(("GET /stream", () => http.GetAsync("/stream")));
+            scenarios.Add(("GET /file",   () => http.GetAsync("/file")));
         }
 
         foreach (var s in scenarios)

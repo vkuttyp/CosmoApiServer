@@ -17,4 +17,11 @@ public sealed class ServerOptions
 
     /// <summary>True when a certificate path has been configured.</summary>
     public bool EnableTls => CertificatePath is not null;
+
+    /// <summary>
+    /// Maximum lifetime of a single HTTP/1.1 connection in seconds.
+    /// Prevents slowloris and idle connection exhaustion. Default 120s.
+    /// Set to 0 to disable (not recommended in production).
+    /// </summary>
+    public int ConnectionTimeoutSeconds { get; set; } = 120;
 }

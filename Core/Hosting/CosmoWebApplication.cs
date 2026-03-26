@@ -103,6 +103,7 @@ public sealed class CosmoWebApplication
         await _server.StartAsync(
             _options.Port, pipeline, _services, _options.MaxRequestBodySize,
             _options.CertificatePath, _options.CertificatePassword, _options.EnableHttp2,
+            _options.ConnectionTimeoutSeconds,
             cancellationToken);
 
         // Wait until cancelled

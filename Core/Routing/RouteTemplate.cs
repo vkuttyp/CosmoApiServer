@@ -26,9 +26,9 @@ public sealed class RouteTemplate
     /// Attempts to match a request path. Returns null on mismatch; otherwise extracted route values.
     /// Uses span-based walking: no heap allocations for literal-only routes.
     /// </summary>
-    public IReadOnlyDictionary<string, string>? TryMatch(string path)
+    public IReadOnlyDictionary<string, string>? TryMatch(ReadOnlySpan<char> path)
     {
-        var span = path.AsSpan().Trim('/');
+        var span = path.Trim('/');
 
         // Count path segments without allocating
         int segCount = CountSegments(span);
@@ -49,7 +49,13 @@ public sealed class RouteTemplate
             {
                 // Route parameter — capture value (only borrow from pool when needed)
                 values ??= RouteValuePool.Rent();
-                values[tmpl[1..^1]] = seg.ToString();
+                var key = tmpl[1..^1];
+                var colonIndex = key.IndexOf(':');
+                if (colonIndex != -1)
+                {
+                    key = key.Substring(0, colonIndex);
+                }
+                values[key] = seg.ToString();
             }
             else if (!seg.Equals(tmpl.AsSpan(), StringComparison.OrdinalIgnoreCase))
             {
