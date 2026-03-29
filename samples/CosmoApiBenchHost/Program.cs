@@ -4,6 +4,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.IO;
+using System.Buffers;
+using System.Text.Json;
 using CosmoApiServer.Core.Hosting;
 using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Http;
@@ -85,11 +87,23 @@ app.MapGet("/headers", ctx => {
 });
 
 app.MapGet("/stream", async ctx => {
-    var items = Enumerable.Range(1, 10).Select(i => new { id = i });
+    var newline = new byte[] { (byte)'\n' };
     await ctx.Response.WriteStreamingResponseAsync(200, async stream => {
-        foreach (var item in items) {
-            await System.Text.Json.JsonSerializer.SerializeAsync(stream, item);
-            stream.WriteByte((byte)'\n');
+        var buffer = new ArrayBufferWriter<byte>(128);
+
+        foreach (var id in Enumerable.Range(1, 10))
+        {
+            buffer.Clear();
+            using (var writer = new Utf8JsonWriter(buffer))
+            {
+                writer.WriteStartObject();
+                writer.WriteNumber("id", id);
+                writer.WriteEndObject();
+                writer.Flush();
+            }
+
+            await stream.WriteAsync(buffer.WrittenMemory);
+            await stream.WriteAsync(newline);
             await stream.FlushAsync();
         }
     });

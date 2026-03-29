@@ -8,8 +8,8 @@
 echo "🚀 Building projects..."
 dotnet build samples/CosmoApiBenchHost/CosmoApiBenchHost.csproj -c Release --nologo
 dotnet build samples/AspNetBenchHost/AspNetBenchHost.csproj -c Release --nologo
-dotnet build samples/CosmoRazorBenchHost/CosmoRazorBenchHost.csproj -c Release --nologo
-dotnet build samples/BlazorBenchHost/BlazorBenchHost.csproj -c Release --nologo
+# dotnet build samples/CosmoRazorBenchHost/CosmoRazorBenchHost.csproj -c Release --nologo
+# dotnet build samples/BlazorBenchHost/BlazorBenchHost.csproj -c Release --nologo
 dotnet build tests/ApiServer.Benchmark/ApiServer.Benchmark.csproj -c Release --nologo
 
 echo ""
@@ -18,10 +18,10 @@ dotnet run --project samples/CosmoApiBenchHost/CosmoApiBenchHost.csproj -c Relea
 COSMO_PID=$!
 dotnet run --project samples/AspNetBenchHost/AspNetBenchHost.csproj -c Release --no-build &
 ASP_PID=$!
-dotnet run --project samples/CosmoRazorBenchHost/CosmoRazorBenchHost.csproj -c Release --no-build &
-RAZOR_PID=$!
-dotnet run --project samples/BlazorBenchHost/BlazorBenchHost.csproj -c Release --no-build &
-BLAZOR_PID=$!
+# dotnet run --project samples/CosmoRazorBenchHost/CosmoRazorBenchHost.csproj -c Release --no-build &
+# RAZOR_PID=$!
+# dotnet run --project samples/BlazorBenchHost/BlazorBenchHost.csproj -c Release --no-build &
+# BLAZOR_PID=$!
 
 # Wait for servers to be ready
 sleep 5

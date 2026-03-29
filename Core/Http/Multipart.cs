@@ -24,8 +24,16 @@ public static class MultipartParser
     /// <summary>Parse from an HttpRequest. Throws if Content-Type is not multipart/form-data.</summary>
     public static MultipartForm Parse(HttpRequest request)
     {
+        var body = request.Body;
+        if (body.Length == 0 && request.BodyStream != Stream.Null)
+        {
+            using var ms = new MemoryStream();
+            request.BodyStream.CopyTo(ms);
+            body = ms.ToArray();
+        }
+
         var ct = request.Headers.TryGetValue("content-type", out var v) ? v : string.Empty;
-        return Parse(request.Body, ct);
+        return Parse(body, ct);
     }
 
     /// <summary>Parse from raw body bytes and a Content-Type header value.</summary>
