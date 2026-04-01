@@ -12,18 +12,18 @@ Sequential · 1,000 rounds · keep-alive · macOS arm64
 
 | Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
 |---|---|---|---|---|
-| GET /ping | **8,757 ops/s** | 6,601 ops/s | 0.11 ms | **+33%** |
-| GET /json | **8,772 ops/s** | 7,299 ops/s | 0.11 ms | **+20%** |
-| GET /route/{id} | **9,434 ops/s** | 8,143 ops/s | 0.11 ms | **+16%** |
-| POST /echo | **8,368 ops/s** | 6,631 ops/s | 0.12 ms | **+26%** |
-| GET /large-json (1000 items) | **1,862 ops/s** | 1,477 ops/s | 0.54 ms | **+26%** |
-| GET /query | **11,025 ops/s** | 8,439 ops/s | 0.09 ms | **+31%** |
-| POST /form | **10,320 ops/s** | 8,052 ops/s | 0.10 ms | **+28%** |
-| GET /headers | **10,132 ops/s** | 8,143 ops/s | 0.10 ms | **+24%** |
-| GET /stream (NDJSON, 10 items) | 7,622 ops/s | **10,638 ops/s** | 0.13 ms | −28% |
-| GET /file (64 KB) | **5,411 ops/s** | 4,361 ops/s | 0.18 ms | **+24%** |
+| GET /ping | **10,040 ops/s** | 8,197 ops/s | 0.10 ms | **+22%** |
+| GET /json | **9,524 ops/s** | 7,452 ops/s | 0.10 ms | **+28%** |
+| GET /route/{id} | 8,621 ops/s | **8,772 ops/s** | 0.12 ms | −2% |
+| POST /echo | **9,009 ops/s** | 8,110 ops/s | 0.11 ms | **+11%** |
+| GET /large-json (1000 items) | **1,718 ops/s** | 1,529 ops/s | 0.58 ms | **+12%** |
+| GET /query | **11,848 ops/s** | 7,728 ops/s | 0.08 ms | **+53%** |
+| POST /form | **10,081 ops/s** | 7,776 ops/s | 0.10 ms | **+30%** |
+| GET /headers | **9,615 ops/s** | 7,975 ops/s | 0.10 ms | **+21%** |
+| GET /stream (NDJSON, 10 items) | 8,772 ops/s | **9,399 ops/s** | 0.11 ms | −7% |
+| GET /file (64 KB) | **5,935 ops/s** | 4,384 ops/s | 0.17 ms | **+35%** |
 
-**9 of 10 scenarios win.** The remaining `/stream` gap is still the chunked streaming path, where Kestrel stays ahead on this run.
+**8 of 10 scenarios win.** The remaining `/stream` gap is now much smaller after the chunked streaming fast path, and `/route/{id}` is effectively at parity on this run.
 
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |

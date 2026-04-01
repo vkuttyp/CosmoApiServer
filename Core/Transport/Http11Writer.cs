@@ -1,5 +1,6 @@
 using System.Buffers;
 using System.IO.Pipelines;
+using System.Runtime.InteropServices;
 using System.Text;
 using CosmoApiServer.Core.Http;
 
@@ -159,6 +160,7 @@ internal static class Http11Writer
     internal sealed class ChunkedBodyStream(PipeWriter writer) : Stream
     {
         private readonly ArrayBufferWriter<byte> _staging = new(4096);
+        private ReadOnlyMemory<byte> _directSegment = ReadOnlyMemory<byte>.Empty;
 
         public override bool CanRead  => false;
         public override bool CanSeek  => false;
@@ -172,17 +174,39 @@ internal static class Http11Writer
         // Stage bytes — no chunk headers written yet
         public override void Write(byte[] buffer, int offset, int count)
         {
-            if (count > 0) _staging.Write(buffer.AsSpan(offset, count));
+            if (count <= 0) return;
+
+            if (offset == 0 && count == buffer.Length && _staging.WrittenCount == 0 && _directSegment.IsEmpty)
+            {
+                // Fast path for common NDJSON streaming: the caller already provides a stable byte[].
+                _directSegment = buffer;
+                return;
+            }
+
+            AppendToStaging(buffer.AsSpan(offset, count));
         }
 
         public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken ct)
         {
-            if (!buffer.IsEmpty) _staging.Write(buffer.Span);
+            if (buffer.IsEmpty) return ValueTask.CompletedTask;
+
+            if (_staging.WrittenCount == 0 && _directSegment.IsEmpty &&
+                MemoryMarshal.TryGetArray(buffer, out var segment) &&
+                segment.Array is not null &&
+                segment.Offset == 0 &&
+                segment.Count == segment.Array.Length)
+            {
+                _directSegment = buffer;
+                return ValueTask.CompletedTask;
+            }
+
+            AppendToStaging(buffer.Span);
             return ValueTask.CompletedTask;
         }
 
         public override void WriteByte(byte value)
         {
+            EnsureDirectSegmentMovedToStaging();
             _staging.GetSpan(1)[0] = value;
             _staging.Advance(1);
         }
@@ -193,7 +217,15 @@ internal static class Http11Writer
 
         public override async Task FlushAsync(CancellationToken ct)
         {
-            if (_staging.WrittenCount > 0)
+            if (!_directSegment.IsEmpty)
+            {
+                WriteHex(writer, _directSegment.Length);
+                writer.Write("\r\n"u8);
+                writer.Write(_directSegment.Span);
+                writer.Write("\r\n"u8);
+                _directSegment = ReadOnlyMemory<byte>.Empty;
+            }
+            else if (_staging.WrittenCount > 0)
             {
                 WriteHex(writer, _staging.WrittenCount);
                 writer.Write("\r\n"u8);
@@ -202,6 +234,20 @@ internal static class Http11Writer
                 _staging.Clear();
             }
             await writer.FlushAsync(ct);
+        }
+
+        private void AppendToStaging(ReadOnlySpan<byte> data)
+        {
+            if (data.IsEmpty) return;
+            EnsureDirectSegmentMovedToStaging();
+            _staging.Write(data);
+        }
+
+        private void EnsureDirectSegmentMovedToStaging()
+        {
+            if (_directSegment.IsEmpty) return;
+            _staging.Write(_directSegment.Span);
+            _directSegment = ReadOnlyMemory<byte>.Empty;
         }
 
         private static void WriteHex(PipeWriter w, int value)
