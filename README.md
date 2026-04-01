@@ -12,18 +12,18 @@ Sequential · 1,000 rounds · keep-alive · macOS arm64
 
 | Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
 |---|---|---|---|---|
-| GET /ping | **13,423 ops/s** | 10,695 ops/s | 0.07 ms | **+26%** |
-| GET /json | **13,158 ops/s** | 10,091 ops/s | 0.08 ms | **+30%** |
-| GET /route/{id} | **15,083 ops/s** | 10,225 ops/s | 0.07 ms | **+48%** |
-| POST /echo | **14,045 ops/s** | 10,000 ops/s | 0.07 ms | **+40%** |
-| GET /large-json (1000 items) | **2,312 ops/s** | 1,897 ops/s | 0.43 ms | **+22%** |
-| GET /query | **14,771 ops/s** | 11,161 ops/s | 0.07 ms | **+32%** |
-| POST /form | **13,986 ops/s** | 9,551 ops/s | 0.07 ms | **+46%** |
-| GET /headers | **13,106 ops/s** | 10,395 ops/s | 0.08 ms | **+26%** |
-| GET /stream (NDJSON, 10 items) | **8,224 ops/s** | 9,443 ops/s | 0.12 ms | −13% |
-| GET /file (64 KB) | **7,424 ops/s** | 5,519 ops/s | 0.13 ms | **+35%** |
+| GET /ping | **8,757 ops/s** | 6,601 ops/s | 0.11 ms | **+33%** |
+| GET /json | **8,772 ops/s** | 7,299 ops/s | 0.11 ms | **+20%** |
+| GET /route/{id} | **9,434 ops/s** | 8,143 ops/s | 0.11 ms | **+16%** |
+| POST /echo | **8,368 ops/s** | 6,631 ops/s | 0.12 ms | **+26%** |
+| GET /large-json (1000 items) | **1,862 ops/s** | 1,477 ops/s | 0.54 ms | **+26%** |
+| GET /query | **11,025 ops/s** | 8,439 ops/s | 0.09 ms | **+31%** |
+| POST /form | **10,320 ops/s** | 8,052 ops/s | 0.10 ms | **+28%** |
+| GET /headers | **10,132 ops/s** | 8,143 ops/s | 0.10 ms | **+24%** |
+| GET /stream (NDJSON, 10 items) | 7,622 ops/s | **10,638 ops/s** | 0.13 ms | −28% |
+| GET /file (64 KB) | **5,411 ops/s** | 4,361 ops/s | 0.18 ms | **+24%** |
 
-**9 of 10 scenarios win.** The `/stream` gap is chunked-encoding overhead vs Kestrel's tuned chunked encoder.
+**9 of 10 scenarios win.** The remaining `/stream` gap is still the chunked streaming path, where Kestrel stays ahead on this run.
 
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |
