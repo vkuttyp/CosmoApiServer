@@ -124,7 +124,6 @@ internal static class Http11Writer
         writer.Write(TransferChunked);
         writer.Write(ContentTypeNdjson);
         writer.Write(CrLf);
-        await writer.FlushAsync(ct);
 
         // Stage all writes between FlushAsync calls into a single chunk each.
         var chunkStream = new ChunkedBodyStream(writer);

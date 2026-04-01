@@ -237,6 +237,12 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseHttp3()
+    {
+        _options.EnableHttp3 = true;
+        return this;
+    }
+
     public CosmoWebApplication Build()
     {
         var routeTable = new RouteTable();

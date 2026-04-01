@@ -15,6 +15,12 @@ public sealed class ServerOptions
     /// </summary>
     public bool EnableHttp2 { get; set; } = false;
 
+    /// <summary>
+    /// When true, start an experimental HTTP/3 QUIC listener on the same port.
+    /// Requires TLS and runtime QUIC support.
+    /// </summary>
+    public bool EnableHttp3 { get; set; } = false;
+
     /// <summary>True when a certificate path has been configured.</summary>
     public bool EnableTls => CertificatePath is not null;
 

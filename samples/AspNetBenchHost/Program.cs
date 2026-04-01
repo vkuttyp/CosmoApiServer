@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Buffers;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
@@ -19,6 +20,20 @@ builder.Services.AddResponseCompression(opts => { opts.EnableForHttps = true; })
 builder.Services.AddHsts(opts => { opts.MaxAge = TimeSpan.FromDays(365); });
 
 var app = builder.Build();
+var streamLines = Enumerable.Range(1, 10)
+    .Select(i =>
+    {
+        var buffer = new ArrayBufferWriter<byte>(32);
+        using var json = new Utf8JsonWriter(buffer);
+        json.WriteStartObject();
+        json.WriteNumber("id", i);
+        json.WriteEndObject();
+        json.Flush();
+        buffer.GetSpan(1)[0] = (byte)'\n';
+        buffer.Advance(1);
+        return buffer.WrittenMemory.ToArray();
+    })
+    .ToArray();
 
 app.UseExceptionHandler("/error");
 app.UseHsts();
@@ -71,9 +86,9 @@ app.MapGet("/headers", (HttpContext ctx) => {
 // GET /stream → NDJSON stream of 10 items
 app.MapGet("/stream", async (HttpContext ctx) => {
     ctx.Response.ContentType = "application/x-ndjson";
-    foreach (var i in Enumerable.Range(1, 10))
+    foreach (var line in streamLines)
     {
-        await ctx.Response.WriteAsync(JsonSerializer.Serialize(new { id = i }) + "\n");
+        await ctx.Response.Body.WriteAsync(line);
         await ctx.Response.Body.FlushAsync();
     }
 });

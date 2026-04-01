@@ -17,6 +17,20 @@ var builder = CosmoWebApplicationBuilder.Create()
 var benchItems = Enumerable.Range(1, 100).Select(i => 
     new BenchItem(i, $"Item {i}", i * 1.23, DateTime.UtcNow.AddDays(i).ToString("o"))
 ).ToList();
+var streamLines = Enumerable.Range(1, 10)
+    .Select(i =>
+    {
+        var buffer = new ArrayBufferWriter<byte>(32);
+        using var json = new Utf8JsonWriter(buffer);
+        json.WriteStartObject();
+        json.WriteNumber("id", i);
+        json.WriteEndObject();
+        json.Flush();
+        buffer.GetSpan(1)[0] = (byte)'\n';
+        buffer.Advance(1);
+        return buffer.WrittenMemory.ToArray();
+    })
+    .ToArray();
 
 var app = builder.Build();
 
@@ -87,23 +101,10 @@ app.MapGet("/headers", ctx => {
 });
 
 app.MapGet("/stream", async ctx => {
-    var newline = new byte[] { (byte)'\n' };
     await ctx.Response.WriteStreamingResponseAsync(200, async stream => {
-        var buffer = new ArrayBufferWriter<byte>(128);
-
-        foreach (var id in Enumerable.Range(1, 10))
+        foreach (var line in streamLines)
         {
-            buffer.Clear();
-            using (var writer = new Utf8JsonWriter(buffer))
-            {
-                writer.WriteStartObject();
-                writer.WriteNumber("id", id);
-                writer.WriteEndObject();
-                writer.Flush();
-            }
-
-            await stream.WriteAsync(buffer.WrittenMemory);
-            await stream.WriteAsync(newline);
+            await stream.WriteAsync(line);
             await stream.FlushAsync();
         }
     });

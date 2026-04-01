@@ -28,9 +28,7 @@ internal static class Http11Connection
         string? remoteIp,
         CancellationToken ct)
     {
-        // Linked CTS lets either side cancel the other.
-        // Required for Connection: close streaming: ProcessAsync finishes and needs to unblock
-        // FillPipeAsync which is blocked on stream.ReadAsync waiting for client data.
+        // Linked CTS lets either side cancel the other when the connection shuts down.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
 
         var pipe = new Pipe(new PipeOptions(
@@ -41,7 +39,7 @@ internal static class Http11Connection
         var fillTask    = FillPipeAsync(stream, pipe.Writer, cts.Token);
         var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token);
 
-        // When either side finishes (client disconnect or Connection: close), cancel the other.
+        // When either side finishes, cancel the other half of the connection.
         await Task.WhenAny(fillTask.AsTask(), processTask.AsTask());
         cts.Cancel();
         await Task.WhenAll(fillTask.AsTask(), processTask.AsTask());
@@ -169,10 +167,19 @@ internal static class Http11Connection
                         httpContext.Response.StatusCode,
                         httpContext.StreamingBodyWriter,
                         ct);
-                    
+
+                    bool streamingConnectionClose =
+                        (httpContext.Request.Headers.TryGetValue("Connection", out var streamingConn) &&
+                         streamingConn.Equals("close", StringComparison.OrdinalIgnoreCase)) ||
+                        (httpContext.Response.Headers.TryGetValue("Connection", out var streamingRespConn) &&
+                         streamingRespConn.Equals("close", StringComparison.OrdinalIgnoreCase));
+
                     HttpContextPool.Return(httpContext);
-                    // streaming uses Connection: close — stop after one response
-                    break;
+
+                    if (streamingConnectionClose)
+                        break;
+
+                    continue;
                 }
 
                 // Standard response logic

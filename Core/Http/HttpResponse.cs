@@ -23,6 +23,7 @@ public sealed class HttpResponse
     /// If set, data is written directly to the transport instead of being buffered.
     /// </summary>
     public IBufferWriter<byte>? BodyWriter { get; set; }
+    internal Func<int, Func<Stream, Task>, CancellationToken, Task>? StreamingResponseWriter { get; set; }
 
     private byte[]? _body;
     private bool _headersWritten;
@@ -237,6 +238,12 @@ public sealed class HttpResponse
             _hasStarted = true;
             _headersWritten = true; // prevents EnsureHeadersWritten from appending duplicate headers
         }
+        else if (StreamingResponseWriter is not null)
+        {
+            await StreamingResponseWriter(statusCode, bodyWriter, ct);
+            _hasStarted = true;
+            _headersWritten = true;
+        }
         else
         {
             // Fallback for non-piped writers (e.g. testing)
@@ -275,6 +282,7 @@ public sealed class HttpResponse
         ReasonPhrase = "OK";
         Headers.Clear();
         BodyWriter = null;
+        StreamingResponseWriter = null;
         _body = null;
         _headersWritten = false;
         _hasStarted = false;

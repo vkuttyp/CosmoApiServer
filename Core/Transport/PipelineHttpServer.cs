@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Quic;
 using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
@@ -15,7 +16,12 @@ namespace CosmoApiServer.Core.Transport;
 public sealed class PipelineHttpServer : IAsyncDisposable
 {
     private Socket? _listener;
+    private QuicListener? _quicListener;
     private CancellationTokenSource? _cts;
+    private static readonly SslApplicationProtocol Http3Protocol = new("h3");
+
+    private static bool SupportsQuicPlatform() =>
+        OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
     public async Task StartAsync(
         int port,
@@ -25,6 +31,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         string? certPath = null,
         string? certPassword = null,
         bool enableHttp2 = false,
+        bool enableHttp3 = false,
         int connectionTimeoutSeconds = 120,
         CancellationToken cancellationToken = default)
     {
@@ -44,6 +51,39 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         var scheme = cert is not null ? "https" : "http";
         Console.WriteLine($"CosmoApiServer listening on {scheme}://0.0.0.0:{port}");
+
+        if (enableHttp3)
+        {
+            if (cert is null)
+                throw new InvalidOperationException("HTTP/3 requires TLS. Configure UseHttps(...) before UseHttp3().");
+
+            if (!SupportsQuicPlatform() || !QuicListener.IsSupported || !QuicConnection.IsSupported)
+                throw new PlatformNotSupportedException("HTTP/3 requires runtime QUIC support on this platform.");
+
+#pragma warning disable CA1416
+            _quicListener = await QuicListener.ListenAsync(new QuicListenerOptions
+            {
+                ApplicationProtocols = [Http3Protocol],
+                ListenBacklog = 512,
+                ListenEndPoint = new IPEndPoint(IPAddress.IPv6Any, port),
+                ConnectionOptionsCallback = (_, _, callbackCt) =>
+                {
+                    var options = new QuicServerConnectionOptions
+                    {
+                        ServerAuthenticationOptions = new SslServerAuthenticationOptions
+                        {
+                            ServerCertificate = cert,
+                            ApplicationProtocols = [Http3Protocol]
+                        }
+                    };
+                    return ValueTask.FromResult(options);
+                }
+            }, _cts.Token);
+#pragma warning restore CA1416
+
+            Console.WriteLine($"CosmoApiServer experimental HTTP/3 listener on https://0.0.0.0:{port}");
+            _ = AcceptQuicLoopAsync(pipeline, services, connectionTimeoutSeconds, _cts.Token);
+        }
 
         // Accept loop runs in background — fire and forget (bounded by OS)
         _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, _cts.Token);
@@ -68,6 +108,25 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             // Handle each connection independently; don't await (keep accepting)
             _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, ct);
         }
+    }
+
+    private async ValueTask AcceptQuicLoopAsync(
+        RequestDelegate pipeline,
+        IServiceProvider services,
+        int connectionTimeoutSeconds,
+        CancellationToken ct)
+    {
+#pragma warning disable CA1416
+        while (!ct.IsCancellationRequested)
+        {
+            QuicConnection connection;
+            try { connection = await _quicListener!.AcceptConnectionAsync(ct); }
+            catch (OperationCanceledException) { break; }
+            catch { continue; }
+
+            _ = HandleQuicConnectionAsync(connection, pipeline, services, connectionTimeoutSeconds, ct);
+        }
+#pragma warning restore CA1416
     }
 
     private static async ValueTask HandleConnectionAsync(
@@ -134,10 +193,46 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
     }
 
+    private static async ValueTask HandleQuicConnectionAsync(
+        QuicConnection connection,
+        RequestDelegate pipeline,
+        IServiceProvider services,
+        int connectionTimeoutSeconds,
+        CancellationToken ct)
+    {
+#pragma warning disable CA1416
+        using var connectionCts = connectionTimeoutSeconds > 0
+            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+            : null;
+        connectionCts?.CancelAfter(TimeSpan.FromSeconds(connectionTimeoutSeconds));
+        var connectionCt = connectionCts?.Token ?? ct;
+
+        try
+        {
+            await Http3Connection.RunAsync(connection, pipeline, services, connectionCt);
+        }
+        catch (OperationCanceledException) { }
+        catch (QuicException ex)
+        {
+            Console.Error.WriteLine($"[HTTP/3] {ex.Message}");
+        }
+        finally
+        {
+            await connection.DisposeAsync();
+        }
+#pragma warning restore CA1416
+    }
+
     public Task StopAsync()
     {
         _cts?.Cancel();
         _listener?.Close();
+        if (SupportsQuicPlatform())
+        {
+#pragma warning disable CA1416
+            _quicListener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
+#pragma warning restore CA1416
+        }
         return Task.CompletedTask;
     }
 

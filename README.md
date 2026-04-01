@@ -58,6 +58,7 @@ Key design decisions:
 
 - HTTP/1.1 keep-alive (pipelined)
 - HTTP/2 (h2c cleartext + ALPN over TLS)
+- Experimental HTTP/3 over QUIC (`UseHttp3()`) for basic buffered routes, NDJSON streaming responses, and streamed request bodies
 - TLS via `SslStream` with ALPN (`h2` / `http/1.1`)
 - **Razor Components** — Full `.razor` support with `@page`, `[Parameter]`, and `CascadingParameters`
 - **Routable Components** — Components can define their own routes via `@page` without a controller

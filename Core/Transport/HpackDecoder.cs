@@ -215,6 +215,8 @@ internal sealed class HpackDecoder
         return sb.ToString();
     }
 
+    internal static string DecodeHuffmanString(ReadOnlySpan<byte> data) => HuffmanDecode(data);
+
     private sealed class HuffNode
     {
         public HuffNode? Zero, One;
