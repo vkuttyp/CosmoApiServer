@@ -75,11 +75,129 @@ Key design decisions:
 - JSON request/response (`WriteJson`, `ReadJson<T>`)
 - `IAsyncEnumerable<T>` → NDJSON streaming response
 - Middleware pipeline (`UseLogging`, `UseCors`, `UseJwtAuthentication`, custom `IMiddleware`)
+- Built-in scheduler via `AddScheduler()` / `UseScheduler(...)`
 - WebSockets (`HttpContext.AcceptWebSocketAsync()`)
 - OpenAPI & Swagger UI auto-generation
 - Security Middlewares (CSRF, HSTS, HTTPS Redirection, CSRF Validation)
 - Model Validation via DataAnnotations (Controllers & Components)
 - **Zero-Copy File Serving** — `HttpResponse.SendFileAsync()` streams directly from disk to socket
+
+---
+
+## HTTP/3
+
+`CosmoApiServer` now includes experimental HTTP/3 support over QUIC.
+
+Current scope:
+
+- Basic buffered request/response handling over HTTP/3
+- NDJSON streaming responses over HTTP/3 DATA frames
+- Streamed request bodies across multiple DATA frames
+- Minimal QPACK static-table decoding for request and response headers
+
+Enable it on a TLS listener:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseHttps("cert.pfx", "password")
+    .UseHttp3();
+```
+
+Notes:
+
+- HTTP/3 requires TLS and runtime QUIC support on the host platform.
+- `UseHttp3()` runs alongside the existing HTTP/1.1 and HTTP/2 support on the same port.
+- This is still experimental. Dynamic QPACK tables, trailers, and broader protocol hardening are not implemented yet.
+
+Streaming response example:
+
+```csharp
+app.MapGet("/stream", async ctx =>
+{
+    await ctx.Response.WriteStreamingResponseAsync(200, async body =>
+    {
+        await body.WriteAsync("""{"id":1}\n"""u8.ToArray());
+        await body.FlushAsync();
+        await body.WriteAsync("""{"id":2}\n"""u8.ToArray());
+    }, ctx.RequestAborted);
+});
+```
+
+---
+
+## Scheduling
+
+`CosmoApiServer` includes a built-in scheduler based on the Coravel-style scheduling API already shipped in the core package.
+
+Register it during startup:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddScheduler();
+
+var app = builder.Build();
+
+app.UseScheduler(scheduler =>
+{
+    scheduler.Schedule(() => Console.WriteLine("runs every minute"))
+        .EveryMinute();
+
+    scheduler.ScheduleAsync(async () =>
+    {
+        await Task.Delay(10);
+        Console.WriteLine("runs hourly at xx:15");
+    })
+    .HourlyAt(15);
+
+    scheduler.Schedule<CleanupJob>()
+        .DailyAt(2, 30);
+
+    scheduler.ScheduleAsync(() => SyncInvoices())
+        .Cron("0 */1 * * *");
+});
+```
+
+Invocable jobs are supported through `IInvocable`:
+
+```csharp
+using Coravel.Invocable;
+
+public sealed class CleanupJob : IInvocable
+{
+    public Task Invoke()
+    {
+        Console.WriteLine("cleanup");
+        return Task.CompletedTask;
+    }
+}
+```
+
+Available scheduling styles include:
+
+- `EveryMinute()`, `EveryFiveMinutes()`, `EveryTenMinutes()`, `EveryFifteenMinutes()`, `EveryThirtyMinutes()`
+- `Hourly()`, `HourlyAt(minute)`
+- `Daily()`, `DailyAtHour(hour)`, `DailyAt(hour, minute)`
+- `Weekly()`, `Monthly()`
+- `EverySecond()`, `EveryFiveSeconds()`, `EveryTenSeconds()`, `EveryFifteenSeconds()`, `EveryThirtySeconds()`, `EverySeconds(n)`
+- `Cron("...")`
+
+Cron support is the built-in five-part format:
+
+```csharp
+scheduler.ScheduleAsync(() => SyncInvoices())
+    .Cron("0 */1 * * *"); // top of every hour
+```
+
+You can also isolate scheduled work onto a dedicated worker:
+
+```csharp
+app.UseScheduler(scheduler =>
+{
+    scheduler.OnWorker("reports")
+        .Schedule<GenerateReportJob>()
+        .DailyAt(1, 0);
+});
+```
 
 ---
 
