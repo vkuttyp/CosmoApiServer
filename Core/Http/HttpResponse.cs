@@ -16,6 +16,7 @@ public sealed class HttpResponse
     public int StatusCode { get; set; } = 200;
     public string ReasonPhrase { get; set; } = "OK";
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, string> Trailers { get; } = new(StringComparer.OrdinalIgnoreCase);
     public HttpContext HttpContext { get; internal set; } = null!;
 
     /// <summary>
@@ -281,6 +282,7 @@ public sealed class HttpResponse
         StatusCode = 200;
         ReasonPhrase = "OK";
         Headers.Clear();
+        Trailers.Clear();
         BodyWriter = null;
         StreamingResponseWriter = null;
         _body = null;

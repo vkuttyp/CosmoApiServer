@@ -135,7 +135,12 @@ internal static class Http3Connection
             var requestHead = await ReadRequestHeadAsync(stream, qpackState, decoderWriter, ct);
             if (requestHead.RequiredInsertCount > 0)
                 await decoderWriter.SendSectionAcknowledgmentAsync(stream.Id, ct);
-            PopulateHttpContext(httpContext, requestHead, new Http3RequestBodyStream(stream), services, remoteIp, ct);
+            PopulateHttpContext(httpContext, requestHead, new Http3RequestBodyStream(
+                stream,
+                qpackState,
+                decoderWriter,
+                stream.Id,
+                httpContext.Request), services, remoteIp, ct);
             bool headOnly = requestHead.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD;
             httpContext.Response.StreamingResponseWriter =
                 (statusCode, bodyWriter, writeCt) => WriteStreamingResponseAsync(stream, httpContext.Response, headOnly, statusCode, bodyWriter, writeCt);
@@ -605,6 +610,7 @@ internal static class Http3Connection
         ctx.Request.Path = request.Path;
         ctx.Request.QueryString = request.QueryString;
         ctx.Request.Headers = request.Headers;
+        ctx.Request.Trailers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         ctx.Request.Query = ParseQuery(request.QueryString);
         ctx.Request.RouteValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         ctx.Request.Body = [];
@@ -653,10 +659,15 @@ internal static class Http3Connection
             response.Headers["Content-Length"] = body.Length.ToString();
 
         var headerBlock = EncodeResponseHeaders(response);
-        await WriteFrameAsync(stream, FrameHeaders, headerBlock, body.Length == 0 || headOnly, ct);
+        var trailerBlock = response.Trailers.Count > 0 ? EncodeTrailingHeaders(response.Trailers) : null;
+        bool completeAfterHeaders = (body.Length == 0 || headOnly) && trailerBlock is null;
+        await WriteFrameAsync(stream, FrameHeaders, headerBlock, completeAfterHeaders, ct);
 
         if (body.Length > 0 && !headOnly)
-            await WriteFrameAsync(stream, FrameData, body, true, ct);
+            await WriteFrameAsync(stream, FrameData, body, trailerBlock is null, ct);
+
+        if (trailerBlock is not null)
+            await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
     }
 
     private static async Task WriteStreamingResponseAsync(
@@ -677,15 +688,20 @@ internal static class Http3Connection
 
         if (headOnly)
         {
+            if (response.Trailers.Count > 0)
+                await WriteFrameAsync(stream, FrameHeaders, EncodeTrailingHeaders(response.Trailers), true, ct);
+            else
+            {
 #pragma warning disable CA1416
-            stream.CompleteWrites();
+                stream.CompleteWrites();
 #pragma warning restore CA1416
+            }
             return;
         }
 
         await using var bodyStream = new Http3DataFrameStream(stream);
         await bodyWriter(bodyStream);
-        await bodyStream.CompleteAsync(ct);
+        await bodyStream.CompleteAsync(response.Trailers.Count > 0 ? EncodeTrailingHeaders(response.Trailers) : null, ct);
     }
 
     private static byte[] EncodeResponseHeaders(HttpResponse response)
@@ -704,6 +720,9 @@ internal static class Http3Connection
     internal static byte[] EncodeResponseHeadersForTests(HttpResponse response) =>
         EncodeResponseHeaders(response);
 
+    internal static byte[] EncodeTrailingHeadersForTests(IReadOnlyDictionary<string, string> trailers) =>
+        EncodeTrailingHeaders(trailers);
+
     internal static byte[] EncodeFieldSectionForTests(params (string name, string value)[] headers)
     {
         using var ms = new MemoryStream();
@@ -712,6 +731,22 @@ internal static class Http3Connection
 
         foreach (var (name, value) in headers)
             WriteLiteralHeader(ms, name, value);
+
+        return ms.ToArray();
+    }
+
+    private static byte[] EncodeTrailingHeaders(IReadOnlyDictionary<string, string> trailers)
+    {
+        using var ms = new MemoryStream();
+        ms.WriteByte(0); // Required Insert Count = 0
+        ms.WriteByte(0); // Base = 0
+
+        foreach (var trailer in trailers)
+        {
+            if (trailer.Key.StartsWith(':'))
+                throw new InvalidOperationException("HTTP/3 trailers cannot contain pseudo headers.");
+            WriteLiteralHeader(ms, trailer.Key.ToLowerInvariant(), trailer.Value);
+        }
 
         return ms.ToArray();
     }
@@ -984,7 +1019,12 @@ internal static class Http3Connection
         }
     }
 
-    private sealed class Http3RequestBodyStream(QuicStream stream) : Stream
+    private sealed class Http3RequestBodyStream(
+        QuicStream stream,
+        QpackDecoderState qpackState,
+        DecoderInstructionWriter decoderWriter,
+        long streamId,
+        HttpRequest request) : Stream
     {
         private ReadOnlyMemory<byte> _currentData = ReadOnlyMemory<byte>.Empty;
         private bool _completed;
@@ -1020,10 +1060,17 @@ internal static class Http3Connection
                 switch (frame.Value.Type)
                 {
                     case FrameData:
+                        if (_completed)
+                            throw new InvalidOperationException("HTTP/3 DATA frame received after trailers.");
                         _currentData = frame.Value.Payload;
                         break;
                     case FrameHeaders:
-                        throw new NotSupportedException("HTTP/3 trailers are not supported yet.");
+                        var trailers = await DecodeFieldSectionAsync(frame.Value.Payload, qpackState, decoderWriter, streamId, cancellationToken);
+                        if (trailers.RequiredInsertCount > 0)
+                            await decoderWriter.SendSectionAcknowledgmentAsync(streamId, cancellationToken);
+                        MergeTrailers(request, trailers.Headers);
+                        _completed = true;
+                        return 0;
                 }
             }
 
@@ -1103,7 +1150,7 @@ internal static class Http3Connection
             await WriteFrameAsync(stream, FrameData, payload, false, cancellationToken);
         }
 
-        public async Task CompleteAsync(CancellationToken ct)
+        public async Task CompleteAsync(byte[]? trailerBlock, CancellationToken ct)
         {
             if (_disposed)
                 return;
@@ -1112,9 +1159,14 @@ internal static class Http3Connection
             {
                 var payload = _staging.WrittenMemory.ToArray();
                 _staging.Clear();
-                await WriteFrameAsync(stream, FrameData, payload, true, ct);
+                await WriteFrameAsync(stream, FrameData, payload, trailerBlock is null, ct);
             }
-            else
+
+            if (trailerBlock is not null)
+            {
+                await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
+            }
+            else if (_staging.WrittenCount == 0)
             {
 #pragma warning disable CA1416
                 stream.CompleteWrites();
@@ -1127,7 +1179,7 @@ internal static class Http3Connection
         public override async ValueTask DisposeAsync()
         {
             if (!_disposed)
-                await CompleteAsync(CancellationToken.None);
+                await CompleteAsync(null, CancellationToken.None);
         }
 
         protected override void Dispose(bool disposing)
@@ -1135,5 +1187,24 @@ internal static class Http3Connection
             _disposed = true;
             base.Dispose(disposing);
         }
+    }
+
+    private static void MergeTrailers(HttpRequest request, IReadOnlyList<(string name, string value)> trailers)
+    {
+        Dictionary<string, string> trailerDict = request.Trailers as Dictionary<string, string>
+            ?? new Dictionary<string, string>(request.Trailers, StringComparer.OrdinalIgnoreCase);
+
+        foreach (var (name, value) in trailers)
+        {
+            if (name.StartsWith(':'))
+                throw new InvalidOperationException("HTTP/3 trailers cannot contain pseudo headers.");
+
+            if (trailerDict.TryGetValue(name, out var existing))
+                trailerDict[name] = existing + ", " + value;
+            else
+                trailerDict[name] = value;
+        }
+
+        request.Trailers = trailerDict;
     }
 }

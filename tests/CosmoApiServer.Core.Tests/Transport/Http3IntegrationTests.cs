@@ -78,7 +78,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (headers, body, _) = ParseResponse(responseBytes);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
 
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Equal("pong", body);
@@ -148,7 +148,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (headers, body, chunks) = ParseResponse(responseBytes);
+            var (headers, body, chunks, _) = ParseResponse(responseBytes);
 
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Contains(headers, h => h.name == "content-type" && h.value == "application/x-ndjson");
@@ -220,7 +220,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (_, body, chunks) = ParseResponse(responseBytes);
+            var (_, body, chunks, _) = ParseResponse(responseBytes);
 
             Assert.Equal("{\"id\":1}\n{\"id\":2}\n", body);
             Assert.Single(chunks);
@@ -292,7 +292,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (headers, body, _) = ParseResponse(responseBytes);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
 
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Equal("hello world", body);
@@ -365,7 +365,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (headers, body, _) = ParseResponse(responseBytes);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
 
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Equal("ready", body);
@@ -444,7 +444,7 @@ public class Http3IntegrationTests
             blockedRequest.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(blockedRequest, cts.Token);
-            var (headers, body, _) = ParseResponse(responseBytes);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
 
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Equal("ready", body);
@@ -512,7 +512,7 @@ public class Http3IntegrationTests
             requestStream.CompleteWrites();
 
             var responseBytes = await ReadAllAsync(requestStream, cts.Token);
-            var (headers, body, _) = ParseResponse(responseBytes);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
             Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
             Assert.Equal("ready", body);
 
@@ -587,6 +587,155 @@ public class Http3IntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Http3_RequestTrailers_AreExposedOnHttpRequest()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = async ctx =>
+            {
+                if (ctx.Request.Path == "/trailers")
+                {
+                    using var ms = new MemoryStream();
+                    await ctx.Request.BodyStream.CopyToAsync(ms, ctx.RequestAborted);
+                    string trailer = ctx.Request.Trailers.TryGetValue("x-checksum", out var value) ? value : "missing";
+                    ctx.Response.WriteText($"{System.Text.Encoding.UTF8.GetString(ms.ToArray())}|{trailer}");
+                    return;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            using var requestPayload = new MemoryStream();
+            requestPayload.Write(Http3Connection.EncodeRequestForTests(
+            [
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/trailers"),
+                ("content-type", "text/plain"),
+                ("content-length", "5")
+            ]));
+            WriteFrame(requestPayload, 0x00, System.Text.Encoding.UTF8.GetBytes("hello"));
+            WriteFrame(requestPayload, 0x01, Http3Connection.EncodeTrailingHeadersForTests(new Dictionary<string, string>
+            {
+                ["x-checksum"] = "done"
+            }));
+
+            await requestStream.WriteAsync(requestPayload.ToArray(), true, cts.Token);
+            requestStream.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(requestStream, cts.Token);
+            var (headers, body, _, _) = ParseResponse(responseBytes);
+
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("hello|done", body);
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_StreamingResponse_WritesTrailingHeaders()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = async ctx =>
+            {
+                if (ctx.Request.Path == "/response-trailers")
+                {
+                    ctx.Response.Trailers["x-checksum"] = "ok";
+                    await ctx.Response.WriteStreamingResponseAsync(200, async body =>
+                    {
+                        await body.WriteAsync(System.Text.Encoding.UTF8.GetBytes("one"));
+                        await body.FlushAsync();
+                        await body.WriteAsync(System.Text.Encoding.UTF8.GetBytes("two"));
+                    }, ctx.RequestAborted);
+                    return;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            var requestBytes = Http3Connection.EncodeRequestForTests(
+            [
+                (":method", "GET"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/response-trailers")
+            ]);
+
+            await requestStream.WriteAsync(requestBytes, true, cts.Token);
+            requestStream.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(requestStream, cts.Token);
+            var (headers, body, chunks, trailers) = ParseResponse(responseBytes);
+
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("onetwo", body);
+            Assert.Equal(2, chunks.Count);
+            Assert.Contains(trailers, h => h.name == "x-checksum" && h.value == "ok");
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
     private static async Task<byte[]> ReadAllAsync(QuicStream stream, CancellationToken ct)
     {
 #pragma warning disable CA1416
@@ -601,11 +750,12 @@ public class Http3IntegrationTests
 #pragma warning restore CA1416
     }
 
-    private static (IReadOnlyList<(string name, string value)> headers, string body, IReadOnlyList<byte[]> dataFrames) ParseResponse(byte[] bytes)
+    private static (IReadOnlyList<(string name, string value)> headers, string body, IReadOnlyList<byte[]> dataFrames, IReadOnlyList<(string name, string value)> trailers) ParseResponse(byte[] bytes)
     {
         ReadOnlySpan<byte> data = bytes;
         int pos = 0;
         IReadOnlyList<(string name, string value)> headers = [];
+        IReadOnlyList<(string name, string value)> trailers = [];
         var chunks = new List<byte[]>();
 
         while (pos < data.Length)
@@ -616,7 +766,12 @@ public class Http3IntegrationTests
             pos += (int)length;
 
             if (type == 0x01)
-                headers = Http3Connection.DecodeFieldSectionForTests(payload.ToArray());
+            {
+                if (headers.Count == 0)
+                    headers = Http3Connection.DecodeFieldSectionForTests(payload.ToArray());
+                else
+                    trailers = Http3Connection.DecodeFieldSectionForTests(payload.ToArray());
+            }
             else if (type == 0x00)
                 chunks.Add(payload.ToArray());
         }
@@ -625,7 +780,7 @@ public class Http3IntegrationTests
         foreach (var chunk in chunks)
             body.Write(chunk, 0, chunk.Length);
 
-        return (headers, System.Text.Encoding.UTF8.GetString(body.ToArray()), chunks);
+        return (headers, System.Text.Encoding.UTF8.GetString(body.ToArray()), chunks, trailers);
     }
 
     private static long ReadVarInt(ReadOnlySpan<byte> data, ref int pos)

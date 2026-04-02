@@ -14,6 +14,7 @@ public sealed class HttpRequest
     public string Path { get; set; } = "/";
     public string QueryString { get; set; } = string.Empty;
     public IReadOnlyDictionary<string, string> Headers { get; set; } = new Dictionary<string, string>();
+    public IReadOnlyDictionary<string, string> Trailers { get; internal set; } = new Dictionary<string, string>();
     public IReadOnlyDictionary<string, string> Query { get; set; } = new Dictionary<string, string>();
     public byte[] Body { get; set; } = [];
     public Stream BodyStream { get; set; } = Stream.Null;
@@ -105,6 +106,9 @@ public sealed class HttpRequest
 
         if (Query is Dictionary<string, string> qd) qd.Clear();
         else Query = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+
+        if (Trailers is Dictionary<string, string> td) td.Clear();
+        else Trailers = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
         if (RouteValues is Dictionary<string, string> rd) rd.Clear();
         else RouteValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
