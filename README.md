@@ -108,6 +108,7 @@ Notes:
 - HTTP/3 requires TLS and runtime QUIC support on the host platform.
 - `UseHttp3()` runs alongside the existing HTTP/1.1 and HTTP/2 support on the same port.
 - This is still experimental. Dynamic QPACK tables, trailers, and broader protocol hardening are not implemented yet.
+- The remaining implementation plan is tracked in [`HTTP3_ROADMAP.md`](HTTP3_ROADMAP.md).
 
 Streaming response example:
 

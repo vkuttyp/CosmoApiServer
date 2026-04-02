@@ -28,109 +28,6 @@ internal static class Http3Connection
     private const long SettingsQpackMaxTableCapacity = 0x01;
     private const long SettingsQpackBlockedStreams = 0x07;
 
-    private static readonly (string name, string value)[] QpackStaticTable =
-    [
-        (":authority", ""),
-        (":path", "/"),
-        ("age", "0"),
-        ("content-disposition", ""),
-        ("content-length", "0"),
-        ("cookie", ""),
-        ("date", ""),
-        ("etag", ""),
-        ("if-modified-since", ""),
-        ("if-none-match", ""),
-        ("last-modified", ""),
-        ("link", ""),
-        ("location", ""),
-        ("referer", ""),
-        ("set-cookie", ""),
-        (":method", "CONNECT"),
-        (":method", "DELETE"),
-        (":method", "GET"),
-        (":method", "HEAD"),
-        (":method", "OPTIONS"),
-        (":method", "POST"),
-        (":method", "PUT"),
-        (":scheme", "http"),
-        (":scheme", "https"),
-        (":status", "103"),
-        (":status", "200"),
-        (":status", "304"),
-        (":status", "404"),
-        (":status", "503"),
-        ("accept", "*/*"),
-        ("accept", "application/dns-message"),
-        ("accept-encoding", "gzip, deflate, br"),
-        ("accept-ranges", "bytes"),
-        ("access-control-allow-headers", "cache-control"),
-        ("access-control-allow-headers", "content-type"),
-        ("access-control-allow-origin", "*"),
-        ("cache-control", "max-age=0"),
-        ("cache-control", "max-age=2592000"),
-        ("cache-control", "max-age=604800"),
-        ("cache-control", "no-cache"),
-        ("cache-control", "no-store"),
-        ("cache-control", "public, max-age=31536000"),
-        ("content-encoding", "br"),
-        ("content-encoding", "gzip"),
-        ("content-type", "application/dns-message"),
-        ("content-type", "application/javascript"),
-        ("content-type", "application/json"),
-        ("content-type", "application/x-www-form-urlencoded"),
-        ("content-type", "image/gif"),
-        ("content-type", "image/jpeg"),
-        ("content-type", "image/png"),
-        ("content-type", "text/css"),
-        ("content-type", "text/html; charset=utf-8"),
-        ("content-type", "text/plain"),
-        ("content-type", "text/plain;charset=utf-8"),
-        ("range", "bytes=0-"),
-        ("strict-transport-security", "max-age=31536000"),
-        ("strict-transport-security", "max-age=31536000; includesubdomains"),
-        ("strict-transport-security", "max-age=31536000; includesubdomains; preload"),
-        ("vary", "accept-encoding"),
-        ("vary", "origin"),
-        ("x-content-type-options", "nosniff"),
-        ("x-xss-protection", "1; mode=block"),
-        (":status", "100"),
-        (":status", "204"),
-        (":status", "206"),
-        (":status", "302"),
-        (":status", "400"),
-        (":status", "403"),
-        (":status", "421"),
-        (":status", "425"),
-        (":status", "500"),
-        ("accept-language", ""),
-        ("access-control-allow-credentials", "FALSE"),
-        ("access-control-allow-credentials", "TRUE"),
-        ("access-control-allow-headers", "*"),
-        ("access-control-allow-methods", "get"),
-        ("access-control-allow-methods", "get, post, options"),
-        ("access-control-allow-methods", "options"),
-        ("access-control-expose-headers", "content-length"),
-        ("access-control-request-headers", "content-type"),
-        ("access-control-request-method", "get"),
-        ("access-control-request-method", "post"),
-        ("alt-svc", "clear"),
-        ("authorization", ""),
-        ("content-security-policy", "script-src 'none'; object-src 'none'; base-uri 'none'"),
-        ("early-data", "1"),
-        ("expect-ct", ""),
-        ("forwarded", ""),
-        ("if-range", ""),
-        ("origin", ""),
-        ("purpose", "prefetch"),
-        ("server", ""),
-        ("timing-allow-origin", "*"),
-        ("upgrade-insecure-requests", "1"),
-        ("user-agent", ""),
-        ("x-forwarded-for", ""),
-        ("x-frame-options", "deny"),
-        ("x-frame-options", "sameorigin"),
-    ];
-
     private static bool SupportsQuicPlatform() =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
@@ -145,6 +42,7 @@ internal static class Http3Connection
 
 #pragma warning disable CA1416
         var remoteIp = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString();
+        var qpackState = new QpackDecoderState();
 
         await InitializeServerStreamsAsync(connection, ct);
 
@@ -154,8 +52,8 @@ internal static class Http3Connection
             {
                 var stream = await connection.AcceptInboundStreamAsync(ct);
                 _ = stream.Type == QuicStreamType.Bidirectional
-                    ? HandleRequestStreamAsync(stream, pipeline, services, remoteIp, ct)
-                    : HandleUnidirectionalStreamAsync(stream, ct);
+                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, remoteIp, ct)
+                    : HandleUnidirectionalStreamAsync(stream, qpackState, ct);
             }
         }
         catch (OperationCanceledException) { }
@@ -187,7 +85,7 @@ internal static class Http3Connection
 #pragma warning restore CA1416
     }
 
-    private static async Task HandleUnidirectionalStreamAsync(QuicStream stream, CancellationToken ct)
+    private static async Task HandleUnidirectionalStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
     {
 #pragma warning disable CA1416
         try
@@ -196,9 +94,11 @@ internal static class Http3Connection
             switch (streamType)
             {
                 case StreamTypeControl:
-                    await ConsumeControlStreamAsync(stream, ct);
+                    await ConsumeControlStreamAsync(stream, qpackState, ct);
                     break;
                 case StreamTypeQpackEncoder:
+                    await ConsumeQpackEncoderStreamAsync(stream, qpackState, ct);
+                    break;
                 case StreamTypeQpackDecoder:
                     await DrainStreamAsync(stream, ct);
                     break;
@@ -219,6 +119,7 @@ internal static class Http3Connection
         QuicStream stream,
         RequestDelegate pipeline,
         IServiceProvider services,
+        QpackDecoderState qpackState,
         string? remoteIp,
         CancellationToken ct)
     {
@@ -226,7 +127,7 @@ internal static class Http3Connection
         var httpContext = HttpContextPool.Rent();
         try
         {
-            var requestHead = await ReadRequestHeadAsync(stream, ct);
+            var requestHead = await ReadRequestHeadAsync(stream, qpackState, ct);
             PopulateHttpContext(httpContext, requestHead, new Http3RequestBodyStream(stream), services, remoteIp, ct);
             bool headOnly = requestHead.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD;
             httpContext.Response.StreamingResponseWriter =
@@ -274,7 +175,7 @@ internal static class Http3Connection
 #pragma warning restore CA1416
     }
 
-    private static async Task ConsumeControlStreamAsync(QuicStream stream, CancellationToken ct)
+    private static async Task ConsumeControlStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
     {
         bool sawSettings = false;
         while (true)
@@ -288,7 +189,26 @@ internal static class Http3Connection
                 if (sawSettings)
                     throw new InvalidOperationException("HTTP/3 control stream sent duplicate SETTINGS.");
                 sawSettings = true;
+                qpackState.ApplyPeerSettings(frame.Value.Payload);
             }
+        }
+    }
+
+    private static async Task ConsumeQpackEncoderStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
+    {
+        var buffer = new MemoryStream();
+        var readBuffer = ArrayPool<byte>.Shared.Rent(1024);
+        try
+        {
+            int read;
+            while ((read = await stream.ReadAsync(readBuffer.AsMemory(), ct)) > 0)
+                buffer.Write(readBuffer, 0, read);
+
+            qpackState.ProcessEncoderInstructions(buffer.ToArray());
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(readBuffer);
         }
     }
 
@@ -305,7 +225,7 @@ internal static class Http3Connection
         }
     }
 
-    private static async Task<ParsedHttp3RequestHead> ReadRequestHeadAsync(QuicStream stream, CancellationToken ct)
+    private static async Task<ParsedHttp3RequestHead> ReadRequestHeadAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
     {
 #pragma warning disable CA1416
         while (true)
@@ -317,7 +237,7 @@ internal static class Http3Connection
             switch (frame.Value.Type)
             {
                 case FrameHeaders:
-                    return ParseRequestHead(DecodeFieldSection(frame.Value.Payload));
+                    return ParseRequestHead(DecodeFieldSection(frame.Value.Payload, qpackState));
                 case FrameData:
                     throw new InvalidOperationException("HTTP/3 DATA frame received before request HEADERS.");
             }
@@ -346,7 +266,7 @@ internal static class Http3Connection
             switch (frameType)
             {
                 case FrameHeaders when headers.Count == 0:
-                    headers = DecodeFieldSection(payload);
+                    headers = DecodeFieldSection(payload, null);
                     break;
                 case FrameData:
                     body.Write(payload);
@@ -440,15 +360,15 @@ internal static class Http3Connection
         return (parsed.Method.ToString(), parsed.Path, parsed.QueryString, parsed.Host, parsed.Headers, parsed.Body);
     }
 
-    private static List<(string name, string value)> DecodeFieldSection(ReadOnlySpan<byte> data)
+    private static List<(string name, string value)> DecodeFieldSection(ReadOnlySpan<byte> data, QpackDecoderState? qpackState)
     {
         int pos = 0;
         long requiredInsertCount = ReadPrefixedInteger(data, ref pos, 8);
         long deltaBase = ReadPrefixedInteger(data, ref pos, 7);
         bool signBit = (data[Math.Max(0, pos - 1)] & 0x80) != 0;
 
-        if (requiredInsertCount != 0 || deltaBase != 0 || signBit)
-            throw new NotSupportedException("Dynamic QPACK tables are not supported yet.");
+        if ((requiredInsertCount != 0 || deltaBase != 0 || signBit) && qpackState is null)
+            throw new NotSupportedException("Dynamic QPACK field sections require connection-level decoder state.");
 
         var headers = new List<(string name, string value)>(8);
 
@@ -459,16 +379,17 @@ internal static class Http3Connection
             {
                 bool isStatic = (b & 0x40) != 0;
                 int index = (int)ReadPrefixedInteger(data, ref pos, 6);
-                if (!isStatic) throw new NotSupportedException("Dynamic QPACK references are not supported yet.");
-                headers.Add(GetStaticEntry(index));
+                if (!isStatic)
+                    throw new NotSupportedException("Dynamic QPACK field references are not implemented yet.");
+                headers.Add(QpackDecoderState.GetStaticEntry(index));
             }
             else if ((b & 0x40) != 0)
             {
                 bool isStatic = (b & 0x10) != 0;
                 int nameIndex = (int)ReadPrefixedInteger(data, ref pos, 4);
                 string name = isStatic
-                    ? GetStaticEntry(nameIndex).name
-                    : throw new NotSupportedException("Dynamic QPACK references are not supported yet.");
+                    ? QpackDecoderState.GetStaticEntry(nameIndex).name
+                    : throw new NotSupportedException("Dynamic QPACK field references are not implemented yet.");
                 string value = ReadStringLiteral(data, ref pos, 7, 0x80);
                 headers.Add((name, value));
             }
@@ -488,14 +409,7 @@ internal static class Http3Connection
     }
 
     internal static IReadOnlyList<(string name, string value)> DecodeFieldSectionForTests(byte[] data) =>
-        DecodeFieldSection(data);
-
-    private static (string name, string value) GetStaticEntry(int index)
-    {
-        if ((uint)index >= (uint)QpackStaticTable.Length)
-            throw new InvalidOperationException($"Unsupported QPACK static index: {index}");
-        return QpackStaticTable[index];
-    }
+        DecodeFieldSection(data, null);
 
     private static string ReadStringLiteral(ReadOnlySpan<byte> data, ref int pos, int prefixBits, byte huffmanMask)
     {
