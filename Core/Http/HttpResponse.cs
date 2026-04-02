@@ -167,14 +167,29 @@ public sealed class HttpResponse
     /// <summary>
     /// Streams a file directly to the response body.
     /// </summary>
-    public async Task SendFileAsync(string path, CancellationToken ct = default)
+    public Task SendFileAsync(string path, CancellationToken ct = default) =>
+        SendFileAsync(path, 0, null, ct);
+
+    /// <summary>
+    /// Streams a byte range from a file directly to the response body.
+    /// </summary>
+    public async Task SendFileAsync(string path, long offset, long? count, CancellationToken ct = default)
     {
         var fileInfo = new FileInfo(path);
-        var length = fileInfo.Length;
+        var fileLength = fileInfo.Length;
+        if (offset < 0 || offset > fileLength)
+            throw new ArgumentOutOfRangeException(nameof(offset));
+
+        var length = count ?? (fileLength - offset);
+        if (length < 0 || offset + length > fileLength)
+            throw new ArgumentOutOfRangeException(nameof(count));
+
         if (!Headers.ContainsKey("Content-Length"))
             Headers["Content-Length"] = length.ToString();
 
         using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 4096, useAsync: true);
+        if (offset > 0)
+            fs.Seek(offset, SeekOrigin.Begin);
         
         if (BodyWriter != null)
         {
@@ -185,10 +200,13 @@ public sealed class HttpResponse
                 var buffer = ArrayPool<byte>.Shared.Rent(8192);
                 try
                 {
-                    int bytesRead;
-                    while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+                    long remaining = length;
+                    while (remaining > 0)
                     {
+                        int bytesRead = await fs.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct);
+                        if (bytesRead <= 0) break;
                         WriteChunk(BodyWriter, buffer.AsSpan(0, bytesRead));
+                        remaining -= bytesRead;
                     }
                 }
                 finally
@@ -207,10 +225,13 @@ public sealed class HttpResponse
                     var buffer = ArrayPool<byte>.Shared.Rent(8192);
                     try
                     {
-                        int bytesRead;
-                        while ((bytesRead = await fs.ReadAsync(buffer, 0, buffer.Length, ct)) > 0)
+                        long remaining = length;
+                        while (remaining > 0)
                         {
+                            int bytesRead = await fs.ReadAsync(buffer.AsMemory(0, (int)Math.Min(buffer.Length, remaining)), ct);
+                            if (bytesRead <= 0) break;
                             this.Write(buffer.AsSpan(0, bytesRead));
+                            remaining -= bytesRead;
                         }
                     }
                     finally
@@ -223,7 +244,16 @@ public sealed class HttpResponse
         }
         else
         {
-            _body = await File.ReadAllBytesAsync(path, ct);
+            _body = new byte[length];
+            int totalRead = 0;
+            while (totalRead < _body.Length)
+            {
+                int read = await fs.ReadAsync(_body.AsMemory(totalRead, _body.Length - totalRead), ct);
+                if (read <= 0) break;
+                totalRead += read;
+            }
+            if (totalRead != _body.Length)
+                Array.Resize(ref _body, totalRead);
         }
     }
 

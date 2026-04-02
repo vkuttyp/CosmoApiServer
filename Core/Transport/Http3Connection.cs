@@ -791,6 +791,8 @@ internal static class Http3Connection
     private static async Task WriteResponseAsync(QuicStream stream, HttpResponse response, bool headOnly, CancellationToken ct)
     {
         var body = response.Body;
+        if (!response.Headers.ContainsKey("Content-Type") && body.Length > 0)
+            response.Headers["Content-Type"] = "text/plain";
         if (!response.Headers.ContainsKey("Content-Length"))
             response.Headers["Content-Length"] = body.Length.ToString();
 
