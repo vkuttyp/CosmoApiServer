@@ -22,6 +22,15 @@ Still intentionally incomplete:
 - Broader external interop validation with browsers, curl, and proxies
 - HTTP/3-specific performance tuning
 
+## Remaining TODO
+
+- Fix reused-connection stability for larger HTTP/3 responses such as `/large-json`, `/file`, and `/stream`
+- Finalize the successful request-stream retirement path so repeated bidirectional request streams do not abort on later responses
+- Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments
+- Expand response-side QPACK support beyond static-name and static-entry reuse
+- Add repeatable HTTP/3 benchmark runs to the Windows VM workflow and publish those numbers in the README
+- Tune HTTP/3 body transfer and streaming behavior once the stream-reuse failures are resolved
+
 ## Phase 1: QPACK groundwork
 
 Status: completed
