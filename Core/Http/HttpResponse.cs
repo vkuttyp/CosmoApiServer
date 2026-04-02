@@ -29,6 +29,7 @@ public sealed class HttpResponse
     private byte[]? _body;
     private bool _headersWritten;
     private bool _isChunked;
+    private bool _transportHandled;
 
     /// <summary>
     /// Gets the buffered body. Returns empty if data was written directly to a non-test BodyWriter.
@@ -268,12 +269,14 @@ public sealed class HttpResponse
             await Http11Writer.WriteStreamingResponseAsync(pw, statusCode, bodyWriter, ct);
             _hasStarted = true;
             _headersWritten = true; // prevents EnsureHeadersWritten from appending duplicate headers
+            _transportHandled = true;
         }
         else if (StreamingResponseWriter is not null)
         {
             await StreamingResponseWriter(statusCode, bodyWriter, ct);
             _hasStarted = true;
             _headersWritten = true;
+            _transportHandled = true;
         }
         else
         {
@@ -287,6 +290,7 @@ public sealed class HttpResponse
     private bool _hasStarted;
     public bool IsStarted => _hasStarted || _body is not null;
     public bool IsBuffered => _body is not null;
+    internal bool IsTransportHandled => _transportHandled;
 
     /// <summary>
     /// Clears the current buffered body.
@@ -319,6 +323,7 @@ public sealed class HttpResponse
         _headersWritten = false;
         _hasStarted = false;
         _isChunked = false;
+        _transportHandled = false;
     }
 
     /// <summary>

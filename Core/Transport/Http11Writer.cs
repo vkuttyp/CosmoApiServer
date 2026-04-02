@@ -219,18 +219,12 @@ internal static class Http11Writer
         {
             if (!_directSegment.IsEmpty)
             {
-                WriteHex(writer, _directSegment.Length);
-                writer.Write("\r\n"u8);
-                writer.Write(_directSegment.Span);
-                writer.Write("\r\n"u8);
+                WriteChunkFast(writer, _directSegment.Span);
                 _directSegment = ReadOnlyMemory<byte>.Empty;
             }
             else if (_staging.WrittenCount > 0)
             {
-                WriteHex(writer, _staging.WrittenCount);
-                writer.Write("\r\n"u8);
-                writer.Write(_staging.WrittenSpan);
-                writer.Write("\r\n"u8);
+                WriteChunkFast(writer, _staging.WrittenSpan);
                 _staging.Clear();
             }
             await writer.FlushAsync(ct);
@@ -250,6 +244,24 @@ internal static class Http11Writer
             _directSegment = ReadOnlyMemory<byte>.Empty;
         }
 
+        private static void WriteChunkFast(PipeWriter writer, ReadOnlySpan<byte> payload)
+        {
+            if (payload.IsEmpty) return;
+
+            Span<byte> hexBuffer = stackalloc byte[8];
+            int hexLen = FormatHex(payload.Length, hexBuffer);
+            int totalLen = hexLen + 2 + payload.Length + 2;
+
+            var destination = writer.GetSpan(totalLen)[..totalLen];
+            hexBuffer[..hexLen].CopyTo(destination);
+            destination[hexLen] = (byte)'\r';
+            destination[hexLen + 1] = (byte)'\n';
+            payload.CopyTo(destination[(hexLen + 2)..]);
+            destination[totalLen - 2] = (byte)'\r';
+            destination[totalLen - 1] = (byte)'\n';
+            writer.Advance(totalLen);
+        }
+
         private static void WriteHex(PipeWriter w, int value)
         {
             Span<byte> hex = stackalloc byte[8];
@@ -262,6 +274,22 @@ internal static class Http11Writer
             }
             while (value > 0);
             w.Write(hex[pos..]);
+        }
+
+        private static int FormatHex(int value, Span<byte> destination)
+        {
+            int pos = destination.Length;
+            do
+            {
+                int nibble = value & 0xF;
+                destination[--pos] = (byte)(nibble < 10 ? '0' + nibble : 'a' + nibble - 10);
+                value >>= 4;
+            }
+            while (value > 0);
+
+            int length = destination.Length - pos;
+            destination[pos..].CopyTo(destination);
+            return length;
         }
     }
 

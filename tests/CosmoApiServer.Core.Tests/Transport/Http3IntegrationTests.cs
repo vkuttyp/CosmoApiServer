@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Http;
 using System.Net.Quic;
 using System.Net.Security;
 using System.Security.Cryptography;
@@ -11,6 +12,77 @@ namespace CosmoApiServer.Core.Tests.Transport;
 
 public class Http3IntegrationTests
 {
+    [Fact]
+    public async Task Http3_ReusedHttpClientConnection_LargeBufferedResponses_RemainStable()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+        var payload = new string('x', 48 * 1024);
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                if (ctx.Request.Path == "/large-json")
+                {
+                    ctx.Response.Headers["Content-Type"] = "application/json";
+                    ctx.Response.WriteText("{\"data\":\"" + payload + "\"}");
+                }
+                else
+                {
+                    ctx.Response.StatusCode = 404;
+                    ctx.Response.WriteText("Not Found");
+                }
+
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            using var handler = new SocketsHttpHandler
+            {
+                SslOptions = new SslClientAuthenticationOptions
+                {
+                    ApplicationProtocols = [new SslApplicationProtocol("h3")],
+                    RemoteCertificateValidationCallback = (_, _, _, _) => true
+                }
+            };
+            using var client = new HttpClient(handler)
+            {
+                DefaultRequestVersion = HttpVersion.Version30,
+                DefaultVersionPolicy = HttpVersionPolicy.RequestVersionExact
+            };
+
+            for (int i = 0; i < 12; i++)
+            {
+                using var response = await client.GetAsync($"https://localhost:{port}/large-json", cts.Token);
+                Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+                var body = await response.Content.ReadAsStringAsync(cts.Token);
+                Assert.Contains(payload, body);
+            }
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
     [Fact]
     public async Task Http3_GetPing_ReturnsPong()
     {

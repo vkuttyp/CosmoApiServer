@@ -1,4 +1,7 @@
 using CosmoApiServer.Core.Http;
+using System.Buffers;
+using System.IO.Pipelines;
+using System.Text;
 
 namespace CosmoApiServer.Core.Tests.Http;
 
@@ -67,5 +70,47 @@ public class HttpResponseTests
         var response = new HttpResponse();
         response.WriteText("hello");
         Assert.True(response.IsStarted);
+    }
+
+    [Fact]
+    public async Task WriteText_WithPipeWriter_WritesChunkedResponseBytes()
+    {
+        var pipe = new Pipe();
+        var response = new HttpResponse
+        {
+            BodyWriter = pipe.Writer
+        };
+
+        response.WriteText("pong");
+        response.End();
+        await pipe.Writer.FlushAsync();
+        await pipe.Writer.CompleteAsync();
+
+        var result = await ReadFullPipeAsync(pipe.Reader);
+
+        Assert.Contains("HTTP/1.1 200 OK", result);
+        Assert.Contains("Transfer-Encoding: chunked", result);
+        Assert.Contains("Content-Type: text/plain; charset=utf-8", result);
+        Assert.Contains("4\r\npong\r\n0\r\n\r\n", result);
+    }
+
+    private static async Task<string> ReadFullPipeAsync(PipeReader reader)
+    {
+        var sb = new StringBuilder();
+        while (true)
+        {
+            var result = await reader.ReadAsync();
+            var buffer = result.Buffer;
+            if (buffer.Length > 0)
+            {
+                sb.Append(Encoding.UTF8.GetString(buffer.ToArray()));
+            }
+
+            reader.AdvanceTo(buffer.End);
+            if (result.IsCompleted)
+                break;
+        }
+
+        return sb.ToString();
     }
 }

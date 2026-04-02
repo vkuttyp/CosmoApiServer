@@ -22,6 +22,12 @@ internal static class Http3Connection
     private const long FrameSettings = 0x04;
     private const long FrameGoAway = 0x07;
     private const long MaxGoAwayRequestStreamId = 4611686018427387900L;
+    private const int BufferedDataFrameChunkSize = 4 * 1024;
+    private const int MaxRequestsPerConnection = 16;
+    private static readonly bool TraceHttp3 = string.Equals(
+        Environment.GetEnvironmentVariable("COSMO_HTTP3_TRACE"),
+        "1",
+        StringComparison.Ordinal);
 
     private const long StreamTypeControl = 0x00;
     private const long StreamTypeQpackEncoder = 0x02;
@@ -47,6 +53,8 @@ internal static class Http3Connection
         var qpackState = new QpackDecoderState();
         var connectionState = new Http3ConnectionState();
         var controlStreams = await InitializeServerStreamsAsync(connection, ct);
+        var streamTasks = new List<Task>(16);
+        bool goAwaySent = false;
         qpackState.SetInsertCountIncrementSink(increment =>
         {
             _ = controlStreams.DecoderWriter.SendInsertCountIncrementAsync(increment, CancellationToken.None);
@@ -59,9 +67,30 @@ internal static class Http3Connection
                 var stream = await connection.AcceptInboundStreamAsync(ct);
                 if (stream.Type == QuicStreamType.Bidirectional)
                     connectionState.ObserveRequestStream(stream.Id);
-                _ = stream.Type == QuicStreamType.Bidirectional
+                Trace($"accept stream={stream.Id} type={stream.Type} reqCount={connectionState.RequestCount}");
+                var streamTask = stream.Type == QuicStreamType.Bidirectional
                     ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, controlStreams.DecoderWriter, remoteIp, ct)
                     : HandleUnidirectionalStreamAsync(stream, qpackState, connectionState, ct);
+                lock (streamTasks)
+                {
+                    streamTasks.Add(streamTask);
+                    streamTasks.RemoveAll(static t => t.IsCompleted);
+                }
+
+                if (connectionState.RequestCount >= MaxRequestsPerConnection)
+                {
+                    if (!goAwaySent)
+                    {
+                        try
+                        {
+                            Trace($"goaway-send id={connectionState.GoAwayId} reqCount={connectionState.RequestCount}");
+                            await controlStreams.ControlWriter.SendGoAwayAsync(connectionState.GoAwayId, CancellationToken.None);
+                            goAwaySent = true;
+                        }
+                        catch { }
+                    }
+                    break;
+                }
             }
         }
         catch (OperationCanceledException) { }
@@ -70,7 +99,20 @@ internal static class Http3Connection
         {
             try
             {
-                await controlStreams.ControlWriter.SendGoAwayAsync(connectionState.GoAwayId, CancellationToken.None);
+                if (!goAwaySent)
+                {
+                    Trace($"goaway-final id={connectionState.GoAwayId} reqCount={connectionState.RequestCount}");
+                    await controlStreams.ControlWriter.SendGoAwayAsync(connectionState.GoAwayId, CancellationToken.None);
+                }
+            }
+            catch { }
+
+            Task[] pending;
+            lock (streamTasks)
+                pending = streamTasks.Where(static t => !t.IsCompleted).ToArray();
+            try
+            {
+                await Task.WhenAll(pending);
             }
             catch { }
         }
@@ -147,9 +189,11 @@ internal static class Http3Connection
     {
 #pragma warning disable CA1416
         var httpContext = HttpContextPool.Rent();
+        bool abortStream = false;
         try
         {
             var requestHead = await ReadRequestHeadAsync(stream, qpackState, decoderWriter, ct);
+            Trace($"stream={stream.Id} head method={requestHead.Method} path={requestHead.Path}");
             if (requestHead.RequiredInsertCount > 0)
                 await decoderWriter.SendSectionAcknowledgmentAsync(stream.Id, ct);
             PopulateHttpContext(httpContext, requestHead, new Http3RequestBodyStream(
@@ -189,19 +233,54 @@ internal static class Http3Connection
                     ct);
             }
             else if (!httpContext.Response.IsStarted || httpContext.Response.IsBuffered)
-                await WriteResponseAsync(stream, httpContext.Response, headOnly, ct);
+                await WriteResponseAsync(stream, httpContext.Response, headOnly, ct, stream.Id);
+
+            Trace($"stream={stream.Id} response-written status={httpContext.Response.StatusCode} body={httpContext.Response.Body.Length}");
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[HTTP/3] {ex.GetType().Name}: {ex.Message}");
+            Console.Error.WriteLine($"[HTTP/3] stream={stream.Id} {ex.GetType().Name}: {ex.Message}");
+            abortStream = true;
             try { stream.Abort(QuicAbortDirection.Both, IsProtocolError(ex) ? Http3GeneralProtocolError : Http3InternalError); } catch { }
         }
         finally
         {
             HttpContextPool.Return(httpContext);
-            await stream.DisposeAsync();
+            if (abortStream)
+            {
+                Trace($"stream={stream.Id} dispose-abort");
+                await stream.DisposeAsync();
+            }
+            else
+            {
+                Trace($"stream={stream.Id} dispose-success");
+                _ = DisposeSuccessfulRequestStreamAsync(stream);
+            }
         }
 #pragma warning restore CA1416
+    }
+
+    private static async Task DisposeSuccessfulRequestStreamAsync(QuicStream stream)
+    {
+#pragma warning disable CA1416
+        try
+        {
+            await stream.DisposeAsync();
+        }
+        catch { }
+#pragma warning restore CA1416
+    }
+
+    private static void Trace(string message)
+    {
+        if (TraceHttp3)
+            Console.Error.WriteLine($"[HTTP/3 TRACE] {message}");
+    }
+
+    private static void TraceWrite(long? streamId, string message)
+    {
+        if (TraceHttp3 && streamId is not null)
+            Console.Error.WriteLine($"[HTTP/3 TRACE] stream={streamId} write {message}");
     }
 
     private static async Task ConsumeControlStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
@@ -675,6 +754,7 @@ internal static class Http3Connection
         private bool _peerQpackEncoderStreamSeen;
         private bool _peerQpackDecoderStreamSeen;
         private long _highestRequestStreamId = -1;
+        private int _requestCount;
 
         public long GoAwayId
         {
@@ -682,6 +762,15 @@ internal static class Http3Connection
             {
                 lock (_gate)
                     return _highestRequestStreamId >= 0 ? _highestRequestStreamId : MaxGoAwayRequestStreamId;
+            }
+        }
+
+        public int RequestCount
+        {
+            get
+            {
+                lock (_gate)
+                    return _requestCount;
             }
         }
 
@@ -714,6 +803,7 @@ internal static class Http3Connection
         {
             lock (_gate)
             {
+                _requestCount++;
                 if (streamId > _highestRequestStreamId)
                     _highestRequestStreamId = streamId;
             }
@@ -788,7 +878,7 @@ internal static class Http3Connection
         return result;
     }
 
-    private static async Task WriteResponseAsync(QuicStream stream, HttpResponse response, bool headOnly, CancellationToken ct)
+    private static async Task WriteResponseAsync(QuicStream stream, HttpResponse response, bool headOnly, CancellationToken ct, long? traceStreamId = null)
     {
         var body = response.Body;
         if (!response.Headers.ContainsKey("Content-Type") && body.Length > 0)
@@ -799,13 +889,45 @@ internal static class Http3Connection
         var headerBlock = EncodeResponseHeaders(response);
         var trailerBlock = response.Trailers.Count > 0 ? EncodeTrailingHeaders(response.Trailers) : null;
         bool completeAfterHeaders = (body.Length == 0 || headOnly) && trailerBlock is null;
+        TraceWrite(traceStreamId, $"headers len={headerBlock.Length} complete={completeAfterHeaders}");
         await WriteFrameAsync(stream, FrameHeaders, headerBlock, completeAfterHeaders, ct);
 
         if (body.Length > 0 && !headOnly)
-            await WriteFrameAsync(stream, FrameData, body, trailerBlock is null, ct);
+            await WriteBufferedDataFramesAsync(stream, body, trailerBlock is null, ct);
 
         if (trailerBlock is not null)
+        {
+            TraceWrite(traceStreamId, $"trailers len={trailerBlock.Length}");
             await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
+        }
+    }
+
+    private static async Task WriteBufferedDataFramesAsync(
+        QuicStream stream,
+        ReadOnlyMemory<byte> body,
+        bool completeWrites,
+        CancellationToken ct)
+    {
+        if (body.IsEmpty)
+        {
+            if (completeWrites)
+            {
+#pragma warning disable CA1416
+                stream.CompleteWrites();
+#pragma warning restore CA1416
+            }
+            return;
+        }
+
+        int offset = 0;
+        while (offset < body.Length)
+        {
+            int length = Math.Min(BufferedDataFrameChunkSize, body.Length - offset);
+            bool isFinalChunk = offset + length >= body.Length;
+            TraceWrite(stream.Id, $"buffered-data offset={offset} len={length}");
+            await WriteFrameAsync(stream, FrameData, body.Slice(offset, length), completeWrites && isFinalChunk, ct);
+            offset += length;
+        }
     }
 
     private static async Task WriteStreamingResponseAsync(
@@ -848,9 +970,9 @@ internal static class Http3Connection
         ms.WriteByte(0); // Required Insert Count = 0
         ms.WriteByte(0); // Base = 0
 
-        WriteLiteralHeader(ms, ":status", response.StatusCode.ToString());
+        WriteHeaderField(ms, ":status", response.StatusCode.ToString());
         foreach (var header in response.Headers)
-            WriteLiteralHeader(ms, header.Key.ToLowerInvariant(), header.Value);
+            WriteHeaderField(ms, header.Key.ToLowerInvariant(), header.Value);
 
         return ms.ToArray();
     }
@@ -868,7 +990,7 @@ internal static class Http3Connection
         ms.WriteByte(0); // Base = 0
 
         foreach (var (name, value) in headers)
-            WriteLiteralHeader(ms, name, value);
+            WriteHeaderField(ms, name, value);
 
         return ms.ToArray();
     }
@@ -883,7 +1005,7 @@ internal static class Http3Connection
         {
             if (trailer.Key.StartsWith(':'))
                 throw new InvalidOperationException("HTTP/3 trailers cannot contain pseudo headers.");
-            WriteLiteralHeader(ms, trailer.Key.ToLowerInvariant(), trailer.Value);
+            WriteHeaderField(ms, trailer.Key.ToLowerInvariant(), trailer.Value);
         }
 
         return ms.ToArray();
@@ -917,23 +1039,50 @@ internal static class Http3Connection
         stream.Write(valueBytes, 0, valueBytes.Length);
     }
 
+    private static void WriteHeaderField(Stream stream, string name, string value)
+    {
+        if (QpackDecoderState.TryGetStaticIndex(name, value, out int staticIndex))
+        {
+            WriteIndexedStaticField(stream, staticIndex);
+            return;
+        }
+
+        if (QpackDecoderState.TryGetStaticNameIndex(name, out int nameIndex))
+        {
+            WriteLiteralHeaderWithStaticNameReference(stream, nameIndex, value);
+            return;
+        }
+
+        WriteLiteralHeader(stream, name, value);
+    }
+
+    private static void WriteIndexedStaticField(Stream stream, int index) =>
+        WritePrefixedInteger(stream, 0xC0, 6, index);
+
+    private static void WriteLiteralHeaderWithStaticNameReference(Stream stream, int nameIndex, string value)
+    {
+        WritePrefixedInteger(stream, 0x50, 4, nameIndex);
+        WritePrefixedInteger(stream, 0x00, 7, Encoding.UTF8.GetByteCount(value));
+        var valueBytes = Encoding.UTF8.GetBytes(value);
+        stream.Write(valueBytes, 0, valueBytes.Length);
+    }
+
     private static async Task WriteFrameAsync(
         QuicStream stream,
         long frameType,
-        byte[] payload,
+        ReadOnlyMemory<byte> payload,
         bool completeWrites,
         CancellationToken ct)
     {
-        using var ms = new MemoryStream();
-        WriteVarInt(ms, frameType);
-        WriteVarInt(ms, payload.LongLength);
-        ms.Write(payload, 0, payload.Length);
+        byte[] header = GC.AllocateUninitializedArray<byte>(16);
+        int headerLength = EncodeVarInt(frameType, header.AsSpan());
+        headerLength += EncodeVarInt(payload.Length, header.AsSpan(headerLength));
 #pragma warning disable CA1416
-        await stream.WriteAsync(ms.ToArray(), completeWrites, ct);
-        if (!completeWrites)
-            await stream.FlushAsync(ct);
-        if (completeWrites)
-            stream.CompleteWrites();
+        bool completeOnHeader = completeWrites && payload.IsEmpty;
+        await stream.WriteAsync(header.AsMemory(0, headerLength), completeOnHeader, ct);
+        if (!payload.IsEmpty)
+            await stream.WriteAsync(payload, completeWrites, ct);
+        await stream.FlushAsync(ct);
 #pragma warning restore CA1416
     }
 
@@ -957,10 +1106,10 @@ internal static class Http3Connection
 
     private static async Task WriteVarIntAsync(QuicStream stream, long value, CancellationToken ct)
     {
-        Span<byte> buffer = stackalloc byte[8];
+        byte[] buffer = GC.AllocateUninitializedArray<byte>(8);
         int length = EncodeVarInt(value, buffer);
 #pragma warning disable CA1416
-        await stream.WriteAsync(buffer[..length].ToArray(), false, ct);
+        await stream.WriteAsync(buffer.AsMemory(0, length), false, ct);
 #pragma warning restore CA1416
     }
 
@@ -1319,9 +1468,9 @@ internal static class Http3Connection
             if (_staging.WrittenCount == 0)
                 return;
 
-            var payload = _staging.WrittenMemory.ToArray();
-            _staging.Clear();
+            var payload = _staging.WrittenMemory;
             await WriteFrameAsync(stream, FrameData, payload, false, cancellationToken);
+            _staging.Clear();
         }
 
         public async Task CompleteAsync(byte[]? trailerBlock, CancellationToken ct)
@@ -1331,9 +1480,9 @@ internal static class Http3Connection
 
             if (_staging.WrittenCount > 0)
             {
-                var payload = _staging.WrittenMemory.ToArray();
-                _staging.Clear();
+                var payload = _staging.WrittenMemory;
                 await WriteFrameAsync(stream, FrameData, payload, trailerBlock is null, ct);
+                _staging.Clear();
             }
 
             if (trailerBlock is not null)
@@ -1342,9 +1491,7 @@ internal static class Http3Connection
             }
             else if (_staging.WrittenCount == 0)
             {
-#pragma warning disable CA1416
-                stream.CompleteWrites();
-#pragma warning restore CA1416
+                await WriteFrameAsync(stream, FrameData, ReadOnlyMemory<byte>.Empty, true, ct);
             }
 
             _disposed = true;

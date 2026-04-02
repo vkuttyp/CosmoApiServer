@@ -326,6 +326,38 @@ internal sealed class QpackDecoderState
         return QpackStaticTable[index];
     }
 
+    internal static bool TryGetStaticIndex(string name, string value, out int index)
+    {
+        for (int i = 0; i < QpackStaticTable.Length; i++)
+        {
+            var entry = QpackStaticTable[i];
+            if (string.Equals(entry.name, name, StringComparison.Ordinal) &&
+                string.Equals(entry.value, value, StringComparison.Ordinal))
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        index = -1;
+        return false;
+    }
+
+    internal static bool TryGetStaticNameIndex(string name, out int index)
+    {
+        for (int i = 0; i < QpackStaticTable.Length; i++)
+        {
+            if (string.Equals(QpackStaticTable[i].name, name, StringComparison.Ordinal))
+            {
+                index = i;
+                return true;
+            }
+        }
+
+        index = -1;
+        return false;
+    }
+
     private static string ReadStringLiteral(ReadOnlySpan<byte> data, ref int pos, int prefixBits, byte huffmanMask)
     {
         bool huffman = (data[pos] & huffmanMask) != 0;

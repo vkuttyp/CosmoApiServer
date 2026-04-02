@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using System.Net.Http;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
@@ -42,14 +43,17 @@ class Program
     static async Task Main(string[] args)
     {
         string target = args.Length > 0 ? args[0] : "CosmoApiServer";
+        bool useHttp3 = false;
         string url = target switch
         {
             "CosmoApiServer" => "http://127.0.0.1:9102",
+            "CosmoApiServerHttp3" => "https://localhost:9443",
             "AspNetCore"     => "http://127.0.0.1:9103",
             "CosmoRazor"     => "http://127.0.0.1:9003",
             "BlazorSSR"      => "http://127.0.0.1:9004",
             _                => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
         };
+        useHttp3 = target == "CosmoApiServerHttp3";
 
         Console.WriteLine($"╔══════════════════════════════════════════════╗");
         Console.WriteLine($"║  HTTP Benchmark — {target,-27}║");
@@ -62,9 +66,18 @@ class Program
             PooledConnectionLifetime = TimeSpan.FromMinutes(5),
             MaxConnectionsPerServer = 100,
             UseCookies = true,
-            CookieContainer = new System.Net.CookieContainer()
+            CookieContainer = new System.Net.CookieContainer(),
+            SslOptions = new System.Net.Security.SslClientAuthenticationOptions
+            {
+                RemoteCertificateValidationCallback = (_, _, _, _) => true
+            }
         };
-        using var http = new HttpClient(handler) { BaseAddress = new Uri(url) };
+        using var http = new HttpClient(handler)
+        {
+            BaseAddress = new Uri(url),
+            DefaultVersionPolicy = useHttp3 ? HttpVersionPolicy.RequestVersionExact : HttpVersionPolicy.RequestVersionOrHigher,
+            DefaultRequestVersion = useHttp3 ? HttpVersion.Version30 : HttpVersion.Version11
+        };
 
         // Verify server
         try {

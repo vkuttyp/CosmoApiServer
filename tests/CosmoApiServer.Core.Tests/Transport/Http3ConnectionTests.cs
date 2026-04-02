@@ -207,6 +207,48 @@ public class Http3ConnectionTests
         Assert.Contains(decoded, h => h.name == "content-length" && h.value == "4");
     }
 
+    [Fact]
+    public void EncodeResponseHeadersForTests_UsesQpackStaticEntriesWhenAvailable()
+    {
+        var response = new HttpResponse
+        {
+            StatusCode = 206
+        };
+        response.Headers["Accept-Ranges"] = "bytes";
+        response.Headers["Content-Type"] = "application/json";
+
+        var encoded = Http3Connection.EncodeResponseHeadersForTests(response);
+        var decoded = Http3Connection.DecodeFieldSectionForTests(encoded);
+
+        Assert.Contains(decoded, h => h.name == ":status" && h.value == "206");
+        Assert.Contains(decoded, h => h.name == "accept-ranges" && h.value == "bytes");
+        Assert.Contains(decoded, h => h.name == "content-type" && h.value == "application/json");
+
+        string encodedAscii = System.Text.Encoding.ASCII.GetString(encoded);
+        Assert.DoesNotContain(":status", encodedAscii, StringComparison.Ordinal);
+        Assert.DoesNotContain("accept-ranges", encodedAscii, StringComparison.Ordinal);
+        Assert.DoesNotContain("content-type", encodedAscii, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void EncodeTrailingHeadersForTests_UsesStaticNameReferencesWhenAvailable()
+    {
+        var encoded = Http3Connection.EncodeTrailingHeadersForTests(new Dictionary<string, string>
+        {
+            ["Content-Type"] = "text/plain; charset=utf-8",
+            ["Content-Length"] = "5"
+        });
+
+        var decoded = Http3Connection.DecodeFieldSectionForTests(encoded);
+
+        Assert.Contains(decoded, h => h.name == "content-type" && h.value == "text/plain; charset=utf-8");
+        Assert.Contains(decoded, h => h.name == "content-length" && h.value == "5");
+
+        string encodedAscii = System.Text.Encoding.ASCII.GetString(encoded);
+        Assert.DoesNotContain("content-type", encodedAscii, StringComparison.Ordinal);
+        Assert.DoesNotContain("content-length", encodedAscii, StringComparison.Ordinal);
+    }
+
     private static byte[] EncodeRequest(byte[] fieldSection)
     {
         using var ms = new MemoryStream();

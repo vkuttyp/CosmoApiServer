@@ -192,12 +192,20 @@ internal static class Http11Connection
                 {
                     // If started but headers not yet written (e.g. empty body), write them now
                     httpContext.Response.EnsureHeadersWritten();
-                    httpContext.Response.End();
+                    if (!httpContext.Response.IsTransportHandled)
+                    {
+                        httpContext.Response.End();
+                    }
                 }
 
-                var flush = await writer.FlushAsync(ct);
+                FlushResult flush = default;
+                if (!httpContext.Response.IsTransportHandled)
+                {
+                    flush = await writer.FlushAsync(ct);
+                }
 
                 // Read state from context BEFORE returning to pool to avoid use-after-return
+                bool transportHandled = httpContext.Response.IsTransportHandled;
                 bool isWebSocketUpgrade = httpContext.Items.TryGetValue("__WebSocketUpgrade", out var upgrade) && upgrade is true;
                 bool isConnectionClose =
                     (httpContext.Request.Headers.TryGetValue("Connection", out var conn) &&
@@ -208,7 +216,7 @@ internal static class Http11Connection
                 // Return to pool AFTER reading all needed state
                 HttpContextPool.Return(httpContext);
 
-                if (flush.IsCompleted) break;
+                if (!transportHandled && flush.IsCompleted) break;
 
                 // ── WebSocket Upgrade Handover ───────────────────────────────
                 if (isWebSocketUpgrade)

@@ -15,6 +15,7 @@ namespace CosmoApiServer.Core.Transport;
 /// </summary>
 public sealed class PipelineHttpServer : IAsyncDisposable
 {
+    private const long Http3NoError = 0x0100;
     private Socket? _listener;
     private QuicListener? _quicListener;
     private CancellationTokenSource? _cts;
@@ -40,6 +41,9 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             ? new X509Certificate2(certPath, certPassword)
             : null;
 #pragma warning restore SYSLIB0057
+        SslStreamCertificateContext? quicCertContext = cert is not null && enableHttp3
+            ? SslStreamCertificateContext.Create(cert, additionalCertificates: null)
+            : null;
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -70,10 +74,15 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                 {
                     var options = new QuicServerConnectionOptions
                     {
+                        DefaultCloseErrorCode = Http3NoError,
+                        DefaultStreamErrorCode = Http3NoError,
+                                MaxInboundBidirectionalStreams = 100,
+                        MaxInboundUnidirectionalStreams = 100,
                         ServerAuthenticationOptions = new SslServerAuthenticationOptions
                         {
-                            ServerCertificate = cert,
-                            ApplicationProtocols = [Http3Protocol]
+                            ServerCertificateContext = quicCertContext,
+                            ApplicationProtocols = [Http3Protocol],
+                            EnabledSslProtocols = SslProtocols.Tls13
                         }
                     };
                     return ValueTask.FromResult(options);
@@ -120,9 +129,16 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         while (!ct.IsCancellationRequested)
         {
             QuicConnection connection;
-            try { connection = await _quicListener!.AcceptConnectionAsync(ct); }
+            try
+            {
+                connection = await _quicListener!.AcceptConnectionAsync(ct);
+            }
             catch (OperationCanceledException) { break; }
-            catch { continue; }
+            catch (Exception ex)
+            {
+                Console.Error.WriteLine($"[HTTP/3 Accept] {ex.GetType().Name}: {ex.Message}");
+                continue;
+            }
 
             _ = HandleQuicConnectionAsync(connection, pipeline, services, connectionTimeoutSeconds, ct);
         }

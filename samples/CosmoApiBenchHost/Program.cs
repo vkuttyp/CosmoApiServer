@@ -1,3 +1,4 @@
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -11,8 +12,25 @@ using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.Http;
 using CosmoApiBenchHost;
 
+int port = int.TryParse(Environment.GetEnvironmentVariable("COSMO_BENCH_PORT"), out var parsedPort)
+    ? parsedPort
+    : 9102;
+string? certPath = Environment.GetEnvironmentVariable("COSMO_BENCH_CERT_PATH");
+string? certPassword = Environment.GetEnvironmentVariable("COSMO_BENCH_CERT_PASSWORD");
+bool enableHttp3 = string.Equals(Environment.GetEnvironmentVariable("COSMO_BENCH_ENABLE_HTTP3"), "true", StringComparison.OrdinalIgnoreCase);
+
 var builder = CosmoWebApplicationBuilder.Create()
-    .ListenOn(9102);
+    .ListenOn(port);
+
+if (!string.IsNullOrWhiteSpace(certPath))
+{
+    builder.UseHttps(certPath, certPassword);
+}
+
+if (enableHttp3)
+{
+    builder.UseHttp3();
+}
 
 var benchItems = Enumerable.Range(1, 100).Select(i => 
     new BenchItem(i, $"Item {i}", i * 1.23, DateTime.UtcNow.AddDays(i).ToString("o"))
@@ -81,6 +99,14 @@ app.MapGet("/large-json", ctx => {
     return ValueTask.CompletedTask;
 });
 
+app.MapGet("/blob/{size}", ctx => {
+    var sizeText = ctx.Request.RouteValues.TryGetValue("size", out var raw) ? raw : "0";
+    int size = int.TryParse(sizeText, out var parsed) ? Math.Max(0, parsed) : 0;
+    ctx.Response.Headers["Content-Type"] = "application/octet-stream";
+    ctx.Response.Write(new byte[size]);
+    return ValueTask.CompletedTask;
+});
+
 app.MapGet("/query", ctx => {
     var name = ctx.Request.Query.TryGetValue("name", out var n) ? n : "none";
     var id = ctx.Request.Query.TryGetValue("id", out var i) ? i : "0";
@@ -118,5 +144,6 @@ app.MapGet("/file", async ctx => {
 });
 
 Console.WriteLine("=== CosmoApiServer-DotNet Benchmark ===");
+Console.WriteLine($"Endpoint: {(certPath is null ? "http" : "https")}://127.0.0.1:{port}");
 Console.WriteLine("Endpoints: /ping, /json, /bench, /route/{id}, /echo, /large-json, /query, /form, /headers, /stream, /file");
 app.Run();
