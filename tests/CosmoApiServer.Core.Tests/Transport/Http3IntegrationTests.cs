@@ -736,6 +736,317 @@ public class Http3IntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Http3_BufferedResponse_WritesTrailingHeaders()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                if (ctx.Request.Path == "/buffered-trailers")
+                {
+                    ctx.Response.Trailers["x-buffered"] = "ok";
+                    ctx.Response.WriteText("payload");
+                    return ValueTask.CompletedTask;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            var requestBytes = Http3Connection.EncodeRequestForTests(
+            [
+                (":method", "GET"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/buffered-trailers")
+            ]);
+
+            await requestStream.WriteAsync(requestBytes, true, cts.Token);
+            requestStream.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(requestStream, cts.Token);
+            var (headers, body, chunks, trailers) = ParseResponse(responseBytes);
+
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("payload", body);
+            Assert.Single(chunks);
+            Assert.Contains(trailers, h => h.name == "x-buffered" && h.value == "ok");
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_ServerStop_SendsGoAwayOnControlStream()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                ctx.Response.WriteText("ok");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            var inbound = await AcceptServerStreamsAsync(connection, cts.Token);
+            await using var controlStream = inbound[0x00];
+
+            var initialSettings = await ReadFrameAsync(controlStream, cts.Token);
+            Assert.Equal(0x04, initialSettings.type);
+
+            await server.StopAsync();
+
+            var goAway = await ReadFrameAsync(controlStream, cts.Token);
+            Assert.Equal(0x07, goAway.type);
+            int pos = 0;
+            Assert.Equal(4611686018427387900L, ReadVarInt(goAway.payload, ref pos));
+        }
+        finally
+        {
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_ServerStop_SendsGoAwayWithHighestObservedRequestStreamId()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                ctx.Response.WriteText("ok");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            var inbound = await AcceptServerStreamsAsync(connection, cts.Token);
+            await using var controlStream = inbound[0x00];
+
+            var initialSettings = await ReadFrameAsync(controlStream, cts.Token);
+            Assert.Equal(0x04, initialSettings.type);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await requestStream.WriteAsync(ReadOnlyMemory<byte>.Empty, false, cts.Token);
+            await requestStream.FlushAsync(cts.Token);
+
+            await Task.Delay(100, cts.Token);
+            await server.StopAsync();
+
+            var goAway = await ReadFrameAsync(controlStream, cts.Token);
+            Assert.Equal(0x07, goAway.type);
+            int pos = 0;
+            Assert.Equal(requestStream.Id, ReadVarInt(goAway.payload, ref pos));
+        }
+        finally
+        {
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_RequestTrailers_RejectsDataAfterTrailers()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = async ctx =>
+            {
+                if (ctx.Request.Path == "/trailers")
+                {
+                    using var ms = new MemoryStream();
+                    await ctx.Request.BodyStream.CopyToAsync(ms, ctx.RequestAborted);
+                    ctx.Response.WriteText("unexpected");
+                    return;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            using var requestPayload = new MemoryStream();
+            requestPayload.Write(Http3Connection.EncodeRequestForTests(
+            [
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/trailers")
+            ]));
+            WriteFrame(requestPayload, 0x01, Http3Connection.EncodeTrailingHeadersForTests(new Dictionary<string, string>
+            {
+                ["x-checksum"] = "done"
+            }));
+            WriteFrame(requestPayload, 0x00, System.Text.Encoding.UTF8.GetBytes("late"));
+
+            await requestStream.WriteAsync(requestPayload.ToArray(), true, cts.Token);
+            requestStream.CompleteWrites();
+
+            await Assert.ThrowsAnyAsync<Exception>(async () => await ReadAllAsync(requestStream, cts.Token));
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_RequestTrailers_RejectPseudoHeaders()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = async ctx =>
+            {
+                if (ctx.Request.Path == "/trailers")
+                {
+                    using var ms = new MemoryStream();
+                    await ctx.Request.BodyStream.CopyToAsync(ms, ctx.RequestAborted);
+                    ctx.Response.WriteText("unexpected");
+                    return;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            using var requestPayload = new MemoryStream();
+            requestPayload.Write(Http3Connection.EncodeRequestForTests(
+            [
+                (":method", "POST"),
+                (":scheme", "https"),
+                (":authority", "localhost"),
+                (":path", "/trailers")
+            ]));
+            WriteFrame(requestPayload, 0x00, System.Text.Encoding.UTF8.GetBytes("body"));
+            WriteFrame(requestPayload, 0x01, Http3Connection.EncodeFieldSectionForTests((":status", "200")));
+
+            await requestStream.WriteAsync(requestPayload.ToArray(), true, cts.Token);
+            requestStream.CompleteWrites();
+
+            await Assert.ThrowsAnyAsync<Exception>(async () => await ReadAllAsync(requestStream, cts.Token));
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
     private static async Task<byte[]> ReadAllAsync(QuicStream stream, CancellationToken ct)
     {
 #pragma warning disable CA1416
@@ -1015,6 +1326,23 @@ public class Http3IntegrationTests
 
         int pos = 0;
         return ReadVarInt(buffer.AsSpan(0, length), ref pos);
+    }
+
+    private static async Task<(long type, byte[] payload)> ReadFrameAsync(QuicStream stream, CancellationToken ct)
+    {
+        long type = await ReadVarIntAsync(stream, ct);
+        long length = await ReadVarIntAsync(stream, ct);
+        var payload = new byte[length];
+        int offset = 0;
+        while (offset < length)
+        {
+            int read = await stream.ReadAsync(payload.AsMemory(offset, (int)length - offset), ct);
+            if (read == 0)
+                throw new EndOfStreamException();
+            offset += read;
+        }
+
+        return (type, payload);
     }
 
     private static async Task<(string kind, long value)> ReadDecoderInstructionAsync(QuicStream stream, CancellationToken ct)

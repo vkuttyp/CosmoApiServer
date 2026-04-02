@@ -9,8 +9,8 @@ namespace CosmoApiServer.Core.Transport;
 
 /// <summary>
 /// Experimental HTTP/3 transport with a minimal request/response path for buffered handlers.
-/// This currently supports basic request streams with a HEADERS frame followed by optional DATA.
-/// Dynamic QPACK tables, trailers, push, and advanced HTTP/3 control handling are not implemented.
+/// This currently supports basic request streams with a HEADERS frame followed by optional DATA/trailers.
+/// Push and advanced HTTP/3 control handling are not implemented.
 /// </summary>
 internal static class Http3Connection
 {
@@ -20,6 +20,8 @@ internal static class Http3Connection
     private const long FrameData = 0x00;
     private const long FrameHeaders = 0x01;
     private const long FrameSettings = 0x04;
+    private const long FrameGoAway = 0x07;
+    private const long MaxGoAwayRequestStreamId = 4611686018427387900L;
 
     private const long StreamTypeControl = 0x00;
     private const long StreamTypeQpackEncoder = 0x02;
@@ -43,10 +45,11 @@ internal static class Http3Connection
 #pragma warning disable CA1416
         var remoteIp = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString();
         var qpackState = new QpackDecoderState();
-        var decoderWriter = await InitializeServerStreamsAsync(connection, ct);
+        var connectionState = new Http3ConnectionState();
+        var controlStreams = await InitializeServerStreamsAsync(connection, ct);
         qpackState.SetInsertCountIncrementSink(increment =>
         {
-            _ = decoderWriter.SendInsertCountIncrementAsync(increment, CancellationToken.None);
+            _ = controlStreams.DecoderWriter.SendInsertCountIncrementAsync(increment, CancellationToken.None);
         });
 
         try
@@ -54,17 +57,27 @@ internal static class Http3Connection
             while (!ct.IsCancellationRequested)
             {
                 var stream = await connection.AcceptInboundStreamAsync(ct);
+                if (stream.Type == QuicStreamType.Bidirectional)
+                    connectionState.ObserveRequestStream(stream.Id);
                 _ = stream.Type == QuicStreamType.Bidirectional
-                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, decoderWriter, remoteIp, ct)
-                    : HandleUnidirectionalStreamAsync(stream, qpackState, ct);
+                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, controlStreams.DecoderWriter, remoteIp, ct)
+                    : HandleUnidirectionalStreamAsync(stream, qpackState, connectionState, ct);
             }
         }
         catch (OperationCanceledException) { }
         catch (QuicException) { }
+        finally
+        {
+            try
+            {
+                await controlStreams.ControlWriter.SendGoAwayAsync(connectionState.GoAwayId, CancellationToken.None);
+            }
+            catch { }
+        }
 #pragma warning restore CA1416
     }
 
-    private static async Task<DecoderInstructionWriter> InitializeServerStreamsAsync(QuicConnection connection, CancellationToken ct)
+    private static async Task<ServerControlStreams> InitializeServerStreamsAsync(QuicConnection connection, CancellationToken ct)
     {
 #pragma warning disable CA1416
         var control = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, ct);
@@ -85,16 +98,17 @@ internal static class Http3Connection
 
         await WriteVarIntAsync(decoder, StreamTypeQpackDecoder, ct);
         await decoder.FlushAsync(ct);
-        return new DecoderInstructionWriter(decoder);
+        return new ServerControlStreams(new ControlStreamWriter(control), new DecoderInstructionWriter(decoder));
 #pragma warning restore CA1416
     }
 
-    private static async Task HandleUnidirectionalStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
+    private static async Task HandleUnidirectionalStreamAsync(QuicStream stream, QpackDecoderState qpackState, Http3ConnectionState connectionState, CancellationToken ct)
     {
 #pragma warning disable CA1416
         try
         {
             long streamType = await ReadVarIntAsync(stream, ct);
+            connectionState.RegisterPeerUnidirectionalStream(streamType);
             switch (streamType)
             {
                 case StreamTypeControl:
@@ -111,7 +125,10 @@ internal static class Http3Connection
             }
         }
         catch (OperationCanceledException) { }
-        catch (Exception) { }
+        catch (Exception ex)
+        {
+            try { stream.Abort(QuicAbortDirection.Both, IsProtocolError(ex) ? Http3GeneralProtocolError : Http3InternalError); } catch { }
+        }
         finally
         {
             await stream.DisposeAsync();
@@ -177,7 +194,7 @@ internal static class Http3Connection
         catch (Exception ex)
         {
             Console.Error.WriteLine($"[HTTP/3] {ex.GetType().Name}: {ex.Message}");
-            try { stream.Abort(QuicAbortDirection.Both, Http3InternalError); } catch { }
+            try { stream.Abort(QuicAbortDirection.Both, IsProtocolError(ex) ? Http3GeneralProtocolError : Http3InternalError); } catch { }
         }
         finally
         {
@@ -196,14 +213,17 @@ internal static class Http3Connection
             if (frame is null)
                 break;
 
+            ValidateControlFrameType(frame.Value.Type, sawSettings);
+
             if (frame.Value.Type == FrameSettings)
             {
-                if (sawSettings)
-                    throw new InvalidOperationException("HTTP/3 control stream sent duplicate SETTINGS.");
                 sawSettings = true;
                 qpackState.ApplyPeerSettings(frame.Value.Payload);
             }
         }
+
+        if (!sawSettings)
+            throw new InvalidOperationException("HTTP/3 control stream must begin with SETTINGS.");
     }
 
     private static async Task ConsumeQpackEncoderStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
@@ -269,6 +289,8 @@ internal static class Http3Connection
                     }
                 case FrameData:
                     throw new InvalidOperationException("HTTP/3 DATA frame received before request HEADERS.");
+                default:
+                    throw new InvalidOperationException($"HTTP/3 frame type {frame.Value.Type} is not valid before request HEADERS.");
             }
         }
 #pragma warning restore CA1416
@@ -300,6 +322,8 @@ internal static class Http3Connection
                 case FrameData:
                     body.Write(payload);
                     break;
+                default:
+                    throw new InvalidOperationException($"HTTP/3 request contained unsupported frame type {frameType}.");
             }
         }
 
@@ -323,6 +347,10 @@ internal static class Http3Connection
         string path = "/";
         string queryString = string.Empty;
         string? host = null;
+        bool sawMethod = false;
+        bool sawPath = false;
+        bool sawScheme = false;
+        bool sawAuthority = false;
 
         var headerDict = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         bool sawRegularHeader = false;
@@ -341,16 +369,28 @@ internal static class Http3Connection
             switch (name)
             {
                 case ":method":
+                    if (sawMethod)
+                        throw new InvalidOperationException("HTTP/3 request sent duplicate :method pseudo header.");
+                    sawMethod = true;
                     method = value;
                     break;
                 case ":path":
+                    if (sawPath)
+                        throw new InvalidOperationException("HTTP/3 request sent duplicate :path pseudo header.");
+                    sawPath = true;
                     path = value;
                     break;
                 case ":authority":
+                    if (sawAuthority)
+                        throw new InvalidOperationException("HTTP/3 request sent duplicate :authority pseudo header.");
+                    sawAuthority = true;
                     host = value;
                     headerDict["host"] = value;
                     break;
                 case ":scheme":
+                    if (sawScheme)
+                        throw new InvalidOperationException("HTTP/3 request sent duplicate :scheme pseudo header.");
+                    sawScheme = true;
                     break;
                 default:
                     if (name.StartsWith(':'))
@@ -479,6 +519,35 @@ internal static class Http3Connection
     internal static IReadOnlyList<(string name, string value)> DecodeFieldSectionForTests(byte[] data, QpackDecoderState state) =>
         DecodeFieldSection(data, state);
 
+    internal static void ValidateControlFrameSequenceForTests(params long[] frameTypes)
+    {
+        bool sawSettings = false;
+        foreach (var frameType in frameTypes)
+        {
+            ValidateControlFrameType(frameType, sawSettings);
+            if (frameType == FrameSettings)
+                sawSettings = true;
+        }
+
+        if (!sawSettings)
+            throw new InvalidOperationException("HTTP/3 control stream must begin with SETTINGS.");
+    }
+
+    internal static void ValidateUnidirectionalStreamSequenceForTests(params long[] streamTypes)
+    {
+        var state = new Http3ConnectionState();
+        foreach (var streamType in streamTypes)
+            state.RegisterPeerUnidirectionalStream(streamType);
+    }
+
+    internal static long DetermineGoAwayIdForTests(params long[] requestStreamIds)
+    {
+        var state = new Http3ConnectionState();
+        foreach (var streamId in requestStreamIds)
+            state.ObserveRequestStream(streamId);
+        return state.GoAwayId;
+    }
+
     private static async Task<DecodedFieldSection> DecodeFieldSectionAsync(
         ReadOnlyMemory<byte> data,
         QpackDecoderState qpackState,
@@ -582,6 +651,73 @@ internal static class Http3Connection
         int pos = 0;
         long encodedRequiredInsertCount = ReadPrefixedInteger(data, ref pos, 8);
         return DecodeRequiredInsertCount(encodedRequiredInsertCount, qpackState);
+    }
+
+    private static void ValidateControlFrameType(long frameType, bool sawSettings)
+    {
+        if (!sawSettings && frameType != FrameSettings)
+            throw new InvalidOperationException("HTTP/3 control stream must begin with SETTINGS.");
+
+        if (frameType == FrameSettings && sawSettings)
+            throw new InvalidOperationException("HTTP/3 control stream sent duplicate SETTINGS.");
+
+        if (frameType == FrameData || frameType == FrameHeaders || frameType == FrameGoAway)
+            throw new InvalidOperationException($"HTTP/3 frame type {frameType} is not valid on the control stream.");
+    }
+
+    private static bool IsProtocolError(Exception ex) =>
+        ex is InvalidOperationException or NotSupportedException;
+
+    private sealed class Http3ConnectionState
+    {
+        private readonly object _gate = new();
+        private bool _peerControlStreamSeen;
+        private bool _peerQpackEncoderStreamSeen;
+        private bool _peerQpackDecoderStreamSeen;
+        private long _highestRequestStreamId = -1;
+
+        public long GoAwayId
+        {
+            get
+            {
+                lock (_gate)
+                    return _highestRequestStreamId >= 0 ? _highestRequestStreamId : MaxGoAwayRequestStreamId;
+            }
+        }
+
+        public void RegisterPeerUnidirectionalStream(long streamType)
+        {
+            lock (_gate)
+            {
+                switch (streamType)
+                {
+                    case StreamTypeControl:
+                        if (_peerControlStreamSeen)
+                            throw new InvalidOperationException("HTTP/3 peer opened duplicate control streams.");
+                        _peerControlStreamSeen = true;
+                        break;
+                    case StreamTypeQpackEncoder:
+                        if (_peerQpackEncoderStreamSeen)
+                            throw new InvalidOperationException("HTTP/3 peer opened duplicate QPACK encoder streams.");
+                        _peerQpackEncoderStreamSeen = true;
+                        break;
+                    case StreamTypeQpackDecoder:
+                        if (_peerQpackDecoderStreamSeen)
+                            throw new InvalidOperationException("HTTP/3 peer opened duplicate QPACK decoder streams.");
+                        _peerQpackDecoderStreamSeen = true;
+                        break;
+                }
+            }
+        }
+
+        public void ObserveRequestStream(long streamId)
+        {
+            lock (_gate)
+            {
+                if (streamId > _highestRequestStreamId)
+                    _highestRequestStreamId = streamId;
+            }
+        }
     }
 
     private static string ReadStringLiteral(ReadOnlySpan<byte> data, ref int pos, int prefixBits, byte huffmanMask)
@@ -974,6 +1110,37 @@ internal static class Http3Connection
         IReadOnlyDictionary<string, string> Headers,
         byte[] Body);
 
+    private sealed class ControlStreamWriter(QuicStream stream)
+    {
+        private readonly SemaphoreSlim _lock = new(1, 1);
+
+        public async Task SendGoAwayAsync(long requestStreamId, CancellationToken ct)
+        {
+            using var payload = new MemoryStream();
+            WriteVarInt(payload, requestStreamId);
+            using var frame = new MemoryStream();
+            WriteVarInt(frame, FrameGoAway);
+            WriteVarInt(frame, payload.Length);
+            payload.Position = 0;
+            payload.CopyTo(frame);
+
+#pragma warning disable CA1416
+            await _lock.WaitAsync(ct);
+            try
+            {
+                await stream.WriteAsync(frame.ToArray(), false, ct);
+                await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                _lock.Release();
+            }
+#pragma warning restore CA1416
+        }
+    }
+
+    private sealed record ServerControlStreams(ControlStreamWriter ControlWriter, DecoderInstructionWriter DecoderWriter);
+
     private sealed class DecoderInstructionWriter(QuicStream stream)
     {
         private readonly SemaphoreSlim _lock = new(1, 1);
@@ -1027,7 +1194,8 @@ internal static class Http3Connection
         HttpRequest request) : Stream
     {
         private ReadOnlyMemory<byte> _currentData = ReadOnlyMemory<byte>.Empty;
-        private bool _completed;
+        private bool _endOfBody;
+        private bool _trailersSeen;
         private bool _disposed;
 
         public override bool CanRead => !_disposed;
@@ -1045,7 +1213,7 @@ internal static class Http3Connection
         public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
         {
 #pragma warning disable CA1416
-            if (_disposed || _completed || buffer.IsEmpty)
+            if (_disposed || _endOfBody || buffer.IsEmpty)
                 return 0;
 
             while (_currentData.IsEmpty)
@@ -1053,24 +1221,28 @@ internal static class Http3Connection
                 var frame = await TryReadFrameAsync(stream, cancellationToken);
                 if (frame is null)
                 {
-                    _completed = true;
+                    _endOfBody = true;
                     return 0;
                 }
 
                 switch (frame.Value.Type)
                 {
                     case FrameData:
-                        if (_completed)
+                        if (_trailersSeen)
                             throw new InvalidOperationException("HTTP/3 DATA frame received after trailers.");
                         _currentData = frame.Value.Payload;
                         break;
                     case FrameHeaders:
+                        if (_trailersSeen)
+                            throw new InvalidOperationException("HTTP/3 request sent multiple trailer HEADERS frames.");
                         var trailers = await DecodeFieldSectionAsync(frame.Value.Payload, qpackState, decoderWriter, streamId, cancellationToken);
                         if (trailers.RequiredInsertCount > 0)
                             await decoderWriter.SendSectionAcknowledgmentAsync(streamId, cancellationToken);
                         MergeTrailers(request, trailers.Headers);
-                        _completed = true;
-                        return 0;
+                        _trailersSeen = true;
+                        continue;
+                    default:
+                        throw new InvalidOperationException($"HTTP/3 frame type {frame.Value.Type} is not valid in the request body stream.");
                 }
             }
 

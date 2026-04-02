@@ -51,6 +51,25 @@ public class Http3ConnectionTests
     }
 
     [Fact]
+    public void ParseRequestForTests_RejectsUnknownFrameTypes()
+    {
+        using var ms = new MemoryStream();
+        ms.Write(Http3Connection.EncodeRequestForTests(
+        [
+            (":method", "POST"),
+            (":scheme", "https"),
+            (":authority", "localhost"),
+            (":path", "/echo")
+        ]));
+        WriteFrame(ms, 0x09, Encoding.UTF8.GetBytes("bad"));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ParseRequestForTests(ms.ToArray()));
+
+        Assert.Contains("unsupported frame type", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public void ParseRequestForTests_CombinesMultipleDataFrames()
     {
         var body1 = Encoding.UTF8.GetBytes("hello ");
@@ -84,6 +103,90 @@ public class Http3ConnectionTests
             Http3Connection.ParseRequestForTests(EncodeRequest(encoded)));
 
         Assert.Contains("pseudo headers", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ParseRequestForTests_RejectsDuplicatePseudoHeaders()
+    {
+        var encoded = Http3Connection.EncodeFieldSectionForTests(
+            (":method", "GET"),
+            (":scheme", "https"),
+            (":authority", "localhost"),
+            (":path", "/one"),
+            (":path", "/two"));
+
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ParseRequestForTests(EncodeRequest(encoded)));
+
+        Assert.Contains("duplicate :path", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateControlFrameSequenceForTests_RejectsMissingInitialSettings()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateControlFrameSequenceForTests(0x09));
+
+        Assert.Contains("begin with SETTINGS", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateControlFrameSequenceForTests_RejectsDuplicateSettings()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateControlFrameSequenceForTests(0x04, 0x04));
+
+        Assert.Contains("duplicate SETTINGS", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateControlFrameSequenceForTests_RejectsForbiddenFrameTypes()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateControlFrameSequenceForTests(0x04, 0x01));
+
+        Assert.Contains("control stream", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateUnidirectionalStreamSequenceForTests_RejectsDuplicateControlStreams()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateUnidirectionalStreamSequenceForTests(0x00, 0x00));
+
+        Assert.Contains("duplicate control", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateUnidirectionalStreamSequenceForTests_RejectsDuplicateQpackEncoderStreams()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateUnidirectionalStreamSequenceForTests(0x02, 0x02));
+
+        Assert.Contains("duplicate qpack encoder", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void ValidateUnidirectionalStreamSequenceForTests_RejectsDuplicateQpackDecoderStreams()
+    {
+        var ex = Assert.Throws<InvalidOperationException>(() =>
+            Http3Connection.ValidateUnidirectionalStreamSequenceForTests(0x03, 0x03));
+
+        Assert.Contains("duplicate qpack decoder", ex.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void DetermineGoAwayIdForTests_UsesHighestObservedRequestStreamId()
+    {
+        long id = Http3Connection.DetermineGoAwayIdForTests(0, 4, 12, 8);
+        Assert.Equal(12, id);
+    }
+
+    [Fact]
+    public void DetermineGoAwayIdForTests_UsesMaxValueWhenNoRequestWasObserved()
+    {
+        long id = Http3Connection.DetermineGoAwayIdForTests();
+        Assert.Equal(4611686018427387900L, id);
     }
 
     [Fact]
