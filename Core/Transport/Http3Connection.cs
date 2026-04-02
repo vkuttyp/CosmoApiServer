@@ -43,8 +43,11 @@ internal static class Http3Connection
 #pragma warning disable CA1416
         var remoteIp = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString();
         var qpackState = new QpackDecoderState();
-
-        await InitializeServerStreamsAsync(connection, ct);
+        var decoderWriter = await InitializeServerStreamsAsync(connection, ct);
+        qpackState.SetInsertCountIncrementSink(increment =>
+        {
+            _ = decoderWriter.SendInsertCountIncrementAsync(increment, CancellationToken.None);
+        });
 
         try
         {
@@ -52,7 +55,7 @@ internal static class Http3Connection
             {
                 var stream = await connection.AcceptInboundStreamAsync(ct);
                 _ = stream.Type == QuicStreamType.Bidirectional
-                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, remoteIp, ct)
+                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, decoderWriter, remoteIp, ct)
                     : HandleUnidirectionalStreamAsync(stream, qpackState, ct);
             }
         }
@@ -61,7 +64,7 @@ internal static class Http3Connection
 #pragma warning restore CA1416
     }
 
-    private static async Task InitializeServerStreamsAsync(QuicConnection connection, CancellationToken ct)
+    private static async Task<DecoderInstructionWriter> InitializeServerStreamsAsync(QuicConnection connection, CancellationToken ct)
     {
 #pragma warning disable CA1416
         var control = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, ct);
@@ -82,6 +85,7 @@ internal static class Http3Connection
 
         await WriteVarIntAsync(decoder, StreamTypeQpackDecoder, ct);
         await decoder.FlushAsync(ct);
+        return new DecoderInstructionWriter(decoder);
 #pragma warning restore CA1416
     }
 
@@ -120,6 +124,7 @@ internal static class Http3Connection
         RequestDelegate pipeline,
         IServiceProvider services,
         QpackDecoderState qpackState,
+        DecoderInstructionWriter decoderWriter,
         string? remoteIp,
         CancellationToken ct)
     {
@@ -127,7 +132,9 @@ internal static class Http3Connection
         var httpContext = HttpContextPool.Rent();
         try
         {
-            var requestHead = await ReadRequestHeadAsync(stream, qpackState, ct);
+            var requestHead = await ReadRequestHeadAsync(stream, qpackState, decoderWriter, ct);
+            if (requestHead.RequiredInsertCount > 0)
+                await decoderWriter.SendSectionAcknowledgmentAsync(stream.Id, ct);
             PopulateHttpContext(httpContext, requestHead, new Http3RequestBodyStream(stream), services, remoteIp, ct);
             bool headOnly = requestHead.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD;
             httpContext.Response.StreamingResponseWriter =
@@ -196,15 +203,12 @@ internal static class Http3Connection
 
     private static async Task ConsumeQpackEncoderStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
     {
-        var buffer = new MemoryStream();
         var readBuffer = ArrayPool<byte>.Shared.Rent(1024);
         try
         {
             int read;
             while ((read = await stream.ReadAsync(readBuffer.AsMemory(), ct)) > 0)
-                buffer.Write(readBuffer, 0, read);
-
-            qpackState.ProcessEncoderInstructions(buffer.ToArray());
+                qpackState.AppendEncoderStreamData(readBuffer.AsSpan(0, read));
         }
         finally
         {
@@ -225,7 +229,11 @@ internal static class Http3Connection
         }
     }
 
-    private static async Task<ParsedHttp3RequestHead> ReadRequestHeadAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
+    private static async Task<ParsedHttp3RequestHead> ReadRequestHeadAsync(
+        QuicStream stream,
+        QpackDecoderState qpackState,
+        DecoderInstructionWriter decoderWriter,
+        CancellationToken ct)
     {
 #pragma warning disable CA1416
         while (true)
@@ -237,7 +245,23 @@ internal static class Http3Connection
             switch (frame.Value.Type)
             {
                 case FrameHeaders:
-                    return ParseRequestHead(DecodeFieldSection(frame.Value.Payload, qpackState));
+                    var decoded = await DecodeFieldSectionAsync(frame.Value.Payload, qpackState, decoderWriter, stream.Id, ct);
+                    try
+                    {
+                        return ParseRequestHead(decoded);
+                    }
+                    catch
+                    {
+                        if (decoded.RequiredInsertCount > 0)
+                        {
+                            try
+                            {
+                                await decoderWriter.SendStreamCancellationAsync(stream.Id, CancellationToken.None);
+                            }
+                            catch { }
+                        }
+                        throw;
+                    }
                 case FrameData:
                     throw new InvalidOperationException("HTTP/3 DATA frame received before request HEADERS.");
             }
@@ -277,7 +301,7 @@ internal static class Http3Connection
         if (headers.Count == 0)
             throw new InvalidOperationException("HTTP/3 request missing HEADERS frame.");
 
-        var head = ParseRequestHead(headers);
+        var head = ParseRequestHead(new DecodedFieldSection(headers, 0));
         return new ParsedHttp3Request(
             head.Method,
             head.Path,
@@ -287,8 +311,9 @@ internal static class Http3Connection
             body.ToArray());
     }
 
-    private static ParsedHttp3RequestHead ParseRequestHead(IReadOnlyList<(string name, string value)> headers)
+    private static ParsedHttp3RequestHead ParseRequestHead(DecodedFieldSection fieldSection)
     {
+        var headers = fieldSection.Headers;
         string method = "GET";
         string path = "/";
         string queryString = string.Empty;
@@ -350,7 +375,8 @@ internal static class Http3Connection
             path,
             queryString,
             host,
-            headerDict);
+            headerDict,
+            fieldSection.RequiredInsertCount);
     }
 
     internal static (string Method, string Path, string QueryString, string? Host, IReadOnlyDictionary<string, string> Headers, byte[] Body)
@@ -363,12 +389,19 @@ internal static class Http3Connection
     private static List<(string name, string value)> DecodeFieldSection(ReadOnlySpan<byte> data, QpackDecoderState? qpackState)
     {
         int pos = 0;
-        long requiredInsertCount = ReadPrefixedInteger(data, ref pos, 8);
+        long encodedRequiredInsertCount = ReadPrefixedInteger(data, ref pos, 8);
+        byte deltaBaseByte = data[pos];
         long deltaBase = ReadPrefixedInteger(data, ref pos, 7);
-        bool signBit = (data[Math.Max(0, pos - 1)] & 0x80) != 0;
+        bool signBit = (deltaBaseByte & 0x80) != 0;
 
-        if ((requiredInsertCount != 0 || deltaBase != 0 || signBit) && qpackState is null)
+        if ((encodedRequiredInsertCount != 0 || deltaBase != 0 || signBit) && qpackState is null)
             throw new NotSupportedException("Dynamic QPACK field sections require connection-level decoder state.");
+
+        long requiredInsertCount = DecodeRequiredInsertCount(encodedRequiredInsertCount, qpackState);
+        long @base = DecodeBase(requiredInsertCount, signBit, deltaBase);
+
+        if (requiredInsertCount > 0 && qpackState is not null && requiredInsertCount > qpackState.InsertCount)
+            throw new InvalidOperationException("HTTP/3 field section references dynamic table entries that are not available yet.");
 
         var headers = new List<(string name, string value)>(8);
 
@@ -380,8 +413,23 @@ internal static class Http3Connection
                 bool isStatic = (b & 0x40) != 0;
                 int index = (int)ReadPrefixedInteger(data, ref pos, 6);
                 if (!isStatic)
-                    throw new NotSupportedException("Dynamic QPACK field references are not implemented yet.");
-                headers.Add(QpackDecoderState.GetStaticEntry(index));
+                {
+                    if (qpackState is null)
+                        throw new NotSupportedException("Dynamic QPACK field references require connection-level decoder state.");
+                    headers.Add(ResolveDynamicRelativeField(qpackState, @base, index));
+                }
+                else
+                {
+                    headers.Add(QpackDecoderState.GetStaticEntry(index));
+                }
+            }
+            else if ((b & 0xF0) == 0x10)
+            {
+                if (qpackState is null)
+                    throw new NotSupportedException("Dynamic QPACK field references require connection-level decoder state.");
+
+                int index = (int)ReadPrefixedInteger(data, ref pos, 4);
+                headers.Add(ResolveDynamicPostBaseField(qpackState, @base, index));
             }
             else if ((b & 0x40) != 0)
             {
@@ -389,7 +437,19 @@ internal static class Http3Connection
                 int nameIndex = (int)ReadPrefixedInteger(data, ref pos, 4);
                 string name = isStatic
                     ? QpackDecoderState.GetStaticEntry(nameIndex).name
-                    : throw new NotSupportedException("Dynamic QPACK field references are not implemented yet.");
+                    : qpackState is not null
+                        ? ResolveDynamicRelativeField(qpackState, @base, nameIndex).name
+                        : throw new NotSupportedException("Dynamic QPACK field references require connection-level decoder state.");
+                string value = ReadStringLiteral(data, ref pos, 7, 0x80);
+                headers.Add((name, value));
+            }
+            else if ((b & 0xF0) == 0x00)
+            {
+                if (qpackState is null)
+                    throw new NotSupportedException("Dynamic QPACK field references require connection-level decoder state.");
+
+                int nameIndex = (int)ReadPrefixedInteger(data, ref pos, 3);
+                string name = ResolveDynamicPostBaseField(qpackState, @base, nameIndex).name;
                 string value = ReadStringLiteral(data, ref pos, 7, 0x80);
                 headers.Add((name, value));
             }
@@ -410,6 +470,114 @@ internal static class Http3Connection
 
     internal static IReadOnlyList<(string name, string value)> DecodeFieldSectionForTests(byte[] data) =>
         DecodeFieldSection(data, null);
+
+    internal static IReadOnlyList<(string name, string value)> DecodeFieldSectionForTests(byte[] data, QpackDecoderState state) =>
+        DecodeFieldSection(data, state);
+
+    private static async Task<DecodedFieldSection> DecodeFieldSectionAsync(
+        ReadOnlyMemory<byte> data,
+        QpackDecoderState qpackState,
+        DecoderInstructionWriter decoderWriter,
+        long streamId,
+        CancellationToken ct)
+    {
+        long requiredInsertCount = PeekRequiredInsertCount(data.Span, qpackState);
+        if (requiredInsertCount > 0 && requiredInsertCount > qpackState.InsertCount)
+        {
+            try
+            {
+                await qpackState.WaitForInsertCountAsync(requiredInsertCount, ct);
+            }
+            catch
+            {
+                try
+                {
+                    await decoderWriter.SendStreamCancellationAsync(streamId, CancellationToken.None);
+                }
+                catch { }
+                throw;
+            }
+        }
+
+        try
+        {
+            return new DecodedFieldSection(DecodeFieldSection(data.Span, qpackState), requiredInsertCount);
+        }
+        catch
+        {
+            if (requiredInsertCount > 0)
+            {
+                try
+                {
+                    await decoderWriter.SendStreamCancellationAsync(streamId, CancellationToken.None);
+                }
+                catch { }
+            }
+            throw;
+        }
+    }
+
+    private static (string name, string value) ResolveDynamicRelativeField(QpackDecoderState state, long @base, int relativeIndex)
+    {
+        long absoluteIndex = @base - relativeIndex - 1;
+        if (absoluteIndex < 0)
+            throw new InvalidOperationException("Invalid QPACK relative index.");
+        return state.GetDynamicEntryByAbsoluteIndex(absoluteIndex);
+    }
+
+    private static (string name, string value) ResolveDynamicPostBaseField(QpackDecoderState state, long @base, int postBaseIndex)
+    {
+        long absoluteIndex = @base + postBaseIndex;
+        return state.GetDynamicEntryByAbsoluteIndex(absoluteIndex);
+    }
+
+    private static long DecodeBase(long requiredInsertCount, bool signBit, long deltaBase)
+    {
+        if (!signBit)
+            return requiredInsertCount + deltaBase;
+
+        if (requiredInsertCount <= deltaBase)
+            throw new InvalidOperationException("Invalid HTTP/3 Base value.");
+
+        return requiredInsertCount - deltaBase - 1;
+    }
+
+    private static long DecodeRequiredInsertCount(long encodedRequiredInsertCount, QpackDecoderState? qpackState)
+    {
+        if (encodedRequiredInsertCount == 0)
+            return 0;
+
+        if (qpackState is null)
+            throw new NotSupportedException("Dynamic QPACK field sections require connection-level decoder state.");
+
+        int maxEntries = qpackState.MaxEntries;
+        if (maxEntries <= 0)
+            throw new InvalidOperationException("Dynamic QPACK references require a non-zero table capacity.");
+
+        long fullRange = 2L * maxEntries;
+        if (encodedRequiredInsertCount > fullRange)
+            throw new InvalidOperationException("Invalid HTTP/3 Required Insert Count.");
+
+        long maxValue = qpackState.InsertCount + maxEntries;
+        long maxWrapped = (maxValue / fullRange) * fullRange;
+        long requiredInsertCount = maxWrapped + encodedRequiredInsertCount - 1;
+
+        if (requiredInsertCount > maxValue)
+            requiredInsertCount -= fullRange;
+        if (requiredInsertCount <= qpackState.InsertCount - fullRange)
+            requiredInsertCount += fullRange;
+        if (requiredInsertCount <= 0)
+            throw new InvalidOperationException("Invalid HTTP/3 Required Insert Count.");
+
+        return requiredInsertCount;
+    }
+
+    private static long PeekRequiredInsertCount(ReadOnlySpan<byte> data, QpackDecoderState qpackState)
+    {
+        int pos = 0;
+        long encodedRequiredInsertCount = ReadPrefixedInteger(data, ref pos, 8);
+        return DecodeRequiredInsertCount(encodedRequiredInsertCount, qpackState);
+    }
 
     private static string ReadStringLiteral(ReadOnlySpan<byte> data, ref int pos, int prefixBits, byte huffmanMask)
     {
@@ -751,12 +919,17 @@ internal static class Http3Connection
         stream.WriteByte((byte)remaining);
     }
 
+    private sealed record DecodedFieldSection(
+        IReadOnlyList<(string name, string value)> Headers,
+        long RequiredInsertCount);
+
     private sealed record ParsedHttp3RequestHead(
         CosmoApiServer.Core.Http.HttpMethod Method,
         string Path,
         string QueryString,
         string? Host,
-        IReadOnlyDictionary<string, string> Headers);
+        IReadOnlyDictionary<string, string> Headers,
+        long RequiredInsertCount);
 
     private sealed record ParsedHttp3Request(
         CosmoApiServer.Core.Http.HttpMethod Method,
@@ -765,6 +938,51 @@ internal static class Http3Connection
         string? Host,
         IReadOnlyDictionary<string, string> Headers,
         byte[] Body);
+
+    private sealed class DecoderInstructionWriter(QuicStream stream)
+    {
+        private readonly SemaphoreSlim _lock = new(1, 1);
+
+        public async Task SendSectionAcknowledgmentAsync(long streamId, CancellationToken ct)
+        {
+            using var ms = new MemoryStream();
+            WritePrefixedInteger(ms, 0x80, 7, checked((int)streamId));
+            await WriteInstructionAsync(ms.ToArray(), ct);
+        }
+
+        public async Task SendInsertCountIncrementAsync(int increment, CancellationToken ct)
+        {
+            if (increment <= 0)
+                return;
+
+            using var ms = new MemoryStream();
+            WritePrefixedInteger(ms, 0x00, 6, increment);
+            await WriteInstructionAsync(ms.ToArray(), ct);
+        }
+
+        public async Task SendStreamCancellationAsync(long streamId, CancellationToken ct)
+        {
+            using var ms = new MemoryStream();
+            WritePrefixedInteger(ms, 0x40, 6, checked((int)streamId));
+            await WriteInstructionAsync(ms.ToArray(), ct);
+        }
+
+        private async Task WriteInstructionAsync(byte[] payload, CancellationToken ct)
+        {
+#pragma warning disable CA1416
+            await _lock.WaitAsync(ct);
+            try
+            {
+                await stream.WriteAsync(payload, false, ct);
+                await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                _lock.Release();
+            }
+#pragma warning restore CA1416
+        }
+    }
 
     private sealed class Http3RequestBodyStream(QuicStream stream) : Stream
     {

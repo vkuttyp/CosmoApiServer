@@ -6,10 +6,14 @@ internal sealed class QpackDecoderState
 {
     private readonly object _gate = new();
     private readonly List<QpackDynamicEntry> _entries = [];
+    private byte[] _encoderPending = [];
     private int _dynamicTableSize;
     private int _maxTableCapacity;
     private int _blockedStreams;
+    private int _blockedStreamWaiters;
     private long _insertCount;
+    private TaskCompletionSource<long> _insertCountChanged = NewInsertCountChangedSource();
+    private Action<int>? _insertCountIncrementSink;
 
     public int MaxTableCapacity
     {
@@ -26,6 +30,11 @@ internal sealed class QpackDecoderState
         get { lock (_gate) return _insertCount; }
     }
 
+    public int MaxEntries
+    {
+        get { lock (_gate) return _maxTableCapacity / 32; }
+    }
+
     public int EntryCount
     {
         get { lock (_gate) return _entries.Count; }
@@ -35,6 +44,20 @@ internal sealed class QpackDecoderState
     {
         lock (_gate)
             return _entries.Select(x => (x.Name, x.Value)).ToArray();
+    }
+
+    public (string name, string value) GetDynamicEntryByAbsoluteIndex(long absoluteIndex)
+    {
+        lock (_gate)
+        {
+            long newestAbsoluteIndex = _insertCount - 1;
+            long offset = newestAbsoluteIndex - absoluteIndex;
+            if (offset < 0 || offset >= _entries.Count)
+                throw new InvalidOperationException($"Unsupported QPACK dynamic absolute index: {absoluteIndex}");
+
+            var entry = _entries[(int)offset];
+            return (entry.Name, entry.Value);
+        }
     }
 
     public void ApplyPeerSettings(ReadOnlySpan<byte> payload)
@@ -62,6 +85,11 @@ internal sealed class QpackDecoderState
                     break;
             }
         }
+    }
+
+    public void SetInsertCountIncrementSink(Action<int> sink)
+    {
+        _insertCountIncrementSink = sink;
     }
 
     public void ProcessEncoderInstructions(ReadOnlySpan<byte> payload)
@@ -103,6 +131,73 @@ internal sealed class QpackDecoderState
         }
     }
 
+    public void AppendEncoderStreamData(ReadOnlySpan<byte> payload)
+    {
+        lock (_gate)
+        {
+            if (!payload.IsEmpty)
+            {
+                var combined = new byte[_encoderPending.Length + payload.Length];
+                _encoderPending.CopyTo(combined, 0);
+                payload.CopyTo(combined.AsSpan(_encoderPending.Length));
+                _encoderPending = combined;
+            }
+
+            int consumed = 0;
+            while (TryConsumeNextInstruction(_encoderPending.AsSpan(consumed), out int instructionLength))
+                consumed += instructionLength;
+
+            if (consumed <= 0)
+                return;
+
+            _encoderPending = consumed == _encoderPending.Length
+                ? []
+                : _encoderPending[consumed..];
+        }
+    }
+
+    public async Task WaitForInsertCountAsync(long requiredInsertCount, CancellationToken ct)
+    {
+        bool registeredWaiter = false;
+        try
+        {
+            while (true)
+            {
+                TaskCompletionSource<long> waiter;
+                lock (_gate)
+                {
+                    if (_insertCount >= requiredInsertCount)
+                        break;
+
+                    if (!registeredWaiter)
+                    {
+                        if (_blockedStreams <= 0)
+                            throw new InvalidOperationException("HTTP/3 field section would exceed SETTINGS_QPACK_BLOCKED_STREAMS.");
+                        if (_blockedStreamWaiters >= _blockedStreams)
+                            throw new InvalidOperationException("HTTP/3 field section would exceed SETTINGS_QPACK_BLOCKED_STREAMS.");
+
+                        _blockedStreamWaiters++;
+                        registeredWaiter = true;
+                    }
+
+                    waiter = _insertCountChanged;
+                }
+
+                await waiter.Task.WaitAsync(ct);
+            }
+        }
+        finally
+        {
+            if (registeredWaiter)
+            {
+                lock (_gate)
+                {
+                    _blockedStreamWaiters--;
+                }
+            }
+        }
+    }
+
     private void Duplicate(int index)
     {
         QpackDynamicEntry entry;
@@ -116,6 +211,8 @@ internal sealed class QpackDecoderState
 
     private void Insert(string name, string value)
     {
+        TaskCompletionSource<long>? completion = null;
+        Action<int>? incrementSink = null;
         lock (_gate)
         {
             int entrySize = GetEntrySize(name, value);
@@ -137,7 +234,13 @@ internal sealed class QpackDecoderState
             _entries.Insert(0, entry);
             _dynamicTableSize += entrySize;
             _insertCount++;
+            completion = _insertCountChanged;
+            _insertCountChanged = NewInsertCountChangedSource();
+            incrementSink = _insertCountIncrementSink;
         }
+
+        completion?.TrySetResult(_insertCount);
+        incrementSink?.Invoke(1);
     }
 
     private void TrimToCapacity()
@@ -152,12 +255,66 @@ internal sealed class QpackDecoderState
 
     private QpackDynamicEntry GetDynamicEntryRelative(int index)
     {
-        lock (_gate)
+        if ((uint)index >= (uint)_entries.Count)
+            throw new InvalidOperationException($"Unsupported QPACK dynamic index: {index}");
+        return _entries[index];
+    }
+
+    private bool TryConsumeNextInstruction(ReadOnlySpan<byte> data, out int consumed)
+    {
+        consumed = 0;
+        if (data.IsEmpty)
+            return false;
+
+        int pos = 0;
+        byte b = data[pos];
+        if ((b & 0x80) != 0)
         {
-            if ((uint)index >= (uint)_entries.Count)
-                throw new InvalidOperationException($"Unsupported QPACK dynamic index: {index}");
-            return _entries[index];
+            bool isStatic = (b & 0x40) != 0;
+            if (!TryReadPrefixedInteger(data, ref pos, 6, out long nameIndex))
+                return false;
+            string name;
+            if (isStatic)
+            {
+                name = GetStaticEntry(checked((int)nameIndex)).name;
+            }
+            else
+            {
+                if ((uint)nameIndex >= (uint)_entries.Count)
+                    throw new InvalidOperationException($"Unsupported QPACK dynamic index: {nameIndex}");
+                name = _entries[(int)nameIndex].Name;
+            }
+
+            if (!TryReadStringLiteral(data, ref pos, 7, 0x80, out string value))
+                return false;
+
+            Insert(name, value);
         }
+        else if ((b & 0x40) != 0)
+        {
+            if (!TryReadStringLiteral(data, ref pos, 5, 0x20, out string name))
+                return false;
+            if (!TryReadStringLiteral(data, ref pos, 7, 0x80, out string value))
+                return false;
+
+            Insert(name, value);
+        }
+        else if ((b & 0x20) != 0)
+        {
+            if (!TryReadPrefixedInteger(data, ref pos, 5, out long capacity))
+                return false;
+            _maxTableCapacity = checked((int)capacity);
+            TrimToCapacity();
+        }
+        else
+        {
+            if (!TryReadPrefixedInteger(data, ref pos, 5, out long index))
+                return false;
+            Duplicate(checked((int)index));
+        }
+
+        consumed = pos;
+        return true;
     }
 
     private static int GetEntrySize(string name, string value) => 32 + Encoding.UTF8.GetByteCount(name) + Encoding.UTF8.GetByteCount(value);
@@ -181,6 +338,34 @@ internal sealed class QpackDecoderState
         return huffman
             ? HpackDecoder.DecodeHuffmanString(bytes)
             : Encoding.ASCII.GetString(bytes);
+    }
+
+    private static bool TryReadStringLiteral(ReadOnlySpan<byte> data, ref int pos, int prefixBits, byte huffmanMask, out string value)
+    {
+        value = string.Empty;
+        int originalPos = pos;
+        if (pos >= data.Length)
+            return false;
+
+        bool huffman = (data[pos] & huffmanMask) != 0;
+        if (!TryReadPrefixedInteger(data, ref pos, prefixBits, out long length))
+        {
+            pos = originalPos;
+            return false;
+        }
+
+        if (length < 0 || pos + length > data.Length)
+        {
+            pos = originalPos;
+            return false;
+        }
+
+        var bytes = data.Slice(pos, checked((int)length));
+        pos += (int)length;
+        value = huffman
+            ? HpackDecoder.DecodeHuffmanString(bytes)
+            : Encoding.ASCII.GetString(bytes);
+        return true;
     }
 
     private static long ReadVarInt(ReadOnlySpan<byte> data, ref int pos)
@@ -210,6 +395,38 @@ internal sealed class QpackDecoderState
         }
         return value;
     }
+
+    private static bool TryReadPrefixedInteger(ReadOnlySpan<byte> data, ref int pos, int prefixBits, out long value)
+    {
+        value = 0;
+        int originalPos = pos;
+        if (pos >= data.Length)
+            return false;
+
+        int mask = (1 << prefixBits) - 1;
+        value = data[pos++] & mask;
+        if (value < mask) return true;
+
+        int shift = 0;
+        while (true)
+        {
+            if (pos >= data.Length)
+            {
+                pos = originalPos;
+                value = 0;
+                return false;
+            }
+
+            byte b = data[pos++];
+            value += (long)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0) break;
+            shift += 7;
+        }
+        return true;
+    }
+
+    private static TaskCompletionSource<long> NewInsertCountChangedSource() =>
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private sealed record QpackDynamicEntry(string Name, string Value, int Size);
 

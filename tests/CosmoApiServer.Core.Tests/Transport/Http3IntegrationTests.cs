@@ -304,6 +304,289 @@ public class Http3IntegrationTests
         }
     }
 
+    [Fact]
+    public async Task Http3_DynamicQpackRequest_WaitsForEncoderStreamAndThenDecodes()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                if (ctx.Request.Path == "/dyn")
+                {
+                    ctx.Response.WriteText(ctx.Request.Headers.TryGetValue("x-dynamic", out var value) ? value : "missing");
+                    return ValueTask.CompletedTask;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var controlStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalStreamAsync(controlStream, 0x00, EncodeSettingsFrame((0x01, 512), (0x07, 2)), cts.Token);
+
+            byte[] insertInstruction = EncodeInsertWithLiteralName("x-dynamic", "ready");
+            await using var encoderStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalPrefixAsync(encoderStream, 0x02, cts.Token);
+            await encoderStream.WriteAsync(insertInstruction[..2], false, cts.Token);
+            await encoderStream.FlushAsync(cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await requestStream.WriteAsync(EncodeDynamicHeaderRequest(), false, cts.Token);
+            await requestStream.FlushAsync(cts.Token);
+
+            await Task.Delay(100, cts.Token);
+
+            await encoderStream.WriteAsync(insertInstruction[2..], true, cts.Token);
+            encoderStream.CompleteWrites();
+            requestStream.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(requestStream, cts.Token);
+            var (headers, body, _) = ParseResponse(responseBytes);
+
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("ready", body);
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_DynamicQpackRequest_RejectsWhenBlockedStreamLimitExceeded()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                if (ctx.Request.Path == "/dyn")
+                {
+                    ctx.Response.WriteText(ctx.Request.Headers.TryGetValue("x-dynamic", out var value) ? value : "missing");
+                    return ValueTask.CompletedTask;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            await PrimeServerStreamsAsync(connection, cts.Token);
+
+            await using var controlStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalStreamAsync(controlStream, 0x00, EncodeSettingsFrame((0x01, 512), (0x07, 1)), cts.Token);
+
+            byte[] insertInstruction = EncodeInsertWithLiteralName("x-dynamic", "ready");
+            await using var encoderStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalPrefixAsync(encoderStream, 0x02, cts.Token);
+            await encoderStream.WriteAsync(insertInstruction[..2], false, cts.Token);
+            await encoderStream.FlushAsync(cts.Token);
+
+            await using var blockedRequest = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await blockedRequest.WriteAsync(EncodeDynamicHeaderRequest(), false, cts.Token);
+            await blockedRequest.FlushAsync(cts.Token);
+
+            await Task.Delay(100, cts.Token);
+
+            await using var rejectedRequest = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await rejectedRequest.WriteAsync(EncodeDynamicHeaderRequest(), true, cts.Token);
+            rejectedRequest.CompleteWrites();
+
+            await Assert.ThrowsAnyAsync<Exception>(async () => await ReadAllAsync(rejectedRequest, cts.Token));
+
+            await encoderStream.WriteAsync(insertInstruction[2..], true, cts.Token);
+            encoderStream.CompleteWrites();
+            blockedRequest.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(blockedRequest, cts.Token);
+            var (headers, body, _) = ParseResponse(responseBytes);
+
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("ready", body);
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_DecoderStream_SendsInsertCountIncrementAndSectionAcknowledgment()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                if (ctx.Request.Path == "/dyn")
+                {
+                    ctx.Response.WriteText(ctx.Request.Headers.TryGetValue("x-dynamic", out var value) ? value : "missing");
+                    return ValueTask.CompletedTask;
+                }
+
+                ctx.Response.StatusCode = 404;
+                ctx.Response.WriteText("Not Found");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            var inbound = await AcceptServerStreamsAsync(connection, cts.Token);
+            await using var decoderStream = inbound[0x03];
+
+            await using var controlStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalStreamAsync(controlStream, 0x00, EncodeSettingsFrame((0x01, 512), (0x07, 2)), cts.Token);
+
+            byte[] insertInstruction = EncodeInsertWithLiteralName("x-dynamic", "ready");
+            await using var encoderStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalPrefixAsync(encoderStream, 0x02, cts.Token);
+            await encoderStream.WriteAsync(insertInstruction, true, cts.Token);
+            encoderStream.CompleteWrites();
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await requestStream.WriteAsync(EncodeDynamicHeaderRequest(), true, cts.Token);
+            requestStream.CompleteWrites();
+
+            var responseBytes = await ReadAllAsync(requestStream, cts.Token);
+            var (headers, body, _) = ParseResponse(responseBytes);
+            Assert.Contains(headers, h => h.name == ":status" && h.value == "200");
+            Assert.Equal("ready", body);
+
+            var instructions = await ReadDecoderInstructionsAsync(decoderStream, expectedCount: 2, cts.Token);
+            Assert.Contains(instructions, i => i.kind == "insert-count-increment" && i.value == 1);
+            Assert.Contains(instructions, i => i.kind == "section-ack");
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
+    [Fact]
+    public async Task Http3_DecoderStream_SendsStreamCancellationWhenDynamicRequestBecomesInvalid()
+    {
+        if (!QuicConnection.IsSupported || !(OperatingSystem.IsMacOS() || OperatingSystem.IsLinux() || OperatingSystem.IsWindows()))
+            return;
+
+        int port = GetFreeTcpPort();
+        string certPath = Path.Combine(Path.GetTempPath(), $"cosmo-http3-{Guid.NewGuid():N}.pfx");
+
+        using var cert = CreateSelfSignedCertificate("CN=localhost");
+        await File.WriteAllBytesAsync(certPath, cert.Export(X509ContentType.Pfx));
+
+        await using var server = new PipelineHttpServer();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        try
+        {
+            RequestDelegate pipeline = ctx =>
+            {
+                ctx.Response.WriteText("ok");
+                return ValueTask.CompletedTask;
+            };
+
+            await server.StartAsync(
+                port,
+                pipeline,
+                new ServiceCollection().BuildServiceProvider(),
+                certPath: certPath,
+                enableHttp3: true,
+                cancellationToken: cts.Token);
+
+            await using var connection = await OpenConnectionAsync(port, cts.Token);
+            var inbound = await AcceptServerStreamsAsync(connection, cts.Token);
+            await using var decoderStream = inbound[0x03];
+
+            await using var controlStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalStreamAsync(controlStream, 0x00, EncodeSettingsFrame((0x01, 512), (0x07, 2)), cts.Token);
+
+            byte[] insertInstruction = EncodeInsertWithLiteralName("x-dynamic", "ready");
+            await using var encoderStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, cts.Token);
+            await WriteUnidirectionalStreamAsync(encoderStream, 0x02, insertInstruction, cts.Token);
+
+            await using var requestStream = await connection.OpenOutboundStreamAsync(QuicStreamType.Bidirectional, cts.Token);
+            await requestStream.WriteAsync(EncodeInvalidDynamicHeaderRequest(), true, cts.Token);
+            requestStream.CompleteWrites();
+
+            await Assert.ThrowsAnyAsync<Exception>(async () => await ReadAllAsync(requestStream, cts.Token));
+
+            var instructions = await ReadDecoderInstructionsAsync(decoderStream, expectedCount: 2, cts.Token);
+            Assert.Contains(instructions, i => i.kind == "insert-count-increment" && i.value == 1);
+            Assert.Contains(instructions, i => i.kind == "stream-cancel");
+            Assert.DoesNotContain(instructions, i => i.kind == "section-ack");
+        }
+        finally
+        {
+            await server.StopAsync();
+            if (File.Exists(certPath)) File.Delete(certPath);
+        }
+    }
+
     private static async Task<byte[]> ReadAllAsync(QuicStream stream, CancellationToken ct)
     {
 #pragma warning disable CA1416
@@ -404,6 +687,146 @@ public class Http3IntegrationTests
         await Task.Yield();
     }
 
+    private static async Task<Dictionary<long, QuicStream>> AcceptServerStreamsAsync(QuicConnection connection, CancellationToken ct)
+    {
+        var result = new Dictionary<long, QuicStream>();
+        for (int i = 0; i < 3; i++)
+        {
+            var stream = await connection.AcceptInboundStreamAsync(ct);
+            long type = await ReadVarIntAsync(stream, ct);
+            result[type] = stream;
+        }
+
+        return result;
+    }
+
+    private static async Task WriteUnidirectionalStreamAsync(QuicStream stream, long streamType, byte[] payload, CancellationToken ct)
+    {
+        using var ms = new MemoryStream();
+        WriteVarInt(ms, streamType);
+        ms.Write(payload, 0, payload.Length);
+        await stream.WriteAsync(ms.ToArray(), true, ct);
+        stream.CompleteWrites();
+    }
+
+    private static async Task WriteUnidirectionalPrefixAsync(QuicStream stream, long streamType, CancellationToken ct)
+    {
+        using var ms = new MemoryStream();
+        WriteVarInt(ms, streamType);
+        await stream.WriteAsync(ms.ToArray(), false, ct);
+        await stream.FlushAsync(ct);
+    }
+
+    private static async Task<IReadOnlyList<(string kind, long value)>> ReadDecoderInstructionsAsync(QuicStream stream, int expectedCount, CancellationToken ct)
+    {
+        using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        linkedCts.CancelAfter(TimeSpan.FromSeconds(2));
+
+        var instructions = new List<(string kind, long value)>();
+        while (!linkedCts.IsCancellationRequested && instructions.Count < expectedCount)
+        {
+            instructions.Add(await ReadDecoderInstructionAsync(stream, linkedCts.Token));
+        }
+
+        return instructions;
+    }
+
+    private static byte[] EncodeSettingsFrame(params (long id, long value)[] settings)
+    {
+        using var payload = new MemoryStream();
+        foreach (var (id, value) in settings)
+        {
+            WriteVarInt(payload, id);
+            WriteVarInt(payload, value);
+        }
+
+        using var frame = new MemoryStream();
+        WriteFrame(frame, 0x04, payload.ToArray());
+        return frame.ToArray();
+    }
+
+    private static byte[] EncodeInsertWithLiteralName(string name, string value)
+    {
+        using var ms = new MemoryStream();
+        WritePrefixedInteger(ms, 0x40, 5, System.Text.Encoding.ASCII.GetByteCount(name));
+        ms.Write(System.Text.Encoding.ASCII.GetBytes(name));
+        WriteStringLiteral(ms, value, 7, 0x00);
+        return ms.ToArray();
+    }
+
+    private static byte[] EncodeDynamicHeaderRequest()
+    {
+        using var headers = new MemoryStream();
+        WritePrefixedInteger(headers, 0x00, 8, 2);
+        WritePrefixedInteger(headers, 0x80, 7, 0);
+        headers.Write(EncodeLiteralStaticNameReference(17, "GET"));
+        headers.Write(EncodeLiteralStaticNameReference(23, "https"));
+        headers.Write(EncodeLiteralStaticNameReference(0, "localhost"));
+        headers.Write(EncodeLiteralStaticNameReference(1, "/dyn"));
+        headers.Write(EncodeIndexedDynamicPostBase(0));
+
+        using var request = new MemoryStream();
+        WriteFrame(request, 0x01, headers.ToArray());
+        return request.ToArray();
+    }
+
+    private static byte[] EncodeInvalidDynamicHeaderRequest()
+    {
+        using var headers = new MemoryStream();
+        WritePrefixedInteger(headers, 0x00, 8, 2);
+        WritePrefixedInteger(headers, 0x80, 7, 0);
+        headers.Write(EncodeLiteralStaticNameReference(17, "GET"));
+        headers.Write(EncodeLiteralStaticNameReference(23, "https"));
+        headers.Write(EncodeLiteralStaticNameReference(0, "localhost"));
+        headers.Write(EncodeIndexedDynamicPostBase(0));
+        headers.Write(EncodeLiteralStaticNameReference(1, "/dyn"));
+
+        using var request = new MemoryStream();
+        WriteFrame(request, 0x01, headers.ToArray());
+        return request.ToArray();
+    }
+
+    private static byte[] EncodeIndexedDynamicPostBase(int index)
+    {
+        using var ms = new MemoryStream();
+        WritePrefixedInteger(ms, 0x10, 4, index);
+        return ms.ToArray();
+    }
+
+    private static byte[] EncodeLiteralStaticNameReference(int nameIndex, string value)
+    {
+        using var ms = new MemoryStream();
+        WritePrefixedInteger(ms, 0x50, 4, nameIndex);
+        WriteStringLiteral(ms, value, 7, 0x00);
+        return ms.ToArray();
+    }
+
+    private static void WriteStringLiteral(Stream stream, string value, int prefixBits, byte prefixPattern)
+    {
+        var bytes = System.Text.Encoding.UTF8.GetBytes(value);
+        WritePrefixedInteger(stream, prefixPattern, prefixBits, bytes.Length);
+        stream.Write(bytes, 0, bytes.Length);
+    }
+
+    private static void WritePrefixedInteger(Stream stream, byte prefixPattern, int prefixBits, int value)
+    {
+        int mask = (1 << prefixBits) - 1;
+        if (value < mask)
+        {
+            stream.WriteByte((byte)(prefixPattern | value));
+            return;
+        }
+
+        stream.WriteByte((byte)(prefixPattern | mask));
+        int remaining = value - mask;
+        while (remaining >= 128)
+        {
+            stream.WriteByte((byte)((remaining & 0x7F) | 0x80));
+            remaining >>= 7;
+        }
+        stream.WriteByte((byte)remaining);
+    }
+
     private static void WriteFrame(Stream stream, long type, byte[] payload)
     {
         WriteVarInt(stream, type);
@@ -416,6 +839,68 @@ public class Http3IntegrationTests
         Span<byte> buffer = stackalloc byte[8];
         int length = EncodeVarInt(value, buffer);
         stream.Write(buffer[..length]);
+    }
+
+    private static async Task<long> ReadVarIntAsync(QuicStream stream, CancellationToken ct)
+    {
+        var first = new byte[1];
+        int read = await stream.ReadAsync(first.AsMemory(), ct);
+        if (read == 0) throw new EndOfStreamException();
+
+        int length = 1 << (first[0] >> 6);
+        var buffer = new byte[8];
+        buffer[0] = first[0];
+        int offset = 1;
+        while (offset < length)
+        {
+            int chunk = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), ct);
+            if (chunk == 0) throw new EndOfStreamException();
+            offset += chunk;
+        }
+
+        int pos = 0;
+        return ReadVarInt(buffer.AsSpan(0, length), ref pos);
+    }
+
+    private static async Task<(string kind, long value)> ReadDecoderInstructionAsync(QuicStream stream, CancellationToken ct)
+    {
+        var first = new byte[1];
+        int read = await stream.ReadAsync(first.AsMemory(), ct);
+        if (read == 0)
+            throw new EndOfStreamException();
+
+        byte prefix = first[0];
+        if ((prefix & 0x80) != 0)
+            return ("section-ack", await ReadPrefixedIntegerRemainderAsync(stream, prefix, 7, ct));
+        if ((prefix & 0x40) != 0)
+            return ("stream-cancel", await ReadPrefixedIntegerRemainderAsync(stream, prefix, 6, ct));
+
+        return ("insert-count-increment", await ReadPrefixedIntegerRemainderAsync(stream, prefix, 6, ct));
+    }
+
+    private static async Task<long> ReadPrefixedIntegerRemainderAsync(QuicStream stream, byte firstByte, int prefixBits, CancellationToken ct)
+    {
+        int mask = (1 << prefixBits) - 1;
+        long value = firstByte & mask;
+        if (value < mask)
+            return value;
+
+        int shift = 0;
+        while (true)
+        {
+            var next = new byte[1];
+            int read = await stream.ReadAsync(next.AsMemory(), ct);
+            if (read == 0)
+                throw new EndOfStreamException();
+
+            value += (long)(next[0] & 0x7F) << shift;
+            if ((next[0] & 0x80) == 0)
+                break;
+
+            shift += 7;
+        }
+
+        return value;
     }
 
     private static int EncodeVarInt(long value, Span<byte> destination)
