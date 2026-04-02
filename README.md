@@ -8,22 +8,60 @@ No DotNetty. No ASP.NET. No Kestrel. Just raw sockets → pipes → your handler
 
 ## Benchmark
 
-Sequential · 1,000 rounds · keep-alive · macOS arm64
+Sequential · 1,000 rounds · keep-alive
+
+### macOS arm64
 
 | Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
 |---|---|---|---|---|
-| GET /ping | **10,040 ops/s** | 8,197 ops/s | 0.10 ms | **+22%** |
-| GET /json | **9,524 ops/s** | 7,452 ops/s | 0.10 ms | **+28%** |
-| GET /route/{id} | 8,621 ops/s | **8,772 ops/s** | 0.12 ms | −2% |
-| POST /echo | **9,009 ops/s** | 8,110 ops/s | 0.11 ms | **+11%** |
-| GET /large-json (1000 items) | **1,718 ops/s** | 1,529 ops/s | 0.58 ms | **+12%** |
-| GET /query | **11,848 ops/s** | 7,728 ops/s | 0.08 ms | **+53%** |
-| POST /form | **10,081 ops/s** | 7,776 ops/s | 0.10 ms | **+30%** |
-| GET /headers | **9,615 ops/s** | 7,975 ops/s | 0.10 ms | **+21%** |
-| GET /stream (NDJSON, 10 items) | 8,772 ops/s | **9,399 ops/s** | 0.11 ms | −7% |
-| GET /file (64 KB) | **5,935 ops/s** | 4,384 ops/s | 0.17 ms | **+35%** |
+| GET /ping | **10,121 ops/s** | 8,084 ops/s | 0.10 ms | **+25%** |
+| GET /json | **9,285 ops/s** | 8,130 ops/s | 0.11 ms | **+14%** |
+| GET /route/{id} | **9,149 ops/s** | 7,675 ops/s | 0.11 ms | **+19%** |
+| POST /echo | **9,950 ops/s** | 7,669 ops/s | 0.10 ms | **+30%** |
+| GET /large-json (1000 items) | **2,053 ops/s** | 1,653 ops/s | 0.49 ms | **+24%** |
+| GET /query | **10,627 ops/s** | 7,220 ops/s | 0.09 ms | **+47%** |
+| POST /form | **11,862 ops/s** | 7,794 ops/s | 0.08 ms | **+52%** |
+| GET /headers | **9,681 ops/s** | 8,993 ops/s | 0.10 ms | **+8%** |
+| GET /stream (NDJSON, 10 items) | 7,849 ops/s | **9,690 ops/s** | 0.13 ms | −19% |
+| GET /file (64 KB) | **6,139 ops/s** | 4,361 ops/s | 0.16 ms | **+41%** |
 
-**8 of 10 scenarios win.** The remaining `/stream` gap is now much smaller after the chunked streaming fast path, and `/route/{id}` is effectively at parity on this run.
+**9 of 10 scenarios win** on the latest macOS run. `/stream` is still the main remaining HTTP/1.1 gap.
+
+### Windows 11 VM
+
+| Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
+|---|---|---|---|---|
+| GET /ping | **8,718 ops/s** | 5,637 ops/s | 0.11 ms | **+55%** |
+| GET /json | **10,309 ops/s** | 6,920 ops/s | 0.10 ms | **+49%** |
+| GET /route/{id} | **9,174 ops/s** | 6,570 ops/s | 0.11 ms | **+40%** |
+| POST /echo | 6,739 ops/s | **7,097 ops/s** | 0.15 ms | −5% |
+| GET /large-json (1000 items) | **1,245 ops/s** | 1,145 ops/s | 0.80 ms | **+9%** |
+| GET /query | **11,099 ops/s** | 8,143 ops/s | 0.09 ms | **+36%** |
+| POST /form | **8,389 ops/s** | 6,481 ops/s | 0.12 ms | **+29%** |
+| GET /headers | **7,435 ops/s** | 6,940 ops/s | 0.13 ms | **+7%** |
+| GET /stream (NDJSON, 10 items) | 5,540 ops/s | **8,163 ops/s** | 0.18 ms | −32% |
+| GET /file (64 KB) | **3,458 ops/s** | 2,175 ops/s | 0.29 ms | **+59%** |
+
+**7 of 10 scenarios win** on the Windows HTTP/1.1 run.
+
+### Windows HTTP/3
+
+Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffic, but it is **not stable enough for production** yet. The latest HTTP/3 run showed these CosmoApiServer results:
+
+| Scenario | CosmoApiServer HTTP/3 | Successful requests |
+|---|---|---|
+| GET /ping | 2,385 ops/s | 1000/1000 |
+| GET /json | 2,687 ops/s | 996/1000 |
+| GET /route/{id} | 2,589 ops/s | 999/1000 |
+| POST /echo | 2,575 ops/s | 997/1000 |
+| GET /large-json | 681 ops/s | 932/1000 |
+| GET /query | 3,521 ops/s | 998/1000 |
+| POST /form | 3,131 ops/s | 997/1000 |
+| GET /headers | 5,907 ops/s | 1000/1000 |
+| GET /stream | 1,729 ops/s | 993/1000 |
+| GET /file | 986 ops/s | 959/1000 |
+
+The remaining HTTP/3 work is now mostly about stream-reuse stability under repeated larger responses rather than basic listener startup or protocol negotiation.
 
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |
@@ -58,7 +96,7 @@ Key design decisions:
 
 - HTTP/1.1 keep-alive (pipelined)
 - HTTP/2 (h2c cleartext + ALPN over TLS)
-- Experimental HTTP/3 over QUIC (`UseHttp3()`) for basic buffered routes, NDJSON streaming responses, and streamed request bodies
+- Experimental HTTP/3 over QUIC (`UseHttp3()`) with request trailers, response trailers, streamed request bodies, NDJSON streaming responses, dynamic QPACK decode, and graceful GOAWAY handling
 - TLS via `SslStream` with ALPN (`h2` / `http/1.1`)
 - **Razor Components** — Full `.razor` support with `@page`, `[Parameter]`, and `CascadingParameters`
 - **Routable Components** — Components can define their own routes via `@page` without a controller
@@ -90,10 +128,13 @@ Key design decisions:
 
 Current scope:
 
-- Basic buffered request/response handling over HTTP/3
+- Buffered request/response handling over HTTP/3
 - NDJSON streaming responses over HTTP/3 DATA frames
 - Streamed request bodies across multiple DATA frames
-- Minimal QPACK static-table decoding for request and response headers
+- Request trailers and response trailers
+- Dynamic QPACK request decoding with blocked-stream handling
+- Basic graceful shutdown via GOAWAY
+- Feature-parity coverage for HEAD, static files, ranges, forms, multipart uploads, OpenAPI, Swagger UI, and auth/header propagation
 
 Enable it on a TLS listener:
 
@@ -107,7 +148,7 @@ Notes:
 
 - HTTP/3 requires TLS and runtime QUIC support on the host platform.
 - `UseHttp3()` runs alongside the existing HTTP/1.1 and HTTP/2 support on the same port.
-- This is still experimental. Dynamic QPACK tables, trailers, and broader protocol hardening are not implemented yet.
+- This is still experimental. The main remaining gap is stream-reuse stability under repeated larger responses and broader external interop hardening.
 - The remaining implementation plan is tracked in [`HTTP3_ROADMAP.md`](HTTP3_ROADMAP.md).
 
 Streaming response example:

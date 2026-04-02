@@ -10,20 +10,21 @@ Implemented today:
 - Basic buffered request/response handling
 - Streamed request bodies over DATA frames
 - NDJSON-style streaming responses over DATA frames
-- Minimal QPACK static-table decoding
-- Internal HTTP/3 transport tests
+- Request trailers and response trailers
+- Dynamic QPACK request decoding, blocked-stream handling, and decoder feedback
+- GOAWAY on shutdown and stronger control-stream validation
+- Internal HTTP/3 transport tests plus Windows VM benchmark/probe coverage
 
 Still intentionally incomplete:
 
-- Dynamic QPACK field resolution
-- Request and response trailers
-- Broader control-stream hardening
-- Interop validation with external clients
+- Response-side dynamic QPACK encoding beyond static-name/static-entry reuse
+- Stable stream reuse under repeated larger responses
+- Broader external interop validation with browsers, curl, and proxies
 - HTTP/3-specific performance tuning
 
 ## Phase 1: QPACK groundwork
 
-Status: in progress
+Status: completed
 
 Scope:
 
@@ -52,6 +53,8 @@ Exit criteria:
 - Requests from real HTTP/3 clients using dynamic QPACK can be decoded
 - Unit tests cover dynamic references across multiple header blocks
 
+Status: completed for request-side decoding
+
 ## Phase 3: Trailers
 
 Scope:
@@ -64,6 +67,8 @@ Exit criteria:
 
 - Request trailers and response trailers round-trip correctly
 - Tests cover trailer ordering and protocol violations
+
+Status: completed
 
 ## Phase 4: Protocol hardening
 
@@ -79,6 +84,8 @@ Exit criteria:
 - Invalid client behavior is rejected consistently
 - Shutdown and stream termination are graceful under load
 
+Status: partially completed
+
 ## Phase 5: Feature parity audit
 
 Scope:
@@ -89,6 +96,8 @@ Scope:
 Exit criteria:
 
 - Existing user-facing features work the same way over HTTP/3 unless explicitly documented otherwise
+
+Status: largely completed
 
 ## Phase 6: Interop and performance
 
@@ -103,3 +112,5 @@ Exit criteria:
 
 - Stable interop with real clients
 - Published benchmark numbers for HTTP/3 scenarios
+
+Status: in progress
