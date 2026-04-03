@@ -564,11 +564,402 @@ Share values with all descendant components without explicit parameter passing:
 | `samples/BlazorSqlSample` | Replicated Blazor structure with SQL streaming and components |
 | `samples/WeatherApp` | Full REST API: JWT auth, DI, streaming, CosmoSQLClient |
 | `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` template |
-| `tests/CosmoApiServer.Core.Tests` | 108 unit tests for routing, middleware, components, forms, change detection |
+| `tests/CosmoApiServer.Core.Tests` | 222 unit tests for routing, middleware, components, forms, change detection, SignalR, gRPC, output cache, antiforgery |
+
+---
+
+## Health Checks
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddHealthChecks()
+        .AddCheck("db", () => HealthCheckResult.Healthy("Connected"))
+        .AddCheck<MyDbHealthCheck>("database")
+    .Builder;
+
+var app = builder.Build();
+app.MapHealthChecks("/health");
+```
+
+GET `/health` returns:
+
+```json
+{
+  "status": "Healthy",
+  "entries": {
+    "db": { "status": "Healthy", "description": "Connected" }
+  }
+}
+```
+
+Returns `200 Healthy`, `200 Degraded`, or `503 Unhealthy` based on the worst check result.
+
+---
+
+## Problem Details (RFC 7807)
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddProblemDetails();
+```
+
+Inject `IProblemDetailsService` to write structured error responses:
+
+```csharp
+app.MapGet("/items/{id}", async ctx =>
+{
+    var svc = ctx.RequestServices.GetRequiredService<IProblemDetailsService>();
+    await svc.WriteAsync(new ProblemDetailsContext
+    {
+        HttpContext = ctx,
+        ProblemDetails = new ProblemDetails { Status = 404, Title = "Not Found", Detail = "Item does not exist." }
+    });
+});
+```
+
+`GlobalExceptionHandlerMiddleware` automatically writes RFC 7807 JSON for unhandled exceptions when `IProblemDetailsService` is registered.
+
+---
+
+## IExceptionHandler
+
+Register one or more structured exception handlers, called in registration order:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddExceptionHandler<ValidationExceptionHandler>()
+    .AddExceptionHandler<DatabaseExceptionHandler>();
+```
+
+```csharp
+public sealed class ValidationExceptionHandler : IExceptionHandler
+{
+    public async ValueTask<bool> TryHandleAsync(HttpContext ctx, Exception ex, CancellationToken ct)
+    {
+        if (ex is not ValidationException vex) return false;
+        ctx.Response.StatusCode = 422;
+        await ctx.Response.WriteJsonAsync(new { errors = vex.Errors }, ct);
+        return true; // handled — stop chain
+    }
+}
+```
+
+The first handler that returns `true` short-circuits the chain. Unhandled exceptions fall through to the `GlobalExceptionHandlerMiddleware` fallback.
+
+---
+
+## TypedResults
+
+Minimal-API result factory methods analogous to ASP.NET Core's `TypedResults`:
+
+```csharp
+app.MapGet("/items/{id}", ctx =>
+{
+    var id = ctx.Request.RouteValues["id"];
+    return id is null
+        ? TypedResults.NotFound()
+        : TypedResults.Ok(new { id, name = "Widget" });
+});
+
+app.MapPost("/items", ctx => TypedResults.Created("/items/42", new { id = 42 }));
+
+app.MapDelete("/items/{id}", ctx => TypedResults.NoContent());
+
+// Problem Details shorthand
+app.MapGet("/error", ctx => TypedResults.Problem("Something went wrong", statusCode: 500));
+
+// File / binary response
+app.MapGet("/download", ctx => TypedResults.Bytes(data, "application/octet-stream", "file.bin"));
+
+// Plain text
+app.MapGet("/ping", ctx => TypedResults.Text("pong"));
+```
+
+Available factories: `Ok`, `Created`, `Accepted`, `NoContent`, `Redirect`, `RedirectPermanent`, `BadRequest`, `Unauthorized`, `Forbid`, `NotFound`, `Conflict`, `UnprocessableEntity`, `TooManyRequests`, `InternalServerError`, `Text`, `Json`, `Bytes`, `Stream`, `Problem`.
+
+---
+
+## Output Caching
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddOutputCache();
+
+var app = builder.Build();
+app.UseOutputCaching();
+```
+
+Default behaviour caches all `GET` responses for 1 minute. Responses include `X-Output-Cache: HIT` or `X-Output-Cache: MISS`.
+
+**Per-route policy:**
+
+```csharp
+var policy = OutputCachePolicy.Build()
+    .Expire(TimeSpan.FromMinutes(5))
+    .VaryByQuery("page", "sort")
+    .Tag("products")
+    .ToPolicy();
+
+app.MapGet("/products", async ctx =>
+{
+    ctx.SetOutputCachePolicy(policy);
+    await ctx.Response.WriteJsonAsync(GetProducts());
+});
+```
+
+**Tag-based invalidation** (e.g. after a write):
+
+```csharp
+var store = ctx.RequestServices.GetRequiredService<IOutputCacheStore>();
+await store.EvictByTagAsync("products");
+```
+
+Bypass the cache for a specific request by sending `Cache-Control: no-cache`.
+
+---
+
+## Antiforgery
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddAntiforgery();
+
+var app = builder.Build();
+app.UseAntiforgery(); // blocks unsafe methods without a valid token
+```
+
+Generate a token set (e.g. for an HTML form or SPA):
+
+```csharp
+app.MapGet("/form", ctx =>
+{
+    var svc = ctx.RequestServices.GetRequiredService<IAntiforgeryService>();
+    var tokens = svc.GetAndStoreTokens(ctx);
+    // tokens.CookieToken — written to .cosmo.af cookie automatically
+    // tokens.RequestToken — embed in the form or send as X-XSRF-TOKEN header
+    return TypedResults.Text($"<input name='__RequestVerificationToken' value='{tokens.RequestToken}' />");
+});
+```
+
+The middleware validates the cookie + header/form token pair using `CryptographicOperations.FixedTimeEquals` to prevent timing attacks. GET/HEAD/OPTIONS are always allowed through.
+
+Attribute-based opt-out:
+
+```csharp
+[IgnoreAntiforgery]
+public Task HandleWebhook(HttpContext ctx) { ... }
+```
+
+---
+
+## Sessions
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseSession(new SessionOptions { IdleTimeout = TimeSpan.FromMinutes(20) });
+```
+
+Access the session from any handler:
+
+```csharp
+app.MapGet("/cart", ctx =>
+{
+    ctx.Session!.SetInt32("count", 5);
+    ctx.Session.SetString("user", "alice");
+    var count = ctx.Session.GetInt32("count"); // 5
+});
+```
+
+Sessions are cookie-backed (`.cosmo.session`) and stored in-memory. The idle timeout is reset on each request.
+
+---
+
+## Request Timeouts
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseRequestTimeouts(new RequestTimeoutOptions { DefaultTimeout = TimeSpan.FromSeconds(30) });
+```
+
+When a handler exceeds the timeout, `context.RequestAborted` is cancelled and the middleware writes `504 Gateway Timeout`. The cancellation token is linked to the original client-disconnect token so that client aborts are still distinguished from server timeouts.
+
+```csharp
+app.MapGet("/slow", async ctx =>
+{
+    // ctx.RequestAborted is cancelled after 30 s
+    await Task.Delay(60_000, ctx.RequestAborted);
+});
+```
+
+---
+
+## Response Caching
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseResponseCaching();
+```
+
+Adds ETag-based conditional caching. Handlers that set `ctx.Response.ETag` will automatically return `304 Not Modified` when the client sends a matching `If-None-Match` header.
+
+---
+
+## Distributed Tracing
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseTracing("MyService");
+```
+
+Propagates W3C `traceparent` / `tracestate` headers and creates an `Activity` per request via `ActivitySource`. Compatible with any OpenTelemetry exporter.
+
+---
+
+## Forwarded Headers
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseForwardedHeaders();
+```
+
+Rewrites `ctx.Request.RemoteIpAddress`, `ctx.Request.Host`, and `ctx.Request.IsHttps` from `X-Forwarded-For`, `X-Forwarded-Host`, and `X-Forwarded-Proto` when running behind a proxy or load balancer.
+
+---
+
+## SignalR
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddSignalR();
+
+var app = builder.Build();
+app.MapHub<ChatHub>("/chat");
+```
+
+Define a hub:
+
+```csharp
+public sealed class ChatHub : Hub
+{
+    public async Task SendMessage(string user, string message)
+    {
+        await Clients.All.SendAsync("ReceiveMessage", user, message);
+    }
+}
+```
+
+**Server-side push** via `IHubContext<THub>`:
+
+```csharp
+app.MapPost("/broadcast", async ctx =>
+{
+    var registry = ctx.RequestServices.GetRequiredService<HubContextRegistry>();
+    var hub = registry.Get<ChatHub>();
+    await hub!.Clients.All.SendAsync("ReceiveMessage", "server", "Hello from server!");
+});
+```
+
+Features: groups (`AddToGroupAsync` / `RemoveFromGroupAsync`), per-client proxy (`Clients.Client(id)`), `AllExcept`, JSON/MessagePack-compatible framing with SignalR record separator (`\u001e`).
+
+---
+
+## gRPC
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddGrpc();
+
+var app = builder.Build();
+app.MapGrpcService<GreeterService>();
+```
+
+Implement a service:
+
+```csharp
+public sealed class GreeterService : GrpcServiceBase, IGrpcServiceDescriptor
+{
+    public IReadOnlyList<GrpcMethodDescriptor> Methods => [
+        new GrpcMethodDescriptor("Greeter", "SayHello", GrpcMethodType.Unary, typeof(GreeterService),
+            async (svc, ctx, ct) =>
+            {
+                var req = await ctx.ReadRequestAsync<HelloRequest>(ct);
+                await ctx.WriteResponseAsync(new HelloReply { Message = $"Hello {req.Name}" }, ct);
+            })
+    ];
+}
+```
+
+5-byte gRPC framing (compression flag + 4-byte length prefix) over HTTP/2 and HTTP/1.1. Unary and server-streaming method types supported.
+
+---
+
+## IHostedService
+
+Run background work tied to the server lifecycle:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .AddHostedService<MetricsCollector>()
+    .AddHostedService<BackgroundIndexer>(sp => new BackgroundIndexer(sp.GetRequiredService<IRepository>()));
+```
+
+```csharp
+public sealed class MetricsCollector : IHostedService
+{
+    public Task StartAsync(CancellationToken ct) { /* start timers */ return Task.CompletedTask; }
+    public Task StopAsync(CancellationToken ct) { /* flush metrics */ return Task.CompletedTask; }
+}
+```
 
 ---
 
 ## Changelog
+
+### v2.1.2
+- **Fix: Content-Type preservation for Problem Details** — `DefaultProblemDetailsService` and `TypedResults.Problem` now write raw UTF-8 bytes instead of calling `WriteJson`, which was silently overwriting `application/problem+json` with `application/json`.
+- **Fix: Request timeout catch condition** — `RequestTimeoutMiddleware` now saves the original `RequestAborted` token before replacing it with the linked CTS token, so client disconnects are correctly distinguished from server-side timeouts.
+- **Fix: SignalR target name casing** — `HubConnectionManager.BuildInvocation` now applies `JsonNamingPolicy.CamelCase` to the method name so clients receive `"sendMessage"` instead of `"SendMessage"`.
+- **Fix: `ProblemDetails.TitleForStatus(500)`** — Changed from a non-standard phrase to the standard HTTP reason phrase `"Internal Server Error"`.
+- 222 unit tests (up from 215).
+
+### v2.1.1
+- **Output Caching** — `AddOutputCache()` + `UseOutputCaching()`, `IOutputCacheStore`, `InMemoryOutputCacheStore`, vary-by-header/query, tag-based eviction, `X-Output-Cache: HIT/MISS`.
+- **Antiforgery** — `AddAntiforgery()` + `UseAntiforgery()`, cookie + header/form token pattern, HMAC-SHA256 with `CryptographicOperations.FixedTimeEquals`, `IAntiforgeryService`, `[ValidateAntiforgery]` / `[IgnoreAntiforgery]`.
+- **TypedResults** — `TypedResults.Ok/Created/Accepted/NoContent/Redirect/BadRequest/NotFound/Problem/Stream/Bytes/Text/Json/…` factory methods for minimal-API handlers.
+- **IExceptionHandler** — `AddExceptionHandler<T>()`, structured exception handling chain called in registration order before the global fallback.
+- **IHostedService** — `AddHostedService<T>()` / `AddHostedService<T>(factory)`, start/stop lifecycle tied to the server.
+- **UseWebSockets()** — API-parity stub; `context.AcceptWebSocketAsync()` was already available.
+- 215 unit tests (up from 165).
+
+### v2.1.0
+- **SignalR** — Hub base class (`Hub`), `MapHub<THub>(path)`, `HubConnectionManager`, `HubDispatcher<THub>`, `IHubContext<THub>` via `HubContextRegistry`, groups, all-except, JSON protocol with `\u001e` record separator.
+- **gRPC** — 5-byte frame protocol, `GrpcServiceBase`, `IGrpcServiceDescriptor`, `MapGrpcService<T>()`, unary and server-streaming method types.
+- **Sessions** — `UseSession()`, cookie-backed in-memory session with idle timeout, `SetString`/`GetString`/`SetInt32`/`GetInt32`/`Remove`/`Clear`.
+- **Request Timeouts** — `UseRequestTimeouts()`, `RequestTimeoutOptions.DefaultTimeout`, `504 Gateway Timeout` on breach.
+- **Response Caching** — `UseResponseCaching()`, ETag/304 conditional-GET support.
+- **Forwarded Headers** — `UseForwardedHeaders()`, `X-Forwarded-For/Host/Proto`.
+- **Request Decompression** — `UseRequestDecompression()`, GZip/Deflate/Brotli.
+- **Distributed Tracing** — `UseTracing()`, W3C `traceparent`/`tracestate`, `ActivitySource` (OpenTelemetry-compatible).
+- **Endpoint Filters** — `AddEndpointFilter()` on minimal-API routes.
+- **IHttpContextAccessor** — `AddHttpContextAccessor()`, `AsyncLocal`-based ambient context.
+- 165 unit tests (up from 108).
+
+### v2.0.7
+- **Stream flush coalescing** — `Http3DataFrameStream.CompleteAsync` double final-frame bug fixed. `hasStagedData` is now captured before clearing `_staging`, eliminating spurious empty DATA frames that caused `QuicException: Stream aborted by peer (268)` (H3_REQUEST_CANCELLED) under repeated large-response workloads.
+- Stream disposal moved to `Task.Run()` to avoid blocking the QUIC stream-accept loop.
+
+### v2.0.6
+- **HTTP/3** — QPACK dynamic table encode/decode, request and response trailers, server-initiated GOAWAY, graceful shutdown, feature-parity coverage for HEAD, ranges, forms, multipart, OpenAPI, Swagger UI, and auth/header propagation.
+- HTTP/3 benchmark: `/large-json` +66%, `/stream` +33%, `/file` +57% vs pre-optimization baseline.
+
+### v2.0.5
+- **Health Checks** — `AddHealthChecks()`, `AddCheck<T>()` / `AddCheck(name, fn)`, `HealthCheckMiddleware`, `HealthCheckService`, `HealthStatus` (Healthy/Degraded/Unhealthy), `HealthReport`.
+- **Problem Details** — RFC 7807 `ProblemDetails`, `IProblemDetailsService`, `DefaultProblemDetailsService`, `AddProblemDetails()`.
+- **Policy-Based Authorization** — `AddAuthorization()`, `IAuthorizationService`, `IAuthorizationRequirement`, `[Authorize(Policy="...")]`.
+- **OAuth/OIDC** — `UseOAuthAuthentication()` with JWKS discovery.
+- **Memory Cache** — `AddMemoryCache()`, `IMemoryCache`.
+- **Distributed Cache** — `AddDistributedMemoryCache()`, `IDistributedCache`.
+- **IHttpClientFactory** — `AddHttpClient()`, named and typed clients.
 
 ### v2.0.1
 - **Streaming performance** — `ChunkedBodyStream` now stages multiple `WriteAsync` calls into a single chunk per `FlushAsync`, eliminating one chunk-header per write. NDJSON streaming throughput improved from ~4,300 to ~8,200 ops/s.
