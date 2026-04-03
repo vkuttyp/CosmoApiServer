@@ -29,6 +29,10 @@ public sealed class HttpRequest
     // Populated by router after route match
     public IReadOnlyDictionary<string, string> RouteValues { get; set; } = new Dictionary<string, string>();
 
+    /// <summary>Parsed request cookies. Populated lazily from the Cookie header.</summary>
+    private Dictionary<string, string>? _cookies;
+    public IReadOnlyDictionary<string, string> Cookies => _cookies ??= ParseCookies();
+
     public T? ReadJson<T>()
     {
         if (Body.Length > 0)
@@ -113,6 +117,8 @@ public sealed class HttpRequest
         if (RouteValues is Dictionary<string, string> rd) rd.Clear();
         else RouteValues = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 
+        _cookies = null;
+
         Body = [];
         BodyStream = Stream.Null;
         BodyReader = null;
@@ -120,5 +126,21 @@ public sealed class HttpRequest
         ContentType = null;
         Host = null;
         Authorization = null;
+    }
+
+    private Dictionary<string, string> ParseCookies()
+    {
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        if (!Headers.TryGetValue("Cookie", out var cookieHeader) || string.IsNullOrEmpty(cookieHeader))
+            return result;
+
+        foreach (var pair in cookieHeader.Split(';', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var p = pair.Trim();
+            var eq = p.IndexOf('=');
+            if (eq <= 0) continue;
+            result[p[..eq].Trim()] = p[(eq + 1)..].Trim();
+        }
+        return result;
     }
 }

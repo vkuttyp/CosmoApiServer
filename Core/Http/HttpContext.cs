@@ -27,6 +27,9 @@ public sealed class HttpContext
     /// <summary>The authenticated user, set by JwtMiddleware. Null if unauthenticated.</summary>
     public ClaimsPrincipal? User { get; set; }
 
+    /// <summary>The session for this request, set by SessionMiddleware.</summary>
+    public ISession? Session { get; set; }
+
     /// <summary>
     /// Set by ControllerScanner when the action returns IAsyncEnumerable&lt;T&gt;.
     /// The transport writes chunked/stream headers then calls this with a raw Stream
@@ -68,6 +71,7 @@ public sealed class HttpContext
         RequestAborted = default;
         Items.Clear();
         User = null;
+        Session = null;
         StreamingBodyWriter = null;
         _disposeScope?.Dispose();
         _disposeScope = null;

@@ -1,8 +1,10 @@
 using System.Reflection;
 using CosmoApiServer.Core.Auth;
 using CosmoApiServer.Core.Auth.Authorization;
+using CosmoApiServer.Core.Caching;
 using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.HealthChecks;
+using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.ProblemDetails;
 using CosmoApiServer.Core.Routing;
@@ -310,6 +312,58 @@ public sealed class CosmoWebApplicationBuilder
         configure?.Invoke(opts);
         _services.AddSingleton(opts);
         _services.AddScoped<IAuthorizationService, DefaultAuthorizationService>();
+        return this;
+    }
+
+    // ── IHttpContextAccessor ─────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddHttpContextAccessor()
+    {
+        _services.AddSingleton<IHttpContextAccessor, HttpContextAccessor>();
+        return this;
+    }
+
+    // ── Request Timeouts ─────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseRequestTimeouts(Action<RequestTimeoutOptions>? configure = null)
+    {
+        var opts = new RequestTimeoutOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new RequestTimeoutMiddleware(opts));
+        return this;
+    }
+
+    // ── Response Caching ─────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseResponseCaching(Action<ResponseCachingOptions>? configure = null)
+    {
+        var opts = new ResponseCachingOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new ResponseCachingMiddleware(opts));
+        return this;
+    }
+
+    // ── Sessions ─────────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseSession(Action<SessionOptions>? configure = null)
+    {
+        var opts = new SessionOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new SessionMiddleware(opts));
+        return this;
+    }
+
+    // ── IDistributedCache ────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddDistributedMemoryCache()
+    {
+        _services.AddSingleton<IDistributedCache, InMemoryDistributedCache>();
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddDistributedCache<TImpl>() where TImpl : class, IDistributedCache
+    {
+        _services.AddSingleton<IDistributedCache, TImpl>();
         return this;
     }
 
