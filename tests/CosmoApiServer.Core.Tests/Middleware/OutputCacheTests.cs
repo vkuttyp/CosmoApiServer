@@ -65,6 +65,32 @@ public class OutputCacheTests
     }
 
     [Fact]
+    public async Task OutputCache_HeadHit_DoesNotWriteBody()
+    {
+        var middleware = MakeMiddleware(out _);
+        var seed = MakeContext(method: HttpMethod.HEAD);
+
+        await middleware.InvokeAsync(seed, c =>
+        {
+            c.Response.StatusCode = 200;
+            c.Response.Write("cached-body"u8.ToArray());
+            return ValueTask.CompletedTask;
+        });
+
+        var head = MakeContext(method: HttpMethod.HEAD);
+        int nextCallCount = 0;
+        await middleware.InvokeAsync(head, _ =>
+        {
+            nextCallCount++;
+            return ValueTask.CompletedTask;
+        });
+
+        Assert.Equal(0, nextCallCount);
+        Assert.Equal("HIT", head.Response.Headers["X-Output-Cache"]);
+        Assert.Empty(head.Response.Body);
+    }
+
+    [Fact]
     public async Task OutputCache_PostRequest_NotCached()
     {
         var middleware = MakeMiddleware(out var store);

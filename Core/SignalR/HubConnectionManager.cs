@@ -40,6 +40,11 @@ public sealed class HubConnectionManager : IHubClients, IGroupManager
     public IClientProxy Clients(IEnumerable<string> ids) =>
         new MultiProxy([.. ids.Select(id => _connections.TryGetValue(id, out var c) ? c : null).OfType<HubConnection>()]);
     public IClientProxy Group(string name) => new MultiProxy([.. GetGroupConnections(name)]);
+    internal IClientProxy GroupExcept(string name, IEnumerable<string> excluded)
+    {
+        var set = new HashSet<string>(excluded);
+        return new MultiProxy([.. GetGroupConnections(name).Where(c => !set.Contains(c.ConnectionId))]);
+    }
     public IClientProxy Groups(IEnumerable<string> names) =>
         new MultiProxy([.. names.SelectMany(GetGroupConnections)]);
     public IClientProxy AllExcept(IEnumerable<string> excluded)

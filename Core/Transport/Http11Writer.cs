@@ -44,12 +44,15 @@ internal static class Http11Writer
         writer.Write(ReasonPhrase(response.StatusCode));
         writer.Write(CrLf);
 
-        // Standard headers
-        writer.Write(ConnectionKA);
-
+        bool hasConnection = response.Headers.ContainsKey("Connection");
         bool hasContentType = response.Headers.ContainsKey("Content-Type");
         bool hasContentLength = response.Headers.ContainsKey("Content-Length");
         bool hasTransferEncoding = response.Headers.ContainsKey("Transfer-Encoding");
+        bool isUpgradeResponse = response.StatusCode == 101 || response.Headers.ContainsKey("Upgrade");
+
+        // Standard headers
+        if (!hasConnection)
+            writer.Write(ConnectionKA);
 
         // Custom headers (skip Content-Type and Content-Length; write after)
         foreach (var (name, value) in response.Headers)
@@ -85,7 +88,7 @@ internal static class Http11Writer
             WriteInteger(writer, contentLength.Value);
             writer.Write(CrLf);
         }
-        else if (!hasTransferEncoding)
+        else if (!hasTransferEncoding && !isUpgradeResponse)
         {
             // If no content length, use chunked encoding for HTTP/1.1
             writer.Write(TransferChunked);

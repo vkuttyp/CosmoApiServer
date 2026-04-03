@@ -139,7 +139,8 @@ public sealed class OutputCachingMiddleware(IOutputCacheStore store, OutputCache
             foreach (var (k, v) in cached.Headers)
                 context.Response.Headers[k] = v;
             context.Response.Headers["X-Output-Cache"] = "HIT";
-            context.Response.Write(cached.Body);
+            if (context.Request.Method != Http.HttpMethod.HEAD)
+                context.Response.Write(cached.Body);
             return;
         }
 

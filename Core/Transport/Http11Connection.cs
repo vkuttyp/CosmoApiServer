@@ -36,13 +36,25 @@ internal static class Http11Connection
             pauseWriterThreshold: maxBodySize + 4096,
             resumeWriterThreshold: maxBodySize / 2));
 
-        var fillTask    = FillPipeAsync(stream, pipe.Writer, cts.Token);
+        var fillTask = FillPipeAsync(stream, pipe.Writer, cts.Token);
         var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token);
 
         // When either side finishes, cancel the other half of the connection.
         await Task.WhenAny(fillTask.AsTask(), processTask.AsTask());
         cts.Cancel();
-        await Task.WhenAll(fillTask.AsTask(), processTask.AsTask());
+
+        Func<Stream, Task>? webSocketHandler = null;
+        try { webSocketHandler = await processTask.AsTask(); }
+        catch { }
+
+        try { await fillTask.AsTask(); }
+        catch { }
+
+        if (webSocketHandler is not null)
+        {
+            await webSocketHandler(stream);
+            return;
+        }
     }
 
     // ── Socket → Pipe ─────────────────────────────────────────────────────
@@ -74,7 +86,7 @@ internal static class Http11Connection
 
     // ── Pipe → HTTP/1.1 requests → responses ─────────────────────────────
 
-    private static async ValueTask ProcessAsync(
+    private static async ValueTask<Func<Stream, Task>?> ProcessAsync(
         Stream stream,
         PipeReader reader,
         RequestDelegate pipeline,
@@ -89,9 +101,9 @@ internal static class Http11Connection
         try
         {
             // h2c detection: peek the first bytes
-            if (enableHttp2)
-            {
-                var result = await reader.ReadAtLeastAsync(H2cPreface.Length, ct);
+                if (enableHttp2)
+                {
+                    var result = await reader.ReadAtLeastAsync(H2cPreface.Length, ct);
                 var buf = result.Buffer;
 
                 bool isH2c = buf.Length >= H2cPreface.Length &&
@@ -102,7 +114,7 @@ internal static class Http11Connection
                 if (isH2c)
                 {
                     await Http2Connection.RunAsync(reader, writer, pipeline, services, ct);
-                    return;
+                    return null;
                 }
             }
 
@@ -212,19 +224,37 @@ internal static class Http11Connection
                      conn.Equals("close", StringComparison.OrdinalIgnoreCase)) ||
                     (httpContext.Response.Headers.TryGetValue("Connection", out var respConn) &&
                      respConn.Equals("close", StringComparison.OrdinalIgnoreCase));
-
-                // Return to pool AFTER reading all needed state
-                HttpContextPool.Return(httpContext);
+                Func<Stream, Task>? webSocketHandler =
+                    httpContext.Items.TryGetValue("__WebSocketHandler", out var handlerObj) && handlerObj is Func<Stream, Task> handler
+                        ? handler
+                        : null;
 
                 if (!transportHandled && flush.IsCompleted) break;
 
                 // ── WebSocket Upgrade Handover ───────────────────────────────
                 if (isWebSocketUpgrade)
                 {
-                    await writer.CompleteAsync();
-                    await reader.CompleteAsync();
-                    return;
+                    if (webSocketHandler is not null)
+                    {
+                        return async rawStream =>
+                        {
+                            try
+                            {
+                                await webSocketHandler(rawStream);
+                            }
+                            finally
+                            {
+                                HttpContextPool.Return(httpContext);
+                            }
+                        };
+                    }
+
+                    HttpContextPool.Return(httpContext);
+                    return null;
                 }
+
+                // Return to pool AFTER reading all needed state
+                HttpContextPool.Return(httpContext);
 
                 // Check if client requested close
                 if (isConnectionClose)
@@ -238,6 +268,8 @@ internal static class Http11Connection
             await writer.CompleteAsync();
             await reader.CompleteAsync();
         }
+
+        return null;
     }
 
     // ── Request builder ───────────────────────────────────────────────────

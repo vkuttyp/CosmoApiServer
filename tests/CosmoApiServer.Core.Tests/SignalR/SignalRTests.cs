@@ -1,4 +1,7 @@
 using CosmoApiServer.Core.SignalR;
+using CosmoApiServer.Core.Http;
+using System.Text.Json;
+using HttpMethod = CosmoApiServer.Core.Http.HttpMethod;
 
 namespace CosmoApiServer.Core.Tests.SignalR;
 
@@ -84,6 +87,54 @@ public class SignalRTests
         var proxy = manager.AllExcept(["conn1", "conn2"]);
         Assert.NotNull(proxy);
         await proxy.SendAsync("test"); // no-op, no exception
+    }
+
+    [Fact]
+    public void BuildNegotiatePayload_IncludesConnectionToken_AndVersion()
+    {
+        var payload = HubDispatcher<TestHub>.BuildNegotiatePayload("abc123");
+        var json = JsonSerializer.Serialize(payload);
+
+        Assert.Contains("\"connectionId\":\"abc123\"", json);
+        Assert.Contains("\"connectionToken\":\"abc123\"", json);
+        Assert.Contains("\"negotiateVersion\":1", json);
+        Assert.Contains("\"transport\":\"WebSockets\"", json);
+    }
+
+    [Fact]
+    public void ResolveConnectionId_UsesNegotiatedId_FromQueryString()
+    {
+        var request = new HttpRequest
+        {
+            Method = HttpMethod.GET,
+            Path = "/hub",
+            QueryString = "?id=abc123"
+        };
+
+        Assert.Equal("abc123", HubDispatcher<TestHub>.ResolveConnectionId(request));
+    }
+
+    [Fact]
+    public void ResolveConnectionId_UsesConnectionToken_WhenPresent()
+    {
+        var request = new HttpRequest
+        {
+            Method = HttpMethod.GET,
+            Path = "/hub",
+            Query = new Dictionary<string, string> { ["connectionToken"] = "token-42" }
+        };
+
+        Assert.Equal("token-42", HubDispatcher<TestHub>.ResolveConnectionId(request));
+    }
+
+    [Fact]
+    public async Task GroupExcept_ExcludesSpecifiedConnections()
+    {
+        var manager = new HubConnectionManager();
+        var proxy = manager.GroupExcept("room1", ["conn1"]);
+
+        Assert.NotNull(proxy);
+        await proxy.SendAsync("test");
     }
 }
 

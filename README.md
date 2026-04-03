@@ -115,7 +115,7 @@ Key design decisions:
 - Middleware pipeline (`UseLogging`, `UseCors`, `UseJwtAuthentication`, custom `IMiddleware`)
 - Built-in scheduler via `AddScheduler()` / `UseScheduler(...)`
 - WebSockets (`UseWebSockets()` + `context.AcceptWebSocketAsync()`)
-- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, JSON protocol
+- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, and ASP.NET SignalR client-compatible JSON/WebSocket support for the standard path
 - **gRPC** — 5-byte framing, `GrpcServiceBase`, `MapGrpcService<T>()`, unary + server-streaming contexts
 - **Health Checks** — `AddHealthChecks()`, `AddCheck<T>()`, `/health` endpoint with JSON report
 - **Problem Details** — RFC 7807 `IProblemDetailsService`, `AddProblemDetails()`
@@ -859,7 +859,25 @@ app.MapPost("/broadcast", async ctx =>
 });
 ```
 
-Features: groups (`AddToGroupAsync` / `RemoveFromGroupAsync`), per-client proxy (`Clients.Client(id)`), `AllExcept`, JSON/MessagePack-compatible framing with SignalR record separator (`\u001e`).
+Features: groups (`AddToGroupAsync` / `RemoveFromGroupAsync`), per-client proxy (`Clients.Client(id)`), `AllExcept`, `OthersInGroup`, and JSON protocol framing with SignalR record separator (`\u001e`).
+
+Current compatibility scope:
+
+- Verified with the real `Microsoft.AspNetCore.SignalR.Client`
+- Negotiate + WebSocket connect
+- Invoke / return values
+- Multi-argument invocation
+- One-way `SendAsync(...)`
+- `IHubContext<THub>` sends to all, specific clients, and groups
+- Group membership and `OthersInGroup`
+- Disconnect callback and invocation error propagation
+
+Still intentionally out of scope for now:
+
+- Streaming hub methods
+- Invocation cancellation / stream cancellation messages
+- Automatic reconnect after transport failure
+- MessagePack hub protocol
 
 ---
 
@@ -932,7 +950,7 @@ public sealed class MetricsCollector : IHostedService
 - 215 unit tests (up from 165).
 
 ### v2.1.0
-- **SignalR** — Hub base class (`Hub`), `MapHub<THub>(path)`, `HubConnectionManager`, `HubDispatcher<THub>`, `IHubContext<THub>` via `HubContextRegistry`, groups, all-except, JSON protocol with `\u001e` record separator.
+- **SignalR** — Hub base class (`Hub`), `MapHub<THub>(path)`, `HubConnectionManager`, `HubDispatcher<THub>`, `IHubContext<THub>` via `HubContextRegistry`, groups, all-except, and ASP.NET SignalR client-compatible JSON/WebSocket support with `\u001e` record separator.
 - **gRPC** — 5-byte frame protocol, `GrpcServiceBase`, `IGrpcServiceDescriptor`, `MapGrpcService<T>()`, unary and server-streaming method types.
 - **Sessions** — `UseSession()`, cookie-backed in-memory session with idle timeout, `SetString`/`GetString`/`SetInt32`/`GetInt32`/`Remove`/`Clear`.
 - **Request Timeouts** — `UseRequestTimeouts()`, `RequestTimeoutOptions.DefaultTimeout`, `504 Gateway Timeout` on breach.

@@ -85,16 +85,7 @@ public sealed class HttpContext
         if (!IsWebSocketRequest)
             throw new InvalidOperationException("Not a WebSocket request.");
 
-        var key = Request.Headers["Sec-WebSocket-Key"];
-        var responseKey = WebSocketHelper.CreateResponseKey(key);
-
-        Response.StatusCode = 101;
-        Response.Headers["Upgrade"] = "websocket";
-        Response.Headers["Connection"] = "Upgrade";
-        Response.Headers["Sec-WebSocket-Accept"] = responseKey;
-
-        // Signal to the transport that we are switching protocols.
-        Items["__WebSocketUpgrade"] = true;
+        PrepareWebSocketUpgrade();
 
         if (Items.TryGetValue("__RawStream", out var stream) && stream is Stream s)
         {
@@ -102,5 +93,26 @@ public sealed class HttpContext
         }
 
         throw new InvalidOperationException("Raw stream not available for WebSocket upgrade.");
+    }
+
+    internal void PrepareWebSocketUpgrade()
+    {
+        var key = Request.Headers["Sec-WebSocket-Key"];
+        var responseKey = WebSocketHelper.CreateResponseKey(key);
+
+        Response.StatusCode = 101;
+        Response.Headers["Upgrade"] = "websocket";
+        Response.Headers["Connection"] = "Upgrade";
+        Response.Headers["Sec-WebSocket-Accept"] = responseKey;
+        if (Request.Headers.TryGetValue("Sec-WebSocket-Protocol", out var subprotocols) &&
+            !string.IsNullOrWhiteSpace(subprotocols))
+        {
+            var selected = subprotocols.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                .FirstOrDefault();
+            if (!string.IsNullOrWhiteSpace(selected))
+                Response.Headers["Sec-WebSocket-Protocol"] = selected;
+        }
+
+        Items["__WebSocketUpgrade"] = true;
     }
 }
