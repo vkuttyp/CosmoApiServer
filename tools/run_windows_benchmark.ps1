@@ -69,12 +69,13 @@ try {
 
     $cosmo = Start-Published "$outDir\cosmo\CosmoApiBenchHost.exe" @{ COSMO_BENCH_PORT = '9102' }
     $asp   = Start-Published "$outDir\asp\AspNetBenchHost.exe"     @{}
-    $h3    = Start-Published "$outDir\cosmo\CosmoApiBenchHost.exe" @{
-        COSMO_BENCH_PORT          = '9443'
-        COSMO_BENCH_CERT_PATH     = $certPath
-        COSMO_BENCH_CERT_PASSWORD = 'password'
-        COSMO_BENCH_ENABLE_HTTP3  = 'true'
-    }
+        $h3    = Start-Published "$outDir\cosmo\CosmoApiBenchHost.exe" @{
+            COSMO_BENCH_PORT          = '9443'
+            COSMO_BENCH_CERT_PATH     = $certPath
+            COSMO_BENCH_CERT_PASSWORD = 'password'
+            COSMO_BENCH_ENABLE_HTTP3  = 'true'
+            COSMO_HTTP3_SUPPRESS_ABORT_LOGS = '1'
+        }
 
     try {
         Wait-Ready '127.0.0.1' 9102

@@ -39,6 +39,9 @@ internal static class Http3Connection
     private static bool SupportsQuicPlatform() =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
+    private static readonly bool SuppressShutdownAbortLogs =
+        string.Equals(Environment.GetEnvironmentVariable("COSMO_HTTP3_SUPPRESS_ABORT_LOGS"), "1", StringComparison.OrdinalIgnoreCase);
+
     public static async ValueTask RunAsync(
         QuicConnection connection,
         RequestDelegate pipeline,
@@ -252,7 +255,10 @@ internal static class Http3Connection
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[HTTP/3] stream={stream.Id} {ex.GetType().Name}: {ex.Message}");
+            if (!SuppressShutdownAbortLogs || !(ex is QuicException))
+            {
+                Console.Error.WriteLine($"[HTTP/3] stream={stream.Id} {ex.GetType().Name}: {ex.Message}");
+            }
             abortStream = true;
             try { stream.Abort(QuicAbortDirection.Both, IsProtocolError(ex) ? Http3GeneralProtocolError : Http3InternalError); } catch { }
         }
