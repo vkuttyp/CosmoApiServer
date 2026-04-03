@@ -76,6 +76,7 @@ internal sealed class QpackDecoderState
                         _maxTableCapacity = checked((int)settingValue);
                         TrimToCapacity();
                     }
+                    _encoderCapacitySink?.Invoke(checked((int)settingValue));
                     break;
                 case 0x07:
                     lock (_gate)
@@ -87,9 +88,16 @@ internal sealed class QpackDecoderState
         }
     }
 
+    private Action<int>? _encoderCapacitySink;
+
     public void SetInsertCountIncrementSink(Action<int> sink)
     {
         _insertCountIncrementSink = sink;
+    }
+
+    public void SetEncoderCapacitySink(Action<int> sink)
+    {
+        _encoderCapacitySink = sink;
     }
 
     public void ProcessEncoderInstructions(ReadOnlySpan<byte> payload)

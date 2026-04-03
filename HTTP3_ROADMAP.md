@@ -15,21 +15,29 @@ Implemented today:
 - GOAWAY on shutdown and stronger control-stream validation
 - Internal HTTP/3 transport tests plus Windows VM benchmark/probe coverage
 
+Also implemented (Phase 6 performance pass):
+
+- Stability fix: `WriteFrameAsync` no longer calls `FlushAsync` after `completeWrites=true` — prevents throw on completed write side
+- Allocation reduction: `ReadVarIntAsync` and `WriteVarIntAsync` use `ArrayPool<byte>` instead of `new byte[]`
+- Allocation reduction: frame header in `WriteFrameAsync` uses `ArrayPool<byte>` instead of `GC.AllocateUninitializedArray`
+- Zero-copy header encoding: `EncodeResponseHeaders` uses `ArrayBufferWriter<byte>` throughout — no `MemoryStream.ToArray()` copies
+- SETTINGS frame encoding replaced `MemoryStream` with a stack-local `byte[16]`
+- Response-side dynamic QPACK encoding: `QpackEncoderState` tracks server encoder table, inserts common headers, and emits encoder-stream instructions
+- `MaxRequestsPerConnection` raised from 16 to 100 to reduce GOAWAY pressure in benchmarks
+- `BufferedDataFrameChunkSize` raised from 4 KB to 32 KB for large-body throughput
+- Streaming flush coalescing in `Http3DataFrameStream.FlushAsync`: payloads ≤ 8 KB combined into a single `WriteAsync` call
+
 Still intentionally incomplete:
 
-- Response-side dynamic QPACK encoding beyond static-name/static-entry reuse
 - Stable stream reuse under repeated larger responses
 - Broader external interop validation with browsers, curl, and proxies
-- HTTP/3-specific performance tuning
+- HTTP/3-specific benchmark numbers published in README
 
 ## Remaining TODO
 
-- Fix reused-connection stability for larger HTTP/3 responses such as `/large-json`, `/file`, and `/stream`
-- Finalize the successful request-stream retirement path so repeated bidirectional request streams do not abort on later responses
 - Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments
-- Expand response-side QPACK support beyond static-name and static-entry reuse
 - Add repeatable HTTP/3 benchmark runs to the Windows VM workflow and publish those numbers in the README
-- Tune HTTP/3 body transfer and streaming behavior once the stream-reuse failures are resolved
+- Investigate stream reuse failures under repeated large responses (`/large-json`, `/file`, `/stream`) once external interop is confirmed stable
 
 ## Phase 1: QPACK groundwork
 

@@ -58,9 +58,9 @@ internal static class Http11Writer
                 name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
                 continue;
 
-            writer.Write(Encoding.ASCII.GetBytes(name));
+            WriteStringAscii(writer, name);
             writer.Write(HeaderSep);
-            writer.Write(Encoding.UTF8.GetBytes(value));
+            WriteStringUtf8(writer, value);
             writer.Write(CrLf);
         }
 
@@ -68,7 +68,7 @@ internal static class Http11Writer
         if (hasContentType)
         {
             writer.Write("Content-Type: "u8);
-            writer.Write(Encoding.UTF8.GetBytes(response.Headers["Content-Type"]));
+            WriteStringUtf8(writer, response.Headers["Content-Type"]);
             writer.Write(CrLf);
         }
 
@@ -76,7 +76,7 @@ internal static class Http11Writer
         if (hasContentLength)
         {
             writer.Write("Content-Length: "u8);
-            writer.Write(Encoding.ASCII.GetBytes(response.Headers["Content-Length"]));
+            WriteStringAscii(writer, response.Headers["Content-Length"]);
             writer.Write(CrLf);
         }
         else if (contentLength.HasValue)
@@ -127,18 +127,35 @@ internal static class Http11Writer
         writer.Write(CrLf);
 
         // Stage all writes between FlushAsync calls into a single chunk each.
-        var chunkStream = new ChunkedBodyStream(writer);
+        // flushToSocket:false — intermediate FlushAsync calls write chunks into the pipe
+        // buffer only; a single writer.FlushAsync at the end sends everything in one syscall.
+        var chunkStream = new ChunkedBodyStream(writer, flushToSocket: false);
         try
         {
             await bodyWriter(chunkStream);
         }
         finally
         {
-            // Drain any unflushed staged bytes before the terminating chunk.
+            // Drain any unflushed staged bytes into the pipe buffer (no syscall).
             await chunkStream.FlushAsync(ct);
             writer.Write(ChunkTerminator);
+            // Single syscall: all chunks + terminator sent together.
             await writer.FlushAsync(ct);
         }
+    }
+
+    private static void WriteStringAscii(PipeWriter writer, string value)
+    {
+        int byteCount = Encoding.ASCII.GetByteCount(value);
+        Encoding.ASCII.GetBytes(value, writer.GetSpan(byteCount));
+        writer.Advance(byteCount);
+    }
+
+    private static void WriteStringUtf8(PipeWriter writer, string value)
+    {
+        int byteCount = Encoding.UTF8.GetByteCount(value);
+        Encoding.UTF8.GetBytes(value, writer.GetSpan(byteCount));
+        writer.Advance(byteCount);
     }
 
     /// <summary>Write a non-negative integer as ASCII digits directly into the pipe.</summary>
@@ -157,7 +174,7 @@ internal static class Http11Writer
     /// This avoids one chunk-header per <see cref="WriteAsync"/> call, which is the pattern
     /// used by <see cref="System.Text.Json.JsonSerializer.SerializeAsync"/> internally.
     /// </summary>
-    internal sealed class ChunkedBodyStream(PipeWriter writer) : Stream
+    internal sealed class ChunkedBodyStream(PipeWriter writer, bool flushToSocket = true) : Stream
     {
         private readonly ArrayBufferWriter<byte> _staging = new(4096);
         private ReadOnlyMemory<byte> _directSegment = ReadOnlyMemory<byte>.Empty;
@@ -227,7 +244,8 @@ internal static class Http11Writer
                 WriteChunkFast(writer, _staging.WrittenSpan);
                 _staging.Clear();
             }
-            await writer.FlushAsync(ct);
+            if (flushToSocket)
+                await writer.FlushAsync(ct);
         }
 
         private void AppendToStaging(ReadOnlySpan<byte> data)

@@ -22,8 +22,8 @@ internal static class Http3Connection
     private const long FrameSettings = 0x04;
     private const long FrameGoAway = 0x07;
     private const long MaxGoAwayRequestStreamId = 4611686018427387900L;
-    private const int BufferedDataFrameChunkSize = 4 * 1024;
-    private const int MaxRequestsPerConnection = 16;
+    private const int BufferedDataFrameChunkSize = 32 * 1024;
+    private const int MaxRequestsPerConnection = 100;
     private static readonly bool TraceHttp3 = string.Equals(
         Environment.GetEnvironmentVariable("COSMO_HTTP3_TRACE"),
         "1",
@@ -51,6 +51,7 @@ internal static class Http3Connection
 #pragma warning disable CA1416
         var remoteIp = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString();
         var qpackState = new QpackDecoderState();
+        var encoderState = new QpackEncoderState();
         var connectionState = new Http3ConnectionState();
         var controlStreams = await InitializeServerStreamsAsync(connection, ct);
         var streamTasks = new List<Task>(16);
@@ -59,6 +60,7 @@ internal static class Http3Connection
         {
             _ = controlStreams.DecoderWriter.SendInsertCountIncrementAsync(increment, CancellationToken.None);
         });
+        qpackState.SetEncoderCapacitySink(capacity => encoderState.SetCapacity(capacity));
 
         try
         {
@@ -69,7 +71,7 @@ internal static class Http3Connection
                     connectionState.ObserveRequestStream(stream.Id);
                 Trace($"accept stream={stream.Id} type={stream.Type} reqCount={connectionState.RequestCount}");
                 var streamTask = stream.Type == QuicStreamType.Bidirectional
-                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, controlStreams.DecoderWriter, remoteIp, ct)
+                    ? HandleRequestStreamAsync(stream, pipeline, services, qpackState, controlStreams.DecoderWriter, encoderState, controlStreams.EncoderWriter, remoteIp, ct)
                     : HandleUnidirectionalStreamAsync(stream, qpackState, connectionState, ct);
                 lock (streamTasks)
                 {
@@ -128,19 +130,20 @@ internal static class Http3Connection
 
         await WriteVarIntAsync(control, StreamTypeControl, ct);
 
-        using var settingsPayload = new MemoryStream();
-        WriteVarInt(settingsPayload, SettingsQpackMaxTableCapacity);
-        WriteVarInt(settingsPayload, 0);
-        WriteVarInt(settingsPayload, SettingsQpackBlockedStreams);
-        WriteVarInt(settingsPayload, 0);
-        await WriteFrameAsync(control, FrameSettings, settingsPayload.ToArray(), false, ct);
+        var settingsPayload = new byte[16];
+        int settingsLen = 0;
+        settingsLen += EncodeVarInt(SettingsQpackMaxTableCapacity, settingsPayload.AsSpan(settingsLen));
+        settingsLen += EncodeVarInt(0, settingsPayload.AsSpan(settingsLen));
+        settingsLen += EncodeVarInt(SettingsQpackBlockedStreams, settingsPayload.AsSpan(settingsLen));
+        settingsLen += EncodeVarInt(0, settingsPayload.AsSpan(settingsLen));
+        await WriteFrameAsync(control, FrameSettings, settingsPayload.AsMemory(0, settingsLen), false, ct);
 
         await WriteVarIntAsync(encoder, StreamTypeQpackEncoder, ct);
         await encoder.FlushAsync(ct);
 
         await WriteVarIntAsync(decoder, StreamTypeQpackDecoder, ct);
         await decoder.FlushAsync(ct);
-        return new ServerControlStreams(new ControlStreamWriter(control), new DecoderInstructionWriter(decoder));
+        return new ServerControlStreams(new ControlStreamWriter(control), new DecoderInstructionWriter(decoder), new EncoderInstructionWriter(encoder));
 #pragma warning restore CA1416
     }
 
@@ -184,11 +187,16 @@ internal static class Http3Connection
         IServiceProvider services,
         QpackDecoderState qpackState,
         DecoderInstructionWriter decoderWriter,
+        QpackEncoderState encoderState,
+        EncoderInstructionWriter encoderWriter,
         string? remoteIp,
         CancellationToken ct)
     {
 #pragma warning disable CA1416
         var httpContext = HttpContextPool.Rent();
+        var headerWriter = new ArrayBufferWriter<byte>(256);
+        var fieldWriter = new ArrayBufferWriter<byte>(256);
+        var encoderInstructionsWriter = new ArrayBufferWriter<byte>(64);
         bool abortStream = false;
         try
         {
@@ -204,7 +212,7 @@ internal static class Http3Connection
                 httpContext.Request), services, remoteIp, ct);
             bool headOnly = requestHead.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD;
             httpContext.Response.StreamingResponseWriter =
-                (statusCode, bodyWriter, writeCt) => WriteStreamingResponseAsync(stream, httpContext.Response, headOnly, statusCode, bodyWriter, writeCt);
+                (statusCode, bodyWriter, writeCt) => WriteStreamingResponseAsync(stream, httpContext.Response, headOnly, statusCode, bodyWriter, writeCt, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter);
 
             try
             {
@@ -230,10 +238,15 @@ internal static class Http3Connection
                     headOnly,
                     httpContext.Response.StatusCode,
                     httpContext.StreamingBodyWriter,
-                    ct);
+                    ct,
+                    headerWriter,
+                    fieldWriter,
+                    encoderInstructionsWriter,
+                    encoderState,
+                    encoderWriter);
             }
             else if (!httpContext.Response.IsStarted || httpContext.Response.IsBuffered)
-                await WriteResponseAsync(stream, httpContext.Response, headOnly, ct, stream.Id);
+                await WriteResponseAsync(stream, httpContext.Response, headOnly, ct, stream.Id, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter);
 
             Trace($"stream={stream.Id} response-written status={httpContext.Response.StatusCode} body={httpContext.Response.Body.Length}");
         }
@@ -878,7 +891,7 @@ internal static class Http3Connection
         return result;
     }
 
-    private static async Task WriteResponseAsync(QuicStream stream, HttpResponse response, bool headOnly, CancellationToken ct, long? traceStreamId = null)
+    private static async Task WriteResponseAsync(QuicStream stream, HttpResponse response, bool headOnly, CancellationToken ct, long? traceStreamId, ArrayBufferWriter<byte> headerWriter, ArrayBufferWriter<byte> fieldWriter, ArrayBufferWriter<byte> encoderInstructionsWriter, QpackEncoderState encoderState, EncoderInstructionWriter encoderWriter)
     {
         var body = response.Body;
         if (!response.Headers.ContainsKey("Content-Type") && body.Length > 0)
@@ -886,17 +899,16 @@ internal static class Http3Connection
         if (!response.Headers.ContainsKey("Content-Length"))
             response.Headers["Content-Length"] = body.Length.ToString();
 
-        var headerBlock = EncodeResponseHeaders(response);
-        var trailerBlock = response.Trailers.Count > 0 ? EncodeTrailingHeaders(response.Trailers) : null;
-        bool completeAfterHeaders = (body.Length == 0 || headOnly) && trailerBlock is null;
-        TraceWrite(traceStreamId, $"headers len={headerBlock.Length} complete={completeAfterHeaders}");
-        await WriteFrameAsync(stream, FrameHeaders, headerBlock, completeAfterHeaders, ct);
+        bool hasTrailers = response.Trailers.Count > 0;
+        bool completeAfterHeaders = (body.Length == 0 || headOnly) && !hasTrailers;
+        await EncodeAndSendResponseHeadersAsync(stream, response, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter, completeAfterHeaders, traceStreamId, ct);
 
         if (body.Length > 0 && !headOnly)
-            await WriteBufferedDataFramesAsync(stream, body, trailerBlock is null, ct);
+            await WriteBufferedDataFramesAsync(stream, body, !hasTrailers, ct);
 
-        if (trailerBlock is not null)
+        if (hasTrailers)
         {
+            var trailerBlock = EncodeTrailingHeaders(response.Trailers, headerWriter);
             TraceWrite(traceStreamId, $"trailers len={trailerBlock.Length}");
             await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
         }
@@ -936,20 +948,27 @@ internal static class Http3Connection
         bool headOnly,
         int statusCode,
         Func<Stream, Task> bodyWriter,
-        CancellationToken ct)
+        CancellationToken ct,
+        ArrayBufferWriter<byte> headerWriter,
+        ArrayBufferWriter<byte> fieldWriter,
+        ArrayBufferWriter<byte> encoderInstructionsWriter,
+        QpackEncoderState encoderState,
+        EncoderInstructionWriter encoderWriter)
     {
         response.StatusCode = statusCode;
         response.Headers.Remove("Content-Length");
         if (!response.Headers.ContainsKey("Content-Type"))
             response.Headers["Content-Type"] = "application/x-ndjson";
 
-        var headerBlock = EncodeResponseHeaders(response);
-        await WriteFrameAsync(stream, FrameHeaders, headerBlock, false, ct);
+        await EncodeAndSendResponseHeadersAsync(stream, response, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter, false, null, ct);
 
         if (headOnly)
         {
             if (response.Trailers.Count > 0)
-                await WriteFrameAsync(stream, FrameHeaders, EncodeTrailingHeaders(response.Trailers), true, ct);
+            {
+                var trailerBlock = EncodeTrailingHeaders(response.Trailers, headerWriter);
+                await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
+            }
             else
             {
 #pragma warning disable CA1416
@@ -961,54 +980,236 @@ internal static class Http3Connection
 
         await using var bodyStream = new Http3DataFrameStream(stream);
         await bodyWriter(bodyStream);
-        await bodyStream.CompleteAsync(response.Trailers.Count > 0 ? EncodeTrailingHeaders(response.Trailers) : null, ct);
+        ReadOnlyMemory<byte>? trailers = response.Trailers.Count > 0
+            ? EncodeTrailingHeaders(response.Trailers, headerWriter)
+            : null;
+        await bodyStream.CompleteAsync(trailers, ct);
     }
 
-    private static byte[] EncodeResponseHeaders(HttpResponse response)
+    private static async Task EncodeAndSendResponseHeadersAsync(
+        QuicStream stream,
+        HttpResponse response,
+        ArrayBufferWriter<byte> headerWriter,
+        ArrayBufferWriter<byte> fieldWriter,
+        ArrayBufferWriter<byte> encoderInstructionsWriter,
+        QpackEncoderState encoderState,
+        EncoderInstructionWriter encoderWriter,
+        bool completeWrites,
+        long? traceStreamId,
+        CancellationToken ct)
     {
-        using var ms = new MemoryStream();
-        ms.WriteByte(0); // Required Insert Count = 0
-        ms.WriteByte(0); // Base = 0
+        ReadOnlyMemory<byte> headerBlock;
 
-        WriteHeaderField(ms, ":status", response.StatusCode.ToString());
-        foreach (var header in response.Headers)
-            WriteHeaderField(ms, header.Key.ToLowerInvariant(), header.Value);
+        if (encoderState.MaxCapacity > 0)
+        {
+            encoderInstructionsWriter.Clear();
+            headerBlock = EncodeResponseHeadersDynamic(response, headerWriter, fieldWriter, encoderState, encoderInstructionsWriter);
+            if (encoderInstructionsWriter.WrittenCount > 0)
+            {
+#pragma warning disable CA1416
+                await encoderWriter.WriteRawAsync(encoderInstructionsWriter.WrittenMemory, ct);
+#pragma warning restore CA1416
+            }
+        }
+        else
+        {
+            headerBlock = EncodeResponseHeaders(response, headerWriter);
+        }
 
-        return ms.ToArray();
+        TraceWrite(traceStreamId, $"headers len={headerBlock.Length} complete={completeWrites}");
+        await WriteFrameAsync(stream, FrameHeaders, headerBlock, completeWrites, ct);
     }
 
-    internal static byte[] EncodeResponseHeadersForTests(HttpResponse response) =>
-        EncodeResponseHeaders(response);
+    /// <summary>
+    /// Encodes response headers using the dynamic table where possible.
+    /// Appends any required encoder stream insertion instructions to <paramref name="encoderInstructions"/>.
+    /// Sets Required Insert Count and Base in the field section prefix per RFC 9204.
+    /// </summary>
+    private static ReadOnlyMemory<byte> EncodeResponseHeadersDynamic(
+        HttpResponse response,
+        ArrayBufferWriter<byte> writer,
+        ArrayBufferWriter<byte> fieldWriter,
+        QpackEncoderState encoderState,
+        ArrayBufferWriter<byte> encoderInstructions)
+    {
+        // Encode field lines into the reusable field buffer so we can compute RIC before writing the prefix.
+        fieldWriter.Clear();
+        long maxAbsoluteIndex = -1;
 
-    internal static byte[] EncodeTrailingHeadersForTests(IReadOnlyDictionary<string, string> trailers) =>
-        EncodeTrailingHeaders(trailers);
+        var statusValue = response.StatusCode.ToString();
+        if (QpackDecoderState.TryGetStaticIndex(":status", statusValue, out int staticIdx))
+        {
+            WriteIndexedStaticField(fieldWriter, staticIdx);
+        }
+        else
+        {
+            long absIdx = encoderState.TryGetEntry(":status", statusValue, out long existing)
+                ? existing
+                : InsertAndWriteInstruction(":status", statusValue, encoderState, encoderInstructions,
+                    QpackDecoderState.TryGetStaticNameIndex(":status", out int sni) ? sni : -1);
+            if (absIdx >= 0)
+            {
+                WriteDynamicIndexedField(fieldWriter, absIdx, encoderState.InsertCount);
+                if (absIdx > maxAbsoluteIndex) maxAbsoluteIndex = absIdx;
+            }
+            else
+            {
+                WriteHeaderField(fieldWriter, ":status", statusValue);
+            }
+        }
+
+        foreach (var header in response.Headers)
+        {
+            var name = header.Key.ToLowerInvariant();
+            var value = header.Value;
+
+            if (QpackDecoderState.TryGetStaticIndex(name, value, out staticIdx))
+            {
+                WriteIndexedStaticField(fieldWriter, staticIdx);
+                continue;
+            }
+
+            long absIdx = encoderState.TryGetEntry(name, value, out long existingAbs)
+                ? existingAbs
+                : InsertAndWriteInstruction(name, value, encoderState, encoderInstructions,
+                    QpackDecoderState.TryGetStaticNameIndex(name, out int sni2) ? sni2 : -1);
+
+            if (absIdx >= 0)
+            {
+                WriteDynamicIndexedField(fieldWriter, absIdx, encoderState.InsertCount);
+                if (absIdx > maxAbsoluteIndex) maxAbsoluteIndex = absIdx;
+            }
+            else
+            {
+                WriteHeaderField(fieldWriter, name, value);
+            }
+        }
+
+        long requiredInsertCount = maxAbsoluteIndex >= 0 ? maxAbsoluteIndex + 1 : 0;
+        long encodedRic = encoderState.EncodeRequiredInsertCount(requiredInsertCount);
+
+        // Revert to static-only if encoded RIC overflows a single-byte prefix (rare; large tables).
+        if (encodedRic >= 128)
+            return EncodeResponseHeaders(response, writer);
+
+        // Write prefix + field lines into the main writer as one contiguous block.
+        writer.Clear();
+        var prefixSpan = writer.GetSpan(2);
+        prefixSpan[0] = (byte)encodedRic; // encoded Required Insert Count
+        prefixSpan[1] = 0x00;             // S=0, DeltaBase=0
+        writer.Advance(2);
+        var fieldSpan = writer.GetSpan(fieldWriter.WrittenCount);
+        fieldWriter.WrittenSpan.CopyTo(fieldSpan);
+        writer.Advance(fieldWriter.WrittenCount);
+
+        return writer.WrittenMemory;
+    }
+
+    /// <summary>
+    /// Attempts to insert <paramref name="name"/>/<paramref name="value"/> into the dynamic table.
+    /// If successful, writes the encoder instruction into <paramref name="encoderInstructions"/>.
+    /// Returns the absolute index of the inserted entry, or -1 on failure.
+    /// </summary>
+    private static long InsertAndWriteInstruction(
+        string name, string value,
+        QpackEncoderState encoderState,
+        ArrayBufferWriter<byte> encoderInstructions,
+        int staticNameIndex)
+    {
+        long absIdx = encoderState.Insert(name, value);
+        if (absIdx < 0)
+            return -1;
+
+        if (staticNameIndex >= 0)
+        {
+            // Insert With Name Reference (static): 0b11nnnnnn, N=6
+            WritePrefixedInteger(encoderInstructions, 0xC0, 6, staticNameIndex);
+        }
+        else
+        {
+            // Insert With Literal Name: 0b01nnnnnn, N=5
+            var nameByteCount = Encoding.ASCII.GetByteCount(name);
+            WritePrefixedInteger(encoderInstructions, 0x40, 5, nameByteCount);
+            Encoding.ASCII.GetBytes(name, encoderInstructions.GetSpan(nameByteCount));
+            encoderInstructions.Advance(nameByteCount);
+        }
+        var valueByteCount = Encoding.UTF8.GetByteCount(value);
+        WritePrefixedInteger(encoderInstructions, 0x00, 7, valueByteCount);
+        Encoding.UTF8.GetBytes(value, encoderInstructions.GetSpan(valueByteCount));
+        encoderInstructions.Advance(valueByteCount);
+
+        return absIdx;
+    }
+
+    /// <summary>
+    /// Writes an Indexed Field Line referencing the dynamic table (RFC 9204 §3.2.4).
+    /// relativeIndex = (insertCount - 1 - absoluteIndex), pattern = 0b10xxxxxx, N=6.
+    /// </summary>
+    private static void WriteDynamicIndexedField(ArrayBufferWriter<byte> writer, long absoluteIndex, long insertCount)
+    {
+        long relativeIndex = insertCount - 1 - absoluteIndex;
+        WritePrefixedInteger(writer, 0x80, 6, checked((int)relativeIndex));
+    }
+
+    private static ReadOnlyMemory<byte> EncodeResponseHeaders(HttpResponse response, ArrayBufferWriter<byte> writer)
+    {
+        writer.Clear();
+        var prefix = writer.GetSpan(2);
+        prefix[0] = 0; // Required Insert Count = 0
+        prefix[1] = 0; // Base = 0
+        writer.Advance(2);
+
+        WriteHeaderField(writer, ":status", response.StatusCode.ToString());
+        foreach (var header in response.Headers)
+            WriteHeaderField(writer, header.Key.ToLowerInvariant(), header.Value);
+
+        return writer.WrittenMemory;
+    }
+
+    internal static byte[] EncodeResponseHeadersForTests(HttpResponse response)
+    {
+        var writer = new ArrayBufferWriter<byte>(128);
+        EncodeResponseHeaders(response, writer);
+        return writer.WrittenSpan.ToArray();
+    }
+
+    internal static byte[] EncodeTrailingHeadersForTests(IReadOnlyDictionary<string, string> trailers)
+    {
+        var writer = new ArrayBufferWriter<byte>(64);
+        EncodeTrailingHeaders(trailers, writer);
+        return writer.WrittenSpan.ToArray();
+    }
 
     internal static byte[] EncodeFieldSectionForTests(params (string name, string value)[] headers)
     {
-        using var ms = new MemoryStream();
-        ms.WriteByte(0); // Required Insert Count = 0
-        ms.WriteByte(0); // Base = 0
+        var writer = new ArrayBufferWriter<byte>(128);
+        var prefix = writer.GetSpan(2);
+        prefix[0] = 0; // Required Insert Count = 0
+        prefix[1] = 0; // Base = 0
+        writer.Advance(2);
 
         foreach (var (name, value) in headers)
-            WriteHeaderField(ms, name, value);
+            WriteHeaderField(writer, name, value);
 
-        return ms.ToArray();
+        return writer.WrittenSpan.ToArray();
     }
 
-    private static byte[] EncodeTrailingHeaders(IReadOnlyDictionary<string, string> trailers)
+    private static ReadOnlyMemory<byte> EncodeTrailingHeaders(IReadOnlyDictionary<string, string> trailers, ArrayBufferWriter<byte> writer)
     {
-        using var ms = new MemoryStream();
-        ms.WriteByte(0); // Required Insert Count = 0
-        ms.WriteByte(0); // Base = 0
+        writer.Clear();
+        var prefix = writer.GetSpan(2);
+        prefix[0] = 0; // Required Insert Count = 0
+        prefix[1] = 0; // Base = 0
+        writer.Advance(2);
 
         foreach (var trailer in trailers)
         {
             if (trailer.Key.StartsWith(':'))
                 throw new InvalidOperationException("HTTP/3 trailers cannot contain pseudo headers.");
-            WriteHeaderField(ms, trailer.Key.ToLowerInvariant(), trailer.Value);
+            WriteHeaderField(writer, trailer.Key.ToLowerInvariant(), trailer.Value);
         }
 
-        return ms.ToArray();
+        return writer.WrittenMemory;
     }
 
     internal static byte[] EncodeRequestForTests((string name, string value)[] headers, byte[]? body = null)
@@ -1029,42 +1230,45 @@ internal static class Http3Connection
         return ms.ToArray();
     }
 
-    private static void WriteLiteralHeader(Stream stream, string name, string value)
+    private static void WriteLiteralHeader(ArrayBufferWriter<byte> writer, string name, string value)
     {
-        WritePrefixedInteger(stream, 0x20, 3, Encoding.ASCII.GetByteCount(name));
-        var nameBytes = Encoding.ASCII.GetBytes(name);
-        stream.Write(nameBytes, 0, nameBytes.Length);
-        WritePrefixedInteger(stream, 0x00, 7, Encoding.UTF8.GetByteCount(value));
-        var valueBytes = Encoding.UTF8.GetBytes(value);
-        stream.Write(valueBytes, 0, valueBytes.Length);
+        var nameByteCount = Encoding.ASCII.GetByteCount(name);
+        WritePrefixedInteger(writer, 0x20, 3, nameByteCount);
+        Encoding.ASCII.GetBytes(name, writer.GetSpan(nameByteCount));
+        writer.Advance(nameByteCount);
+        var valueByteCount = Encoding.UTF8.GetByteCount(value);
+        WritePrefixedInteger(writer, 0x00, 7, valueByteCount);
+        Encoding.UTF8.GetBytes(value, writer.GetSpan(valueByteCount));
+        writer.Advance(valueByteCount);
     }
 
-    private static void WriteHeaderField(Stream stream, string name, string value)
+    private static void WriteHeaderField(ArrayBufferWriter<byte> writer, string name, string value)
     {
         if (QpackDecoderState.TryGetStaticIndex(name, value, out int staticIndex))
         {
-            WriteIndexedStaticField(stream, staticIndex);
+            WriteIndexedStaticField(writer, staticIndex);
             return;
         }
 
         if (QpackDecoderState.TryGetStaticNameIndex(name, out int nameIndex))
         {
-            WriteLiteralHeaderWithStaticNameReference(stream, nameIndex, value);
+            WriteLiteralHeaderWithStaticNameReference(writer, nameIndex, value);
             return;
         }
 
-        WriteLiteralHeader(stream, name, value);
+        WriteLiteralHeader(writer, name, value);
     }
 
-    private static void WriteIndexedStaticField(Stream stream, int index) =>
-        WritePrefixedInteger(stream, 0xC0, 6, index);
+    private static void WriteIndexedStaticField(ArrayBufferWriter<byte> writer, int index) =>
+        WritePrefixedInteger(writer, 0xC0, 6, index);
 
-    private static void WriteLiteralHeaderWithStaticNameReference(Stream stream, int nameIndex, string value)
+    private static void WriteLiteralHeaderWithStaticNameReference(ArrayBufferWriter<byte> writer, int nameIndex, string value)
     {
-        WritePrefixedInteger(stream, 0x50, 4, nameIndex);
-        WritePrefixedInteger(stream, 0x00, 7, Encoding.UTF8.GetByteCount(value));
-        var valueBytes = Encoding.UTF8.GetBytes(value);
-        stream.Write(valueBytes, 0, valueBytes.Length);
+        WritePrefixedInteger(writer, 0x50, 4, nameIndex);
+        var byteCount = Encoding.UTF8.GetByteCount(value);
+        WritePrefixedInteger(writer, 0x00, 7, byteCount);
+        Encoding.UTF8.GetBytes(value, writer.GetSpan(byteCount));
+        writer.Advance(byteCount);
     }
 
     private static async Task WriteFrameAsync(
@@ -1074,16 +1278,24 @@ internal static class Http3Connection
         bool completeWrites,
         CancellationToken ct)
     {
-        byte[] header = GC.AllocateUninitializedArray<byte>(16);
-        int headerLength = EncodeVarInt(frameType, header.AsSpan());
-        headerLength += EncodeVarInt(payload.Length, header.AsSpan(headerLength));
+        var header = ArrayPool<byte>.Shared.Rent(16);
+        try
+        {
+            int headerLength = EncodeVarInt(frameType, header.AsSpan());
+            headerLength += EncodeVarInt(payload.Length, header.AsSpan(headerLength));
 #pragma warning disable CA1416
-        bool completeOnHeader = completeWrites && payload.IsEmpty;
-        await stream.WriteAsync(header.AsMemory(0, headerLength), completeOnHeader, ct);
-        if (!payload.IsEmpty)
-            await stream.WriteAsync(payload, completeWrites, ct);
-        await stream.FlushAsync(ct);
+            bool completeOnHeader = completeWrites && payload.IsEmpty;
+            await stream.WriteAsync(header.AsMemory(0, headerLength), completeOnHeader, ct);
+            if (!payload.IsEmpty)
+                await stream.WriteAsync(payload, completeWrites, ct);
+            if (!completeWrites)
+                await stream.FlushAsync(ct);
 #pragma warning restore CA1416
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(header);
+        }
     }
 
     private static async ValueTask<(long Type, byte[] Payload)?> TryReadFrameAsync(QuicStream stream, CancellationToken ct)
@@ -1106,31 +1318,43 @@ internal static class Http3Connection
 
     private static async Task WriteVarIntAsync(QuicStream stream, long value, CancellationToken ct)
     {
-        byte[] buffer = GC.AllocateUninitializedArray<byte>(8);
-        int length = EncodeVarInt(value, buffer);
+        var buffer = ArrayPool<byte>.Shared.Rent(8);
+        try
+        {
+            int length = EncodeVarInt(value, buffer);
 #pragma warning disable CA1416
-        await stream.WriteAsync(buffer.AsMemory(0, length), false, ct);
+            await stream.WriteAsync(buffer.AsMemory(0, length), false, ct);
 #pragma warning restore CA1416
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static async ValueTask<long> ReadVarIntAsync(Stream stream, CancellationToken ct)
     {
-        var first = new byte[1];
-        int read = await stream.ReadAsync(first, 0, 1, ct);
-        if (read == 0) throw new EndOfStreamException();
-
-        int length = 1 << (first[0] >> 6);
-        var buffer = new byte[8];
-        buffer[0] = first[0];
-        int offset = 1;
-        while (offset < length)
+        var buffer = ArrayPool<byte>.Shared.Rent(8);
+        try
         {
-            int chunk = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), ct);
-            if (chunk == 0) throw new EndOfStreamException();
-            offset += chunk;
+            int read = await stream.ReadAsync(buffer.AsMemory(0, 1), ct);
+            if (read == 0) throw new EndOfStreamException();
+
+            int length = 1 << (buffer[0] >> 6);
+            int offset = 1;
+            while (offset < length)
+            {
+                int chunk = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), ct);
+                if (chunk == 0) throw new EndOfStreamException();
+                offset += chunk;
+            }
+            int pos = 0;
+            return ReadVarInt(buffer.AsSpan(0, length), ref pos);
         }
-        int pos = 0;
-        return ReadVarInt(buffer.AsSpan(0, length), ref pos);
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
     }
 
     private static long ReadVarInt(ReadOnlySpan<byte> data, ref int pos)
@@ -1222,23 +1446,28 @@ internal static class Http3Connection
         return value;
     }
 
-    private static void WritePrefixedInteger(Stream stream, byte prefixPattern, int prefixBits, int value)
+    private static void WritePrefixedInteger(ArrayBufferWriter<byte> writer, byte prefixPattern, int prefixBits, int value)
     {
         int mask = (1 << prefixBits) - 1;
+        // max bytes: 1 prefix + up to 5 continuation bytes for a 32-bit value
+        var span = writer.GetSpan(6);
+        int pos = 0;
         if (value < mask)
         {
-            stream.WriteByte((byte)(prefixPattern | value));
-            return;
+            span[pos++] = (byte)(prefixPattern | value);
         }
-
-        stream.WriteByte((byte)(prefixPattern | mask));
-        int remaining = value - mask;
-        while (remaining >= 128)
+        else
         {
-            stream.WriteByte((byte)((remaining & 0x7F) | 0x80));
-            remaining >>= 7;
+            span[pos++] = (byte)(prefixPattern | mask);
+            int remaining = value - mask;
+            while (remaining >= 128)
+            {
+                span[pos++] = (byte)((remaining & 0x7F) | 0x80);
+                remaining >>= 7;
+            }
+            span[pos++] = (byte)remaining;
         }
-        stream.WriteByte((byte)remaining);
+        writer.Advance(pos);
     }
 
     private sealed record DecodedFieldSection(
@@ -1290,7 +1519,55 @@ internal static class Http3Connection
         }
     }
 
-    private sealed record ServerControlStreams(ControlStreamWriter ControlWriter, DecoderInstructionWriter DecoderWriter);
+    private sealed record ServerControlStreams(ControlStreamWriter ControlWriter, DecoderInstructionWriter DecoderWriter, EncoderInstructionWriter EncoderWriter);
+
+    private sealed class EncoderInstructionWriter(QuicStream stream)
+    {
+        private readonly SemaphoreSlim _lock = new(1, 1);
+
+        // Insert With Literal Name (RFC 9204 §3.2.4): 0b01nnnnnn prefix, N=5
+        public async Task WriteInsertWithLiteralNameAsync(string name, string value, CancellationToken ct)
+        {
+            var writer = new ArrayBufferWriter<byte>(64);
+            var nameByteCount = Encoding.ASCII.GetByteCount(name);
+            WritePrefixedInteger(writer, 0x40, 5, nameByteCount);
+            Encoding.ASCII.GetBytes(name, writer.GetSpan(nameByteCount));
+            writer.Advance(nameByteCount);
+            var valueByteCount = Encoding.UTF8.GetByteCount(value);
+            WritePrefixedInteger(writer, 0x00, 7, valueByteCount);
+            Encoding.UTF8.GetBytes(value, writer.GetSpan(valueByteCount));
+            writer.Advance(valueByteCount);
+            await WriteRawAsync(writer.WrittenMemory, ct);
+        }
+
+        // Insert With Name Reference, static table (RFC 9204 §3.2.4): 0b11nnnnnn prefix, N=6
+        public async Task WriteInsertWithStaticNameRefAsync(int staticNameIndex, string value, CancellationToken ct)
+        {
+            var writer = new ArrayBufferWriter<byte>(32);
+            WritePrefixedInteger(writer, 0xC0, 6, staticNameIndex);
+            var valueByteCount = Encoding.UTF8.GetByteCount(value);
+            WritePrefixedInteger(writer, 0x00, 7, valueByteCount);
+            Encoding.UTF8.GetBytes(value, writer.GetSpan(valueByteCount));
+            writer.Advance(valueByteCount);
+            await WriteRawAsync(writer.WrittenMemory, ct);
+        }
+
+        public async Task WriteRawAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
+        {
+#pragma warning disable CA1416
+            await _lock.WaitAsync(ct);
+            try
+            {
+                await stream.WriteAsync(payload, false, ct);
+                await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                _lock.Release();
+            }
+#pragma warning restore CA1416
+        }
+    }
 
     private sealed class DecoderInstructionWriter(QuicStream stream)
     {
@@ -1298,9 +1575,9 @@ internal static class Http3Connection
 
         public async Task SendSectionAcknowledgmentAsync(long streamId, CancellationToken ct)
         {
-            using var ms = new MemoryStream();
-            WritePrefixedInteger(ms, 0x80, 7, checked((int)streamId));
-            await WriteInstructionAsync(ms.ToArray(), ct);
+            var writer = new ArrayBufferWriter<byte>(8);
+            WritePrefixedInteger(writer, 0x80, 7, checked((int)streamId));
+            await WriteInstructionAsync(writer.WrittenMemory, ct);
         }
 
         public async Task SendInsertCountIncrementAsync(int increment, CancellationToken ct)
@@ -1308,19 +1585,19 @@ internal static class Http3Connection
             if (increment <= 0)
                 return;
 
-            using var ms = new MemoryStream();
-            WritePrefixedInteger(ms, 0x00, 6, increment);
-            await WriteInstructionAsync(ms.ToArray(), ct);
+            var writer = new ArrayBufferWriter<byte>(8);
+            WritePrefixedInteger(writer, 0x00, 6, increment);
+            await WriteInstructionAsync(writer.WrittenMemory, ct);
         }
 
         public async Task SendStreamCancellationAsync(long streamId, CancellationToken ct)
         {
-            using var ms = new MemoryStream();
-            WritePrefixedInteger(ms, 0x40, 6, checked((int)streamId));
-            await WriteInstructionAsync(ms.ToArray(), ct);
+            var writer = new ArrayBufferWriter<byte>(8);
+            WritePrefixedInteger(writer, 0x40, 6, checked((int)streamId));
+            await WriteInstructionAsync(writer.WrittenMemory, ct);
         }
 
-        private async Task WriteInstructionAsync(byte[] payload, CancellationToken ct)
+        private async Task WriteInstructionAsync(ReadOnlyMemory<byte> payload, CancellationToken ct)
         {
 #pragma warning disable CA1416
             await _lock.WaitAsync(ct);
@@ -1463,17 +1740,47 @@ internal static class Http3Connection
             _staging.Advance(1);
         }
 
+        // DATA frames ≤ this threshold are coalesced into a single WriteAsync to reduce async ops.
+        private const int CoalesceThreshold = 8 * 1024;
+
         public override async Task FlushAsync(CancellationToken cancellationToken)
         {
-            if (_staging.WrittenCount == 0)
+            int count = _staging.WrittenCount;
+            if (count == 0)
                 return;
 
             var payload = _staging.WrittenMemory;
-            await WriteFrameAsync(stream, FrameData, payload, false, cancellationToken);
+            if (count <= CoalesceThreshold)
+            {
+                // Encode frame type (0x00) + length varint — at most 1+8 = 9 bytes.
+                Span<byte> headerBuf = stackalloc byte[9];
+                int headerLen = EncodeVarInt(FrameData, headerBuf);
+                headerLen += EncodeVarInt(count, headerBuf[headerLen..]);
+
+                var combined = ArrayPool<byte>.Shared.Rent(headerLen + count);
+                try
+                {
+                    headerBuf[..headerLen].CopyTo(combined);
+                    payload.Span.CopyTo(combined.AsSpan(headerLen));
+#pragma warning disable CA1416
+                    await stream.WriteAsync(combined.AsMemory(0, headerLen + count), false, cancellationToken);
+                    await stream.FlushAsync(cancellationToken);
+#pragma warning restore CA1416
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(combined);
+                }
+            }
+            else
+            {
+                await WriteFrameAsync(stream, FrameData, payload, false, cancellationToken);
+            }
+
             _staging.Clear();
         }
 
-        public async Task CompleteAsync(byte[]? trailerBlock, CancellationToken ct)
+        public async Task CompleteAsync(ReadOnlyMemory<byte>? trailerBlock, CancellationToken ct)
         {
             if (_disposed)
                 return;
@@ -1487,7 +1794,7 @@ internal static class Http3Connection
 
             if (trailerBlock is not null)
             {
-                await WriteFrameAsync(stream, FrameHeaders, trailerBlock, true, ct);
+                await WriteFrameAsync(stream, FrameHeaders, trailerBlock.Value, true, ct);
             }
             else if (_staging.WrittenCount == 0)
             {

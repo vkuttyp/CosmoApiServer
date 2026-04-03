@@ -102,12 +102,27 @@ public sealed class HttpResponse
     private static void WriteChunk(IBufferWriter<byte> writer, ReadOnlySpan<byte> data)
     {
         if (data.IsEmpty) return;
-        // Hex length
-        var hex = data.Length.ToString("X");
-        writer.Write(Encoding.ASCII.GetBytes(hex));
+        Span<byte> hexBuf = stackalloc byte[8];
+        int hexLen = FormatHex(data.Length, hexBuf);
+        writer.Write(hexBuf[..hexLen]);
         writer.Write("\r\n"u8);
         writer.Write(data);
         writer.Write("\r\n"u8);
+    }
+
+    private static int FormatHex(int value, Span<byte> destination)
+    {
+        int pos = destination.Length;
+        do
+        {
+            int nibble = value & 0xF;
+            destination[--pos] = (byte)(nibble < 10 ? '0' + nibble : 'a' + nibble - 10);
+            value >>= 4;
+        }
+        while (value > 0);
+        int length = destination.Length - pos;
+        destination[pos..].CopyTo(destination);
+        return length;
     }
 
     public void WriteText(string text, string contentType = "text/plain; charset=utf-8")
@@ -115,8 +130,25 @@ public sealed class HttpResponse
         Headers["Content-Type"] = contentType;
         if (BodyWriter != null)
         {
-            var bytes = Encoding.UTF8.GetBytes(text);
-            Write(bytes);
+            EnsureHeadersWritten();
+            int byteCount = Encoding.UTF8.GetByteCount(text);
+            if (_isChunked)
+            {
+                Span<byte> hexBuf = stackalloc byte[8];
+                int hexLen = FormatHex(byteCount, hexBuf);
+                BodyWriter.Write(hexBuf[..hexLen]);
+                BodyWriter.Write("\r\n"u8);
+                var dest = BodyWriter.GetSpan(byteCount);
+                Encoding.UTF8.GetBytes(text, dest);
+                BodyWriter.Advance(byteCount);
+                BodyWriter.Write("\r\n"u8);
+            }
+            else
+            {
+                var dest = BodyWriter.GetSpan(byteCount);
+                Encoding.UTF8.GetBytes(text, dest);
+                BodyWriter.Advance(byteCount);
+            }
             _hasStarted = true;
         }
         else

@@ -136,7 +136,7 @@ app.MapGet("/stream", async ctx => {
     });
 });
 
-var benchFilePath = Path.Combine(Path.GetTempPath(), "cosmo-bench-file.txt");
+var benchFilePath = Path.GetTempFileName();
 File.WriteAllText(benchFilePath, new string('A', 1024 * 64)); // 64KB file
 
 app.MapGet("/file", async ctx => {
