@@ -1,6 +1,7 @@
 using System.Reflection;
 using CosmoApiServer.Core.Auth;
 using CosmoApiServer.Core.Auth.Authorization;
+using CosmoApiServer.Core.Auth.OAuth;
 using CosmoApiServer.Core.Caching;
 using CosmoApiServer.Core.Controllers;
 using CosmoApiServer.Core.HealthChecks;
@@ -364,6 +365,46 @@ public sealed class CosmoWebApplicationBuilder
     public CosmoWebApplicationBuilder AddDistributedCache<TImpl>() where TImpl : class, IDistributedCache
     {
         _services.AddSingleton<IDistributedCache, TImpl>();
+        return this;
+    }
+
+    // ── Forwarded Headers ────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseForwardedHeaders(Action<ForwardedHeadersOptions>? configure = null)
+    {
+        var opts = new ForwardedHeadersOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new ForwardedHeadersMiddleware(opts));
+        return this;
+    }
+
+    // ── Request Decompression ────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseRequestDecompression(Action<RequestDecompressionOptions>? configure = null)
+    {
+        var opts = new RequestDecompressionOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new RequestDecompressionMiddleware(opts));
+        return this;
+    }
+
+    // ── Distributed Tracing (OpenTelemetry-compatible) ───────────────────────
+
+    public CosmoWebApplicationBuilder UseTracing(Action<TracingOptions>? configure = null)
+    {
+        var opts = new TracingOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new TracingMiddleware(opts));
+        return this;
+    }
+
+    // ── OAuth2 / OIDC ────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder UseOAuthAuthentication(Action<OAuthOptions> configure)
+    {
+        var opts = new OAuthOptions();
+        configure(opts);
+        _middlewarePipeline.UseInstance(new OAuthMiddleware(opts));
         return this;
     }
 

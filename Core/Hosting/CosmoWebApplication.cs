@@ -43,34 +43,34 @@ public sealed class CosmoWebApplication
 
     // ── Convention routing ─────────────────────────────────────────────────
 
-    public CosmoWebApplication MapGet(string template, RequestDelegate handler)
+    public RouteHandlerBuilder MapGet(string template, RequestDelegate handler)
     {
         _routeTable.Add(Http.HttpMethod.GET, template, handler);
-        return this;
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.GET, template, handler);
     }
 
-    public CosmoWebApplication MapPost(string template, RequestDelegate handler)
+    public RouteHandlerBuilder MapPost(string template, RequestDelegate handler)
     {
         _routeTable.Add(Http.HttpMethod.POST, template, handler);
-        return this;
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.POST, template, handler);
     }
 
-    public CosmoWebApplication MapPut(string template, RequestDelegate handler)
+    public RouteHandlerBuilder MapPut(string template, RequestDelegate handler)
     {
         _routeTable.Add(Http.HttpMethod.PUT, template, handler);
-        return this;
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.PUT, template, handler);
     }
 
-    public CosmoWebApplication MapDelete(string template, RequestDelegate handler)
+    public RouteHandlerBuilder MapDelete(string template, RequestDelegate handler)
     {
         _routeTable.Add(Http.HttpMethod.DELETE, template, handler);
-        return this;
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.DELETE, template, handler);
     }
 
-    public CosmoWebApplication MapPatch(string template, RequestDelegate handler)
+    public RouteHandlerBuilder MapPatch(string template, RequestDelegate handler)
     {
         _routeTable.Add(Http.HttpMethod.PATCH, template, handler);
-        return this;
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.PATCH, template, handler);
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────
