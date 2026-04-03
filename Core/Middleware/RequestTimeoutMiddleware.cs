@@ -18,7 +18,8 @@ public sealed class RequestTimeoutMiddleware(RequestTimeoutOptions options) : IM
             return;
         }
 
-        using var cts = CancellationTokenSource.CreateLinkedTokenSource(context.RequestAborted);
+        var originalAborted = context.RequestAborted;
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(originalAborted);
         cts.CancelAfter(options.DefaultTimeout);
         context.RequestAborted = cts.Token;
 
@@ -26,7 +27,7 @@ public sealed class RequestTimeoutMiddleware(RequestTimeoutOptions options) : IM
         {
             await next(context);
         }
-        catch (OperationCanceledException) when (cts.IsCancellationRequested && !context.RequestAborted.IsCancellationRequested)
+        catch (OperationCanceledException) when (cts.IsCancellationRequested && !originalAborted.IsCancellationRequested)
         {
             // Our timeout fired (not the client disconnecting)
             context.Response.StatusCode = 504;

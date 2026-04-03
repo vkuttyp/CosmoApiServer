@@ -1,3 +1,4 @@
+using System.Text.Json;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 
@@ -162,13 +163,14 @@ public static class TypedResults
     {
         ctx.Response.StatusCode = statusCode;
         ctx.Response.Headers["Content-Type"] = "application/problem+json";
-        ctx.Response.WriteJson(new
+        var bytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             type = type ?? "https://tools.ietf.org/html/rfc9110#section-15.6.1",
             title = title ?? "An error occurred",
             status = statusCode,
             detail
         });
+        ctx.Response.Write(bytes);
         return ValueTask.CompletedTask;
     };
 }

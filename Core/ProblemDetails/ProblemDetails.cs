@@ -63,7 +63,7 @@ public class ProblemDetails
         409 => "Conflict",
         422 => "Unprocessable Entity",
         429 => "Too Many Requests",
-        500 => "An error occurred while processing your request.",
+        500 => "Internal Server Error",
         503 => "Service Unavailable",
         _   => "An error occurred."
     };

@@ -79,7 +79,7 @@ public sealed class HubConnectionManager : IHubClients, IGroupManager
         var msg = JsonSerializer.Serialize(new
         {
             type = 1,
-            target = method,
+            target = JsonNamingPolicy.CamelCase.ConvertName(method),
             arguments = args
         }, JsonOptions);
         return Encoding.UTF8.GetBytes(msg + "\u001e");
