@@ -4,6 +4,7 @@ using System.Net.Security;
 using System.Net.Sockets;
 using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
+using System.Collections.Concurrent;
 using CosmoApiServer.Core.Middleware;
 
 namespace CosmoApiServer.Core.Transport;
@@ -19,6 +20,10 @@ public sealed class PipelineHttpServer : IAsyncDisposable
     private Socket? _listener;
     private QuicListener? _quicListener;
     private CancellationTokenSource? _cts;
+    private readonly ConcurrentDictionary<Socket, byte> _activeSockets = new();
+#pragma warning disable CA1416
+    private readonly ConcurrentDictionary<QuicConnection, byte> _activeQuicConnections = new();
+#pragma warning restore CA1416
     private static readonly SslApplicationProtocol Http3Protocol = new("h3");
 
     private static bool SupportsQuicPlatform() =>
@@ -145,7 +150,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 #pragma warning restore CA1416
     }
 
-    private static async ValueTask HandleConnectionAsync(
+    private async ValueTask HandleConnectionAsync(
         Socket socket,
         RequestDelegate pipeline,
         IServiceProvider services,
@@ -155,6 +160,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         int connectionTimeoutSeconds,
         CancellationToken ct)
     {
+        _activeSockets.TryAdd(socket, 0);
         socket.NoDelay = true;
         var remoteIp = (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? "unknown";
         Stream stream = new NetworkStream(socket, ownsSocket: true);
@@ -205,11 +211,12 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
         finally
         {
+            _activeSockets.TryRemove(socket, out _);
             await stream.DisposeAsync();
         }
     }
 
-    private static async ValueTask HandleQuicConnectionAsync(
+    private async ValueTask HandleQuicConnectionAsync(
         QuicConnection connection,
         RequestDelegate pipeline,
         IServiceProvider services,
@@ -217,6 +224,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         CancellationToken ct)
     {
 #pragma warning disable CA1416
+        _activeQuicConnections.TryAdd(connection, 0);
         using var connectionCts = connectionTimeoutSeconds > 0
             ? CancellationTokenSource.CreateLinkedTokenSource(ct)
             : null;
@@ -234,6 +242,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
         finally
         {
+            _activeQuicConnections.TryRemove(connection, out _);
             await connection.DisposeAsync();
         }
 #pragma warning restore CA1416
@@ -243,9 +252,17 @@ public sealed class PipelineHttpServer : IAsyncDisposable
     {
         _cts?.Cancel();
         _listener?.Close();
+        foreach (var socket in _activeSockets.Keys)
+        {
+            try { socket.Dispose(); } catch { }
+        }
         if (SupportsQuicPlatform())
         {
 #pragma warning disable CA1416
+            foreach (var connection in _activeQuicConnections.Keys)
+            {
+                try { connection.DisposeAsync().AsTask().GetAwaiter().GetResult(); } catch { }
+            }
             _quicListener?.DisposeAsync().AsTask().GetAwaiter().GetResult();
 #pragma warning restore CA1416
         }

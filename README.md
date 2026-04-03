@@ -115,7 +115,7 @@ Key design decisions:
 - Middleware pipeline (`UseLogging`, `UseCors`, `UseJwtAuthentication`, custom `IMiddleware`)
 - Built-in scheduler via `AddScheduler()` / `UseScheduler(...)`
 - WebSockets (`UseWebSockets()` + `context.AcceptWebSocketAsync()`)
-- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, and ASP.NET SignalR client-compatible JSON/WebSocket support for the standard path
+- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, and ASP.NET SignalR client-compatible JSON/WebSocket support for the standard path, including server streaming
 - **gRPC** — 5-byte framing, `GrpcServiceBase`, `MapGrpcService<T>()`, unary + server-streaming contexts
 - **Health Checks** — `AddHealthChecks()`, `AddCheck<T>()`, `/health` endpoint with JSON report
 - **Problem Details** — RFC 7807 `IProblemDetailsService`, `AddProblemDetails()`
@@ -868,15 +868,16 @@ Current compatibility scope:
 - Invoke / return values
 - Multi-argument invocation
 - One-way `SendAsync(...)`
+- Server-streaming hub methods
+- Stream failure propagation
 - `IHubContext<THub>` sends to all, specific clients, and groups
 - Group membership and `OthersInGroup`
 - Disconnect callback and invocation error propagation
+- Reconnect-enabled clients on the standard path, including reconnect after server restart
 
 Still intentionally out of scope for now:
 
-- Streaming hub methods
 - Invocation cancellation / stream cancellation messages
-- Automatic reconnect after transport failure
 - MessagePack hub protocol
 
 ---

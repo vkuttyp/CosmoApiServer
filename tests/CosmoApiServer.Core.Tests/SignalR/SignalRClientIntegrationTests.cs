@@ -515,6 +515,167 @@ public class SignalRClientIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task SignalR_AspNetClient_StreamAsync_SurfacesStreamFailure()
+    {
+        int port = GetFreeTcpPort();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var builder = CosmoWebApplicationBuilder.Create();
+        builder.ListenOn(port);
+        builder.AddSignalR();
+
+        var app = builder.Build();
+        app.MapHub<InteropHub>("/chat");
+
+        var runTask = Task.Run(() => app.RunAsync(cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, cts.Token);
+
+            await using var conn = new HubConnectionBuilder()
+                .WithUrl($"http://localhost:{port}/chat")
+                .Build();
+
+            await conn.StartAsync(cts.Token);
+
+            var items = new List<int>();
+            var ex = await Assert.ThrowsAsync<Microsoft.AspNetCore.SignalR.HubException>(async () =>
+            {
+                await foreach (var item in conn.StreamAsync<int>("CountThenFail", cts.Token))
+                    items.Add(item);
+            });
+
+            Assert.Equal([1, 2], items);
+            Assert.Contains("stream-boom", ex.Message, StringComparison.OrdinalIgnoreCase);
+
+            await conn.StopAsync(cts.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await runTask; } catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task SignalR_AspNetClient_WithAutomaticReconnect_CanStart_AndInvoke()
+    {
+        int port = GetFreeTcpPort();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var builder = CosmoWebApplicationBuilder.Create();
+        builder.ListenOn(port);
+        builder.AddSignalR();
+
+        var app = builder.Build();
+        app.MapHub<InteropHub>("/chat");
+
+        var runTask = Task.Run(() => app.RunAsync(cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, cts.Token);
+
+            await using var conn = new HubConnectionBuilder()
+                .WithUrl($"http://localhost:{port}/chat")
+                .WithAutomaticReconnect()
+                .Build();
+
+            await conn.StartAsync(cts.Token);
+            var echoed = await conn.InvokeAsync<string>("Echo", "reconnect-enabled", cts.Token);
+            Assert.Equal("reconnect-enabled", echoed);
+
+            await conn.StopAsync(cts.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await runTask; } catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task SignalR_AspNetClient_WithAutomaticReconnect_Reconnects_AfterServerRestart()
+    {
+        int port = GetFreeTcpPort();
+        using var overallCts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+
+        static CosmoWebApplication CreateApp(int port)
+        {
+            var builder = CosmoWebApplicationBuilder.Create();
+            builder.ListenOn(port);
+            builder.AddSignalR();
+
+            var app = builder.Build();
+            app.MapHub<InteropHub>("/chat");
+            return app;
+        }
+
+        var app1 = CreateApp(port);
+        using var app1Cts = CancellationTokenSource.CreateLinkedTokenSource(overallCts.Token);
+        var runTask1 = Task.Run(() => app1.RunAsync(app1Cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, overallCts.Token);
+
+            await using var conn = new HubConnectionBuilder()
+                .WithUrl($"http://localhost:{port}/chat")
+                .WithAutomaticReconnect([TimeSpan.Zero, TimeSpan.FromMilliseconds(200), TimeSpan.FromMilliseconds(500)])
+                .Build();
+
+            var reconnecting = new TaskCompletionSource<Exception?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var reconnected = new TaskCompletionSource<string?>(TaskCreationOptions.RunContinuationsAsynchronously);
+            conn.Reconnecting += ex =>
+            {
+                reconnecting.TrySetResult(ex);
+                return Task.CompletedTask;
+            };
+            conn.Reconnected += connectionId =>
+            {
+                reconnected.TrySetResult(connectionId);
+                return Task.CompletedTask;
+            };
+
+            await conn.StartAsync(overallCts.Token);
+            var before = await conn.InvokeAsync<string>("Echo", "before-restart", overallCts.Token);
+            Assert.Equal("before-restart", before);
+
+            app1Cts.Cancel();
+            try { await runTask1; } catch (OperationCanceledException) { }
+
+            var reconnectingWinner = await Task.WhenAny(reconnecting.Task, Task.Delay(TimeSpan.FromSeconds(5), overallCts.Token));
+            Assert.Same(reconnecting.Task, reconnectingWinner);
+
+            var app2 = CreateApp(port);
+            using var app2Cts = CancellationTokenSource.CreateLinkedTokenSource(overallCts.Token);
+            var runTask2 = Task.Run(() => app2.RunAsync(app2Cts.Token));
+
+            try
+            {
+                await WaitForServerAsync(port, overallCts.Token);
+
+                var reconnectedWinner = await Task.WhenAny(reconnected.Task, Task.Delay(TimeSpan.FromSeconds(10), overallCts.Token));
+                Assert.Same(reconnected.Task, reconnectedWinner);
+                Assert.False(string.IsNullOrWhiteSpace(await reconnected.Task));
+
+                var after = await conn.InvokeAsync<string>("Echo", "after-restart", overallCts.Token);
+                Assert.Equal("after-restart", after);
+            }
+            finally
+            {
+                app2Cts.Cancel();
+                try { await runTask2; } catch (OperationCanceledException) { }
+            }
+        }
+        finally
+        {
+            try { app1Cts.Cancel(); } catch { }
+            try { await runTask1; } catch (OperationCanceledException) { } catch { }
+        }
+    }
 
     private static async Task WaitForServerAsync(int port, CancellationToken ct)
     {
@@ -575,6 +736,15 @@ public class SignalRClientIntegrationTests
                 await Task.Yield();
                 yield return i;
             }
+        }
+
+        public async IAsyncEnumerable<int> CountThenFail()
+        {
+            yield return 1;
+            await Task.Yield();
+            yield return 2;
+            await Task.Yield();
+            throw new InvalidOperationException("stream-boom");
         }
     }
 
