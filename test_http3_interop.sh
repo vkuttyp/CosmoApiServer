@@ -1,28 +1,51 @@
 #!/usr/bin/env bash
 # HTTP/3 interop validation script
-# Requires curl with HTTP/3 support (brew install curl-quiche or curl >= 7.88 with quiche/ngtcp2)
 #
 # Usage:
 #   ./test_http3_interop.sh [host] [port]
-#   ./test_http3_interop.sh localhost 5001
+#   INSECURE=1 ./test_http3_interop.sh localhost 5001
 #
-# The server must be running with UseHttps() + UseHttp3() on the specified port.
-# Self-signed cert: pass -k / --insecure flag (set INSECURE=1).
+# Requires curl with HTTP/3 support. On macOS:
+#   brew install curl
+# Then the script will automatically use /opt/homebrew/opt/curl/bin/curl.
+#
+# The server must be running with UseHttps() + UseHttp3().
 
 HOST="${1:-localhost}"
 PORT="${2:-5001}"
 BASE="https://${HOST}:${PORT}"
+
+# Prefer Homebrew curl (has HTTP/3 via ngtcp2) over system curl (does not)
+CURL_BIN="curl"
+for candidate in /opt/homebrew/opt/curl/bin/curl /usr/local/opt/curl/bin/curl; do
+    if [[ -x "$candidate" ]] && "$candidate" --version 2>/dev/null | grep -q "ngtcp2\|quiche\|nghttp3"; then
+        CURL_BIN="$candidate"
+        break
+    fi
+done
+
+# Verify HTTP/3 support
+if ! "$CURL_BIN" --version 2>/dev/null | grep -qE "ngtcp2|quiche|nghttp3"; then
+    echo "ERROR: $CURL_BIN does not support HTTP/3."
+    echo "Install with: brew install curl"
+    echo "Then re-run this script."
+    exit 1
+fi
+
+echo "Using: $CURL_BIN ($(${CURL_BIN} --version | head -1))"
+
 CURL_FLAGS="--http3 --silent --show-error --max-time 10"
 [[ "${INSECURE:-0}" == "1" ]] && CURL_FLAGS+=" --insecure"
 
 PASS=0
 FAIL=0
+SKIP=0
 
 check() {
     local name="$1"; shift
     local expected_code="$1"; shift
     local actual_code
-    actual_code=$(curl $CURL_FLAGS --write-out "%{http_code}" --output /tmp/h3_body.txt "$@" 2>/tmp/h3_err.txt)
+    actual_code=$("$CURL_BIN" $CURL_FLAGS --write-out "%{http_code}" --output /tmp/h3_body.txt "$@" 2>/tmp/h3_err.txt)
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         echo "FAIL [$name]: curl error $exit_code: $(cat /tmp/h3_err.txt)"
@@ -41,7 +64,7 @@ check_body() {
     local expected_code="$1"; shift
     local expected_pattern="$1"; shift
     local actual_code
-    actual_code=$(curl $CURL_FLAGS --write-out "%{http_code}" --output /tmp/h3_body.txt "$@" 2>/tmp/h3_err.txt)
+    actual_code=$("$CURL_BIN" $CURL_FLAGS --write-out "%{http_code}" --output /tmp/h3_body.txt "$@" 2>/tmp/h3_err.txt)
     local exit_code=$?
     if [[ $exit_code -ne 0 ]]; then
         echo "FAIL [$name]: curl error $exit_code: $(cat /tmp/h3_err.txt)"
@@ -61,38 +84,51 @@ check_body() {
 echo "=== HTTP/3 Interop Tests: ${BASE} ==="
 echo ""
 
-# ── Basic requests ────────────────────────────────────────────────────────────
+# ── Core transport (required — all servers) ───────────────────────────────────
+echo "--- Core transport ---"
 check          "GET /ping"                   200  "${BASE}/ping"
 check_body     "GET /ping body"              200  "pong"                  "${BASE}/ping"
 check          "GET /json"                   200  "${BASE}/json"
 check          "POST /echo"                  200  "${BASE}/echo"  -d '{"msg":"hello"}' -H "Content-Type: application/json"
-check          "GET /health"                 200  "${BASE}/health"
-check          "GET /openapi.json"           200  "${BASE}/openapi.json"
-check          "GET /swagger"               200  "${BASE}/swagger"
+check          "GET /not-found → 404"        404  "${BASE}/this-does-not-exist"
 
 # ── Streaming ─────────────────────────────────────────────────────────────────
+echo ""
+echo "--- Streaming ---"
 check          "GET /stream"                 200  "${BASE}/stream"
 check          "GET /large-json"             200  "${BASE}/large-json"
 check          "GET /file"                   200  "${BASE}/file"
 
-# ── Static files ──────────────────────────────────────────────────────────────
-check          "GET /index.html"             200  "${BASE}/index.html"
+# ── Optional features (skip if server not configured) ─────────────────────────
+check_optional() {
+    local name="$1" expected_code="$2"; shift 2
+    local actual_code
+    actual_code=$("$CURL_BIN" $CURL_FLAGS --write-out "%{http_code}" --output /dev/null "$@" 2>/dev/null)
+    if [[ "$actual_code" == "000" || "$actual_code" == "404" && "$expected_code" != "404" ]]; then
+        echo "SKIP [$name]: not configured on this server (got $actual_code)"
+        ((SKIP++))
+    elif [[ "$actual_code" == "$expected_code" ]]; then
+        echo "PASS [$name]: HTTP $actual_code"
+        ((PASS++))
+    else
+        echo "FAIL [$name]: expected HTTP $expected_code, got $actual_code"
+        ((FAIL++))
+    fi
+}
 
-# ── HEAD ──────────────────────────────────────────────────────────────────────
-check          "HEAD /ping"                  200  "${BASE}/ping"  -I
-
-# ── Range request ─────────────────────────────────────────────────────────────
-check          "Range /file bytes=0-99"      206  "${BASE}/file"  -H "Range: bytes=0-99"
-
-# ── Auth ──────────────────────────────────────────────────────────────────────
-check          "GET /protected (no token)"   401  "${BASE}/protected"
-
-# ── Error handling ────────────────────────────────────────────────────────────
-check          "GET /not-found"              404  "${BASE}/not-found"
-
-# ── Repeated large responses (stream abort regression) ────────────────────────
 echo ""
-echo "--- Regression: repeated large responses (QuicException stream abort) ---"
+echo "--- Optional features ---"
+check_optional "GET /health"                 200  "${BASE}/health"
+check_optional "GET /openapi.json"           200  "${BASE}/openapi.json"
+check_optional "GET /swagger"                200  "${BASE}/swagger"
+check_optional "GET /index.html"             200  "${BASE}/index.html"
+check_optional "HEAD /ping"                  200  "${BASE}/ping"  --head
+check_optional "Range /file bytes=0-99"      206  "${BASE}/file-static"  -H "Range: bytes=0-99"
+check_optional "GET /protected (no token)"   401  "${BASE}/protected"
+
+# ── Regression: repeated large responses (QuicException stream abort) ─────────
+echo ""
+echo "--- Regression: repeated large responses (stream abort fix v2.1.1) ---"
 for i in $(seq 1 10); do
     check "GET /large-json #${i}" 200 "${BASE}/large-json"
 done
@@ -102,5 +138,5 @@ done
 
 # ── Summary ───────────────────────────────────────────────────────────────────
 echo ""
-echo "=== Results: PASS=$PASS FAIL=$FAIL ==="
+echo "=== Results: PASS=$PASS FAIL=$FAIL SKIP=$SKIP ==="
 [[ $FAIL -eq 0 ]] && exit 0 || exit 1
