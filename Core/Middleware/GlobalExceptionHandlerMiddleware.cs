@@ -33,6 +33,15 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
 
         try
         {
+            // Try registered IExceptionHandler implementations first (in registration order)
+            var handlers = context.RequestServices.GetServices<IExceptionHandler>();
+            foreach (var handler in handlers)
+            {
+                if (await handler.TryHandleAsync(context, exception, context.RequestAborted))
+                    return;
+            }
+
+            // Fall back to ProblemDetails or plain JSON
             var problemDetailsService = context.RequestServices.GetService<IProblemDetailsService>();
             if (problemDetailsService is not null)
             {

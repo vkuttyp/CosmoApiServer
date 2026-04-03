@@ -114,9 +114,30 @@ Key design decisions:
 - `IAsyncEnumerable<T>` → NDJSON streaming response
 - Middleware pipeline (`UseLogging`, `UseCors`, `UseJwtAuthentication`, custom `IMiddleware`)
 - Built-in scheduler via `AddScheduler()` / `UseScheduler(...)`
-- WebSockets (`HttpContext.AcceptWebSocketAsync()`)
+- WebSockets (`UseWebSockets()` + `context.AcceptWebSocketAsync()`)
+- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, JSON protocol
+- **gRPC** — 5-byte framing, `GrpcServiceBase`, `MapGrpcService<T>()`, unary + server-streaming contexts
+- **Health Checks** — `AddHealthChecks()`, `AddCheck<T>()`, `/health` endpoint with JSON report
+- **Problem Details** — RFC 7807 `IProblemDetailsService`, `AddProblemDetails()`
+- **Policy-Based Authorization** — `AddAuthorization()`, `[Authorize(Policy="...")]`, `IAuthorizationService`
+- **JWT + OAuth/OIDC** — `UseJwtAuthentication()`, `UseOAuthAuthentication()` with JWKS discovery
+- **Memory Cache** — `AddMemoryCache()`, `IMemoryCache`
+- **Distributed Cache** — `AddDistributedMemoryCache()`, `IDistributedCache`
+- **Sessions** — `UseSession()`, cookie-backed in-memory sessions with idle timeout
+- **Response Caching** — `UseResponseCaching()` with ETag/304 support
+- **Response Compression** — `UseResponseCompression()` (GZip/Deflate/Brotli)
+- **Request Decompression** — `UseRequestDecompression()`
+- **Request Timeouts** — `UseRequestTimeouts()`, 504 on breach
+- **Forwarded Headers** — `UseForwardedHeaders()` (X-Forwarded-For/Host/Proto)
+- **Distributed Tracing** — `UseTracing()`, W3C `traceparent`, `ActivitySource` (OpenTelemetry-compatible)
+- **Endpoint Filters** — `AddEndpointFilter()` on minimal-API routes
+- **TypedResults** — `TypedResults.Ok/Created/NotFound/Problem/Stream/…` factory methods
+- **IExceptionHandler** — `AddExceptionHandler<T>()`, structured exception handling in registration order
+- **IHostedService** — `AddHostedService<T>()`, start/stop lifecycle tied to the server
+- **IHttpClientFactory** — `AddHttpClient()`, named and typed clients
+- **IHttpContextAccessor** — `AddHttpContextAccessor()`, `AsyncLocal`-based ambient context
 - OpenAPI & Swagger UI auto-generation
-- Security Middlewares (CSRF, HSTS, HTTPS Redirection, CSRF Validation)
+- Security Middlewares (CSRF, HSTS, HTTPS Redirection)
 - Model Validation via DataAnnotations (Controllers & Components)
 - **Zero-Copy File Serving** — `HttpResponse.SendFileAsync()` streams directly from disk to socket
 

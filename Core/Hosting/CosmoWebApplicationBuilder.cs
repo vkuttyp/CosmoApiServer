@@ -14,6 +14,7 @@ using CosmoApiServer.Core.SignalR;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Hosting;
@@ -315,6 +316,48 @@ public sealed class CosmoWebApplicationBuilder
         configure?.Invoke(opts);
         _services.AddSingleton(opts);
         _services.AddScoped<IAuthorizationService, DefaultAuthorizationService>();
+        return this;
+    }
+
+    // ── WebSockets ────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Enables WebSocket support. Raw WebSockets are always available via
+    /// <c>context.AcceptWebSocketAsync()</c>; calling this method is optional
+    /// but signals intent and matches the ASP.NET Core API surface.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseWebSockets()
+    {
+        // WebSocket upgrades are handled natively by the transport.
+        // No additional middleware needed — this method exists for API parity.
+        return this;
+    }
+
+    // ── Exception Handlers ────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddExceptionHandler<T>() where T : class, IExceptionHandler
+    {
+        _services.AddSingleton<IExceptionHandler, T>();
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddExceptionHandler(IExceptionHandler handler)
+    {
+        _services.AddSingleton(handler);
+        return this;
+    }
+
+    // ── Hosted Services ───────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddHostedService<T>() where T : class, IHostedService
+    {
+        _services.AddSingleton<IHostedService, T>();
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddHostedService<T>(Func<IServiceProvider, T> factory) where T : class, IHostedService
+    {
+        _services.AddSingleton<IHostedService>(factory);
         return this;
     }
 
