@@ -31,18 +31,18 @@ Sequential · 1,000 rounds · keep-alive
 
 | Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
 |---|---|---|---|---|
-| GET /ping | **6,906 ops/s** | 6,868 ops/s | 0.14 ms | **+1%** |
-| GET /json | **6,859 ops/s** | 5,534 ops/s | 0.15 ms | **+24%** |
-| GET /route/{id} | **6,766 ops/s** | 5,956 ops/s | 0.15 ms | **+14%** |
-| POST /echo | **7,463 ops/s** | 5,048 ops/s | 0.13 ms | **+48%** |
-| GET /large-json (1000 items) | **1,325 ops/s** | 1,065 ops/s | 0.75 ms | **+24%** |
-| GET /query | **8,881 ops/s** | 7,199 ops/s | 0.11 ms | **+23%** |
-| POST /form | **8,326 ops/s** | 6,680 ops/s | 0.12 ms | **+25%** |
-| GET /headers | **7,782 ops/s** | 7,052 ops/s | 0.13 ms | **+10%** |
-| GET /stream (NDJSON, 10 items) | 5,811 ops/s | **7,294 ops/s** | 0.17 ms | −20% |
-| GET /file (64 KB) | **3,448 ops/s** | 2,189 ops/s | 0.29 ms | **+58%** |
+| GET /ping | **7,605 ops/s** | 6,154 ops/s | 0.13 ms | **+24%** |
+| GET /json | **7,530 ops/s** | 6,238 ops/s | 0.13 ms | **+21%** |
+| GET /route/{id} | **7,663 ops/s** | 6,390 ops/s | 0.13 ms | **+20%** |
+| POST /echo | **7,184 ops/s** | 6,274 ops/s | 0.14 ms | **+15%** |
+| GET /large-json (1000 items) | **1,337 ops/s** | 1,142 ops/s | 0.75 ms | **+17%** |
+| GET /query | **8,231 ops/s** | 6,897 ops/s | 0.12 ms | **+19%** |
+| POST /form | **7,337 ops/s** | 6,120 ops/s | 0.14 ms | **+20%** |
+| GET /headers | **7,337 ops/s** | 6,204 ops/s | 0.14 ms | **+18%** |
+| GET /stream (NDJSON, 10 items) | **8,177 ops/s** | 6,892 ops/s | 0.12 ms | **+19%** |
+| GET /file (64 KB) | **3,422 ops/s** | 2,150 ops/s | 0.29 ms | **+59%** |
 
-**9 of 10 scenarios win** on the Windows HTTP/1.1 run. The `/stream` gap on Windows (pre-2.0.7) has since been fixed — see the macOS numbers for the updated result after the flush-coalescing optimization.
+**10 of 10 scenarios win** on Windows. The `/stream` result flipped from −20% (pre-2.0.7) to +19% after the flush-coalescing fix.
 
 ### Windows HTTP/3
 
@@ -50,16 +50,16 @@ Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffi
 
 | Scenario | CosmoApiServer HTTP/3 | P50 |
 |---|---|---|
-| GET /ping | 2,331 ops/s | 0.43 ms |
-| GET /json | 2,453 ops/s | 0.41 ms |
-| GET /route/{id} | 2,865 ops/s | 0.35 ms |
-| POST /echo | 2,770 ops/s | 0.36 ms |
-| GET /large-json (1000 items) | 1,134 ops/s | 0.88 ms |
-| GET /query | 3,771 ops/s | 0.27 ms |
-| POST /form | 2,970 ops/s | 0.34 ms |
-| GET /headers | 6,042 ops/s | 0.17 ms |
-| GET /stream (NDJSON, 10 items) | 2,303 ops/s | 0.43 ms |
-| GET /file (64 KB) | 1,548 ops/s | 0.65 ms |
+| GET /ping | 2,481 ops/s | 0.40 ms |
+| GET /json | 2,605 ops/s | 0.38 ms |
+| GET /route/{id} | 2,494 ops/s | 0.40 ms |
+| POST /echo | 2,218 ops/s | 0.45 ms |
+| GET /large-json (1000 items) | 1,081 ops/s | 0.93 ms |
+| GET /query | 3,276 ops/s | 0.31 ms |
+| POST /form | 2,701 ops/s | 0.37 ms |
+| GET /headers | 6,116 ops/s | 0.16 ms |
+| GET /stream (NDJSON, 10 items) | 2,581 ops/s | 0.39 ms |
+| GET /file (64 KB) | 1,464 ops/s | 0.68 ms |
 
 Notable improvements vs the pre-optimization baseline: `/large-json` +66%, `/stream` +33%, `/file` +57%. The remaining work is stream-reuse stability under repeated larger responses.
 
