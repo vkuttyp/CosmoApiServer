@@ -44,6 +44,23 @@ Sequential · 1,000 rounds · keep-alive
 
 **10 of 10 scenarios win** on Windows. The `/stream` result flipped from −20% (pre-2.0.7) to +19% after the flush-coalescing fix.
 
+### Latest Run (Local Mac)
+
+| Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
+|---|---|---|---|---|
+| GET /ping | **10,649.6 ops/s** | 8,163.3 ops/s | 0.09 ms | **+31%** |
+| GET /json | **9,784.7 ops/s** | 7,315.3 ops/s | 0.10 ms | **+34%** |
+| GET /route/{id} | **10,905.1 ops/s** | 8,064.5 ops/s | 0.09 ms | **+35%** |
+| POST /echo | **9,328.4 ops/s** | 8,230.5 ops/s | 0.11 ms | **+13%** |
+| GET /large-json (1000 items) | **2,235.6 ops/s** | 1,615.5 ops/s | 0.45 ms | **+38%** |
+| GET /query | **10,661.0 ops/s** | 9,191.2 ops/s | 0.09 ms | **+16%** |
+| POST /form | **8,525.1 ops/s** | 7,518.8 ops/s | 0.12 ms | **+13%** |
+| GET /headers | **9,551.1 ops/s** | 8,045.1 ops/s | 0.10 ms | **+19%** |
+| GET /stream (NDJSON, 10 items) | **10,752.7 ops/s** | 8,748.9 ops/s | 0.09 ms | **+23%** |
+| GET /file (64 KB) | **5,980.9 ops/s** | 4,319.7 ops/s | 0.17 ms | **+39%** |
+
+HTTP/3 was skipped on this machine because runtime QUIC support is unavailable (`PlatformNotSupportedException: HTTP/3 requires runtime QUIC support on this platform.`).
+
 ### Windows HTTP/3
 
 Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffic, but it is **not stable enough for production** yet. The latest run (post Phase 6 optimization) showed significant improvements across all scenarios with 1000/1000 successful requests:
