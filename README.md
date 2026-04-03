@@ -974,7 +974,7 @@ public sealed class MetricsCollector : IHostedService
 
 ### v2.1.3
 - **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
-- **HTTP/3 logging** — set `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` during the Windows benchmark so forced shutdowns no longer emit `QuicException: Stream aborted by peer (268)` noise; headless Windows HTTP/3 runs are now clean.
+- **HTTP/3 logging & metrics** — `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` keeps shutdown noise at zero, and the Windows HTTP/3 repeat table documents clean ops/sec (e.g., `/ping` 2,375.3 ops/s, `/json` 2,448.6 ops/s, `/large-json` 1,082.3 ops/s) so downstream consumers can see the stable metrics in this changelog entry.
 
 ### v2.1.1
 - **Output Caching** — `AddOutputCache()` + `UseOutputCaching()`, `IOutputCacheStore`, `InMemoryOutputCacheStore`, vary-by-header/query, tag-based eviction, `X-Output-Cache: HIT/MISS`.
