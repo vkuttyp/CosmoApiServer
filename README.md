@@ -80,6 +80,23 @@ Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffi
 
 Notable improvements vs the pre-optimization baseline: `/large-json` +66%, `/stream` +33%, `/file` +57%. The remaining work is stream-reuse stability under repeated larger responses.
 
+### Windows HTTP/3 Repeat Run
+
+| Scenario | CosmoApiServer HTTP/3 | P50 |
+|---|---|---|
+| GET /ping | **2,375.3 ops/s** | 0.39 ms |
+| GET /json | **2,448.6 ops/s** | 0.40 ms |
+| GET /route/{id} | **2,627.4 ops/s** | 0.38 ms |
+| POST /echo | **2,871.1 ops/s** | 0.37 ms |
+| GET /large-json (1000 items) | **1,082.3 ops/s** | 0.92 ms |
+| GET /query | **4,159.7 ops/s** | 0.24 ms |
+| POST /form | **2,819.3 ops/s** | 0.35 ms |
+| GET /headers | **6,045.9 ops/s** | 0.17 ms |
+| GET /stream (NDJSON, 10 items) | **2,076.8 ops/s** | 0.37 ms |
+| GET /file (64 KB) | **1,346.8 ops/s** | 0.74 ms |
+
+These repeated Windows HTTP/3 numbers now run without the earlier shutdown noise because `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` suppresses `QuicException` messages during teardown.
+
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |
 |---|---|---|---|
@@ -954,6 +971,10 @@ public sealed class MetricsCollector : IHostedService
 - **Fix: SignalR target name casing** — `HubConnectionManager.BuildInvocation` now applies `JsonNamingPolicy.CamelCase` to the method name so clients receive `"sendMessage"` instead of `"SendMessage"`.
 - **Fix: `ProblemDetails.TitleForStatus(500)`** — Changed from a non-standard phrase to the standard HTTP reason phrase `"Internal Server Error"`.
 - 222 unit tests (up from 215).
+
+### v2.1.3
+- **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
+- **HTTP/3 logging** — set `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` during the Windows benchmark so forced shutdowns no longer emit `QuicException: Stream aborted by peer (268)` noise; headless Windows HTTP/3 runs are now clean.
 
 ### v2.1.1
 - **Output Caching** — `AddOutputCache()` + `UseOutputCaching()`, `IOutputCacheStore`, `InMemoryOutputCacheStore`, vary-by-header/query, tag-based eviction, `X-Output-Cache: HIT/MISS`.
