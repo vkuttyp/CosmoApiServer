@@ -319,6 +319,30 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    // ── Antiforgery ───────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddAntiforgery(Action<AntiforgeryOptions>? configure = null)
+    {
+        var opts = new AntiforgeryOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton(opts);
+        _services.AddSingleton<IAntiforgeryService, DefaultAntiforgeryService>();
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseAntiforgery()
+    {
+        _middlewarePipeline.Use(next => async ctx =>
+        {
+            var svc = ctx.RequestServices.GetService<IAntiforgeryService>();
+            if (svc is not null)
+                await new AntiforgeryMiddleware(svc).InvokeAsync(ctx, next);
+            else
+                await next(ctx);
+        });
+        return this;
+    }
+
     // ── WebSockets ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -376,6 +400,31 @@ public sealed class CosmoWebApplicationBuilder
         var opts = new RequestTimeoutOptions();
         configure?.Invoke(opts);
         _middlewarePipeline.UseInstance(new RequestTimeoutMiddleware(opts));
+        return this;
+    }
+
+    // ── Output Caching ────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddOutputCache(Action<OutputCacheOptions>? configure = null)
+    {
+        var opts = new OutputCacheOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton(opts);
+        _services.AddSingleton<IOutputCacheStore, InMemoryOutputCacheStore>();
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseOutputCaching()
+    {
+        _middlewarePipeline.Use(next => async ctx =>
+        {
+            var store = ctx.RequestServices.GetService<IOutputCacheStore>();
+            var opts = ctx.RequestServices.GetService<OutputCacheOptions>() ?? new OutputCacheOptions();
+            if (store is not null)
+                await new OutputCachingMiddleware(store, opts).InvokeAsync(ctx, next);
+            else
+                await next(ctx);
+        });
         return this;
     }
 

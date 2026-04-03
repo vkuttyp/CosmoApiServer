@@ -125,6 +125,8 @@ Key design decisions:
 - **Distributed Cache** — `AddDistributedMemoryCache()`, `IDistributedCache`
 - **Sessions** — `UseSession()`, cookie-backed in-memory sessions with idle timeout
 - **Response Caching** — `UseResponseCaching()` with ETag/304 support
+- **Output Caching** — `AddOutputCache()` + `UseOutputCaching()`, vary-by-header/query, tag-based invalidation, `X-Output-Cache: HIT/MISS`
+- **Antiforgery** — `AddAntiforgery()` + `UseAntiforgery()`, cookie+header/form token pattern, `IAntiforgeryService`, `[ValidateAntiforgery]`
 - **Response Compression** — `UseResponseCompression()` (GZip/Deflate/Brotli)
 - **Request Decompression** — `UseRequestDecompression()`
 - **Request Timeouts** — `UseRequestTimeouts()`, 504 on breach

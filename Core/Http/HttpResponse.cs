@@ -72,10 +72,18 @@ public sealed class HttpResponse
         _headersWritten = true;
     }
 
+    /// <summary>
+    /// When non-null, every Write() call also appends to this list.
+    /// Used by output caching middleware to capture the response body.
+    /// </summary>
+    internal List<byte>? BodyCapture { get; set; }
+
     public void Write(byte[] data) => Write(data.AsSpan());
 
     public void Write(ReadOnlySpan<byte> data)
     {
+        BodyCapture?.AddRange(data.ToArray());
+
         if (BodyWriter != null)
         {
             EnsureHeadersWritten();
@@ -356,6 +364,7 @@ public sealed class HttpResponse
         _hasStarted = false;
         _isChunked = false;
         _transportHandled = false;
+        BodyCapture = null;
     }
 
     /// <summary>
