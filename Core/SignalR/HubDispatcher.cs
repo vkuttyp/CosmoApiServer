@@ -1,10 +1,14 @@
+using System.Buffers;
+using System.Collections.Concurrent;
+using System.Net;
 using System.Net.WebSockets;
 using System.Reflection;
 using System.Text;
 using System.Text.Json;
-using System.Net;
-using System.Collections;
 using CosmoApiServer.Core.Http;
+using Microsoft.AspNetCore.Connections;
+using Microsoft.AspNetCore.SignalR;
+using Microsoft.AspNetCore.SignalR.Protocol;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CosmoApiServer.Core.SignalR;
@@ -16,6 +20,12 @@ namespace CosmoApiServer.Core.SignalR;
 public sealed class HubDispatcher<THub> where THub : Hub
 {
     private static readonly JsonSerializerOptions JsonOptions = new() { PropertyNameCaseInsensitive = true };
+    private static readonly IReadOnlyDictionary<string, IHubProtocol> Protocols =
+        new Dictionary<string, IHubProtocol>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["json"] = new JsonHubProtocol(),
+            ["messagepack"] = new MessagePackHubProtocol()
+        };
     private readonly Dictionary<string, string> _pendingConnections = new(StringComparer.Ordinal);
 
     private readonly HubConnectionManager _manager;
@@ -72,10 +82,12 @@ public sealed class HubDispatcher<THub> where THub : Hub
     private async Task RunConnectionAsync(HttpContext httpContext, Stream stream, string connectionId)
     {
         using var cosmoSocket = new CosmoWebSocket(stream);
-        if (!await PerformHandshakeAsync(cosmoSocket, CancellationToken.None))
+        var protocol = await PerformHandshakeAsync(cosmoSocket, CancellationToken.None);
+        if (protocol is null)
             return;
 
         var hubConn = new HubConnection(connectionId, cosmoSocket);
+        hubConn.Protocol = protocol;
         _manager.Add(connectionId, hubConn);
 
         var hub = ActivatorUtilities.CreateInstance<THub>(httpContext.RequestServices);
@@ -86,11 +98,13 @@ public sealed class HubDispatcher<THub> where THub : Hub
         await hub.OnConnectedAsync();
 
         Exception? disconnectEx = null;
-        var activeStreams = new Dictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
+        var activeStreams = new ConcurrentDictionary<string, CancellationTokenSource>(StringComparer.Ordinal);
+        var backgroundOperations = new ConcurrentBag<Task>();
         try
         {
             var buffer = new byte[64 * 1024];
-            var sb = new StringBuilder();
+            byte[] pending = [];
+            var binder = new ReflectionInvocationBinder(_methods);
 
             while (true)
             {
@@ -100,14 +114,15 @@ public sealed class HubDispatcher<THub> where THub : Hub
 
                 if (result.MessageType == WebSocketMessageType.Close) break;
 
-                sb.Append(Encoding.UTF8.GetString(buffer, 0, result.Count));
-                if (!result.EndOfMessage) continue;
+                pending = Append(pending, buffer.AsSpan(0, result.Count));
+                var sequence = new ReadOnlySequence<byte>(pending);
 
-                var raw = sb.ToString();
-                sb.Clear();
+                while (protocol.TryParseMessage(ref sequence, binder, out var message))
+                {
+                    await DispatchMessageAsync(hub, hubConn, activeStreams, backgroundOperations, message, CancellationToken.None);
+                }
 
-                foreach (var frame in raw.Split('\u001e', StringSplitOptions.RemoveEmptyEntries))
-                    await DispatchFrameAsync(hub, hubConn, activeStreams, frame, CancellationToken.None);
+                pending = sequence.ToArray();
             }
         }
         catch (Exception ex)
@@ -118,6 +133,12 @@ public sealed class HubDispatcher<THub> where THub : Hub
         {
             foreach (var streamCts in activeStreams.Values)
                 streamCts.Cancel();
+
+            while (backgroundOperations.TryTake(out var op))
+            {
+                try { await op; } catch { }
+            }
+
             foreach (var streamCts in activeStreams.Values)
                 streamCts.Dispose();
 
@@ -128,52 +149,37 @@ public sealed class HubDispatcher<THub> where THub : Hub
         }
     }
 
-    private static async Task<bool> PerformHandshakeAsync(CosmoWebSocket ws, CancellationToken ct)
+    private static async Task<IHubProtocol?> PerformHandshakeAsync(CosmoWebSocket ws, CancellationToken ct)
     {
         var buf = new byte[256];
         var result = await ws.ReceiveAsync(buf.AsMemory(), ct);
         if (result.MessageType == WebSocketMessageType.Close || result.Count == 0)
-            return false;
+            return null;
 
-        var payload = Encoding.UTF8.GetString(buf, 0, result.Count);
-        var frame = payload.Split('\u001e', StringSplitOptions.RemoveEmptyEntries).FirstOrDefault();
-        if (string.IsNullOrWhiteSpace(frame))
-        {
-            await SendHandshakeErrorAsync(ws, "Handshake was empty.", ct);
-            return false;
-        }
-
-        try
-        {
-            using var doc = JsonDocument.Parse(frame);
-            var protocol = doc.RootElement.TryGetProperty("protocol", out var protocolProp)
-                ? protocolProp.GetString()
-                : null;
-            var version = doc.RootElement.TryGetProperty("version", out var versionProp)
-                ? versionProp.GetInt32()
-                : 0;
-
-            if (!string.Equals(protocol, "json", StringComparison.OrdinalIgnoreCase) || version != 1)
-            {
-                await SendHandshakeErrorAsync(ws, "Unsupported SignalR protocol handshake.", ct);
-                return false;
-            }
-        }
-        catch (JsonException)
+        var payload = new ReadOnlySequence<byte>(buf.AsMemory(0, result.Count));
+        if (!HandshakeProtocol.TryParseRequestMessage(ref payload, out var request) || request is null)
         {
             await SendHandshakeErrorAsync(ws, "Invalid SignalR handshake.", ct);
-            return false;
+            return null;
         }
 
-        var response = Encoding.UTF8.GetBytes("{}\u001e");
-        await ws.SendAsync(response.AsMemory(), WebSocketMessageType.Text, true);
-        return true;
+        if (!Protocols.TryGetValue(request.Protocol, out var protocol) || !protocol.IsVersionSupported(request.Version))
+        {
+            await SendHandshakeErrorAsync(ws, "Unsupported SignalR protocol handshake.", ct);
+            return null;
+        }
+
+        var response = HandshakeProtocol.GetSuccessfulHandshake(protocol);
+        await ws.SendAsync(response.ToArray().AsMemory(), WebSocketMessageType.Text, true);
+        return protocol;
     }
 
     private static async Task SendHandshakeErrorAsync(CosmoWebSocket ws, string error, CancellationToken ct)
     {
-        var response = Encoding.UTF8.GetBytes(JsonSerializer.Serialize(new { error }) + "\u001e");
-        await ws.SendAsync(response.AsMemory(), WebSocketMessageType.Text, true);
+        var response = new HandshakeResponseMessage(error);
+        var buffer = new ArrayBufferWriter<byte>();
+        HandshakeProtocol.WriteResponseMessage(response, buffer);
+        await ws.SendAsync(buffer.WrittenMemory, WebSocketMessageType.Text, true);
         await ws.CloseAsync(WebSocketCloseStatus.PolicyViolation, error);
     }
 
@@ -184,7 +190,7 @@ public sealed class HubDispatcher<THub> where THub : Hub
         negotiateVersion = 1,
         availableTransports = new[]
         {
-            new { transport = "WebSockets", transferFormats = new[] { "Text" } }
+            new { transport = "WebSockets", transferFormats = new[] { "Text", "Binary" } }
         }
     };
 
@@ -231,29 +237,37 @@ public sealed class HubDispatcher<THub> where THub : Hub
         return null;
     }
 
-    private async Task DispatchFrameAsync(THub hub, HubConnection conn, Dictionary<string, CancellationTokenSource> activeStreams, string json, CancellationToken ct)
+    private async Task DispatchMessageAsync(
+        THub hub,
+        HubConnection conn,
+        ConcurrentDictionary<string, CancellationTokenSource> activeStreams,
+        ConcurrentBag<Task> backgroundOperations,
+        HubMessage message,
+        CancellationToken ct)
     {
-        using var doc = JsonDocument.Parse(json);
-        if (!doc.RootElement.TryGetProperty("type", out var typeProp)) return;
-
-        switch (typeProp.GetInt32())
+        switch (message)
         {
-            case 1:
-                await HandleInvocationAsync(hub, doc.RootElement, conn, ct);
+            case InvocationMessage invocation:
+                await HandleInvocationAsync(hub, invocation, conn, ct);
                 break;
-            case 4:
-                await HandleStreamInvocationAsync(hub, doc.RootElement, conn, activeStreams, ct);
+            case StreamInvocationMessage streamInvocation:
+                var streamTask = HandleStreamInvocationAsync(hub, streamInvocation, conn, activeStreams, ct);
+                backgroundOperations.Add(streamTask);
                 break;
-            case 5:
-                CancelInvocation(doc.RootElement, activeStreams);
+            case CancelInvocationMessage cancel:
+                CancelInvocation(cancel, activeStreams);
                 break;
-            case 6: // Ping → Pong
-                await conn.SendAsync(Encoding.UTF8.GetBytes("{\"type\":6}\u001e"), ct);
+            case PingMessage:
+                await conn.SendHubMessageAsync(PingMessage.Instance, ct);
+                break;
+            case InvocationBindingFailureMessage bindFailure:
+                if (!string.IsNullOrWhiteSpace(bindFailure.InvocationId))
+                    await conn.SendHubMessageAsync(CompletionMessage.WithError(bindFailure.InvocationId, bindFailure.BindingFailure.SourceException.Message), ct);
                 break;
         }
     }
 
-    private async Task HandleInvocationAsync(THub hub, JsonElement msg, HubConnection conn, CancellationToken ct)
+    private async Task HandleInvocationAsync(THub hub, InvocationMessage msg, HubConnection conn, CancellationToken ct)
     {
         if (!TryBuildInvocation(msg, ct, out var method, out var invocationId, out var args))
             return;
@@ -269,30 +283,28 @@ public sealed class HubDispatcher<THub> where THub : Hub
                 if (returnVal is Task t2)
                     result = t2.GetType().GetProperty("Result")?.GetValue(t2);
 
-                var completion = Encoding.UTF8.GetBytes(
-                    JsonSerializer.Serialize(new { type = 3, invocationId, result }) + "\u001e");
-                await conn.SendAsync(completion, ct);
+                await conn.SendHubMessageAsync(
+                    result is null ? CompletionMessage.Empty(invocationId) : CompletionMessage.WithResult(invocationId, result),
+                    ct);
             }
         }
         catch (Exception ex)
         {
             if (invocationId is not null)
             {
-                var error = Encoding.UTF8.GetBytes(
-                    JsonSerializer.Serialize(new { type = 3, invocationId, error = ex.InnerException?.Message ?? ex.Message }) + "\u001e");
-                await conn.SendAsync(error, ct);
+                await conn.SendHubMessageAsync(CompletionMessage.WithError(invocationId, ex.InnerException?.Message ?? ex.Message), ct);
             }
         }
     }
 
     private async Task HandleStreamInvocationAsync(
         THub hub,
-        JsonElement msg,
+        StreamInvocationMessage msg,
         HubConnection conn,
-        Dictionary<string, CancellationTokenSource> activeStreams,
+        ConcurrentDictionary<string, CancellationTokenSource> activeStreams,
         CancellationToken ct)
     {
-        var invocationId = msg.TryGetProperty("invocationId", out var inv) ? inv.GetString() : null;
+        var invocationId = msg.InvocationId;
         if (string.IsNullOrWhiteSpace(invocationId))
         {
             return;
@@ -337,16 +349,12 @@ public sealed class HubDispatcher<THub> where THub : Hub
 
             if (!streamCts.IsCancellationRequested)
             {
-                var completion = Encoding.UTF8.GetBytes(
-                    JsonSerializer.Serialize(new { type = 3, invocationId }) + "\u001e");
-                await conn.SendAsync(completion, ct);
+                await conn.SendHubMessageAsync(CompletionMessage.Empty(invocationId), ct);
             }
         }
         catch (OperationCanceledException) when (streamCts.IsCancellationRequested)
         {
-            var completion = Encoding.UTF8.GetBytes(
-                JsonSerializer.Serialize(new { type = 3, invocationId }) + "\u001e");
-            await conn.SendAsync(completion, ct);
+            await conn.SendHubMessageAsync(CompletionMessage.Empty(invocationId), ct);
         }
         catch (Exception ex)
         {
@@ -354,7 +362,7 @@ public sealed class HubDispatcher<THub> where THub : Hub
         }
         finally
         {
-            activeStreams.Remove(invocationId);
+            activeStreams.TryRemove(invocationId, out _);
         }
     }
 
@@ -366,15 +374,13 @@ public sealed class HubDispatcher<THub> where THub : Hub
     {
         await foreach (var item in items.WithCancellation(ct))
         {
-            var payload = Encoding.UTF8.GetBytes(
-                JsonSerializer.Serialize(new { type = 2, invocationId, item }) + "\u001e");
-            await conn.SendAsync(payload, ct);
+            await conn.SendHubMessageAsync(new StreamItemMessage(invocationId, item), ct);
         }
     }
 
-    private static void CancelInvocation(JsonElement msg, Dictionary<string, CancellationTokenSource> activeStreams)
+    private static void CancelInvocation(CancelInvocationMessage msg, ConcurrentDictionary<string, CancellationTokenSource> activeStreams)
     {
-        var invocationId = msg.TryGetProperty("invocationId", out var inv) ? inv.GetString() : null;
+        var invocationId = msg.InvocationId;
         if (string.IsNullOrWhiteSpace(invocationId))
             return;
 
@@ -382,30 +388,31 @@ public sealed class HubDispatcher<THub> where THub : Hub
             cts.Cancel();
     }
 
-    private bool TryBuildInvocation(JsonElement msg, CancellationToken invocationCt, out MethodInfo method, out string? invocationId, out object?[] args)
+    private bool TryBuildInvocation(HubMethodInvocationMessage msg, CancellationToken invocationCt, out MethodInfo method, out string? invocationId, out object?[] args)
     {
         method = null!;
-        invocationId = msg.TryGetProperty("invocationId", out var inv) ? inv.GetString() : null;
+        invocationId = msg.InvocationId;
 
-        var target = msg.TryGetProperty("target", out var t) ? t.GetString() : null;
+        var target = msg.Target;
         if (target is null || !_methods.TryGetValue(target, out method))
         {
             args = [];
             return false;
         }
 
-        var argsEl = msg.TryGetProperty("arguments", out var a) ? a : default;
+        var incomingArgs = msg.Arguments;
         var parameters = method.GetParameters();
         args = new object?[parameters.Length];
+        var nonCancellationIndex = 0;
         for (int i = 0; i < parameters.Length; i++)
         {
             if (parameters[i].ParameterType == typeof(CancellationToken))
             {
                 args[i] = invocationCt;
             }
-            else if (argsEl.ValueKind == JsonValueKind.Array && i < argsEl.GetArrayLength())
+            else if (nonCancellationIndex < incomingArgs.Length)
             {
-                args[i] = argsEl[i].Deserialize(parameters[i].ParameterType, JsonOptions);
+                args[i] = incomingArgs[nonCancellationIndex++];
             }
         }
 
@@ -431,9 +438,36 @@ public sealed class HubDispatcher<THub> where THub : Hub
 
     private static Task SendCompletionErrorAsync(HubConnection conn, string invocationId, Exception ex, CancellationToken ct)
     {
-        var error = Encoding.UTF8.GetBytes(
-            JsonSerializer.Serialize(new { type = 3, invocationId, error = ex.InnerException?.Message ?? ex.Message }) + "\u001e");
-        return conn.SendAsync(error, ct);
+        return conn.SendHubMessageAsync(CompletionMessage.WithError(invocationId, ex.InnerException?.Message ?? ex.Message), ct);
+    }
+
+    private static byte[] Append(byte[] existing, ReadOnlySpan<byte> next)
+    {
+        var combined = new byte[existing.Length + next.Length];
+        existing.CopyTo(combined, 0);
+        next.CopyTo(combined.AsSpan(existing.Length));
+        return combined;
+    }
+
+    private sealed class ReflectionInvocationBinder(Dictionary<string, MethodInfo> methods) : IInvocationBinder
+    {
+        public Type GetReturnType(string invocationId) => typeof(object);
+
+        public IReadOnlyList<Type> GetParameterTypes(string methodName)
+        {
+            if (!methods.TryGetValue(methodName, out var method))
+                return [];
+
+            return method.GetParameters()
+                .Where(p => p.ParameterType != typeof(CancellationToken))
+                .Select(p => p.ParameterType)
+                .ToArray();
+        }
+
+        public Type GetStreamItemType(string streamId) => typeof(object);
+
+        public string? GetTarget(ReadOnlySpan<byte> targetUtf8Bytes) =>
+            Encoding.UTF8.GetString(targetUtf8Bytes);
     }
 
     private sealed class HubCallerClientsAdapter(string callerId, HubConnectionManager manager) : IHubCallerClients

@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using Microsoft.AspNetCore.Connections;
+using Microsoft.AspNetCore.SignalR.Protocol;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -79,37 +81,29 @@ public sealed class HubConnectionManager : IHubClients, IGroupManager
         return ids.Select(id => _connections.TryGetValue(id, out var c) ? c : null).OfType<HubConnection>();
     }
 
-    internal static byte[] BuildInvocation(string method, object?[] args)
-    {
-        var msg = JsonSerializer.Serialize(new
-        {
-            type = 1,
-            target = JsonNamingPolicy.CamelCase.ConvertName(method),
-            arguments = args
-        }, JsonOptions);
-        return Encoding.UTF8.GetBytes(msg + "\u001e");
-    }
+    internal static HubMessage BuildInvocation(string method, object?[] args) =>
+        new InvocationMessage(JsonNamingPolicy.CamelCase.ConvertName(method), args);
 
     // ── Proxy implementations ─────────────────────────────────────────────────
 
     private sealed class SingleProxy(HubConnection conn) : IClientProxy
     {
         public Task SendAsync(string m, object? a = null, CancellationToken ct = default)
-            => conn.SendAsync(BuildInvocation(m, [a]), ct);
+            => conn.SendHubMessageAsync(BuildInvocation(m, [a]), ct);
         public Task SendAsync(string m, object? a, object? b, CancellationToken ct = default)
-            => conn.SendAsync(BuildInvocation(m, [a, b]), ct);
+            => conn.SendHubMessageAsync(BuildInvocation(m, [a, b]), ct);
         public Task SendAsync(string m, object?[] args, CancellationToken ct = default)
-            => conn.SendAsync(BuildInvocation(m, args), ct);
+            => conn.SendHubMessageAsync(BuildInvocation(m, args), ct);
     }
 
     private sealed class MultiProxy(HubConnection[] conns) : IClientProxy
     {
         public Task SendAsync(string m, object? a = null, CancellationToken ct = default)
-            => Task.WhenAll(conns.Select(c => c.SendAsync(BuildInvocation(m, [a]), ct)));
+            => Task.WhenAll(conns.Select(c => c.SendHubMessageAsync(BuildInvocation(m, [a]), ct)));
         public Task SendAsync(string m, object? a, object? b, CancellationToken ct = default)
-            => Task.WhenAll(conns.Select(c => c.SendAsync(BuildInvocation(m, [a, b]), ct)));
+            => Task.WhenAll(conns.Select(c => c.SendHubMessageAsync(BuildInvocation(m, [a, b]), ct)));
         public Task SendAsync(string m, object?[] args, CancellationToken ct = default)
-            => Task.WhenAll(conns.Select(c => c.SendAsync(BuildInvocation(m, args), ct)));
+            => Task.WhenAll(conns.Select(c => c.SendHubMessageAsync(BuildInvocation(m, args), ct)));
     }
 
     private sealed class NullProxy : IClientProxy
@@ -126,12 +120,27 @@ public sealed class HubConnection(string connectionId, CosmoWebSocket socket)
 {
     public string ConnectionId => connectionId;
     public CosmoWebSocket Socket => socket;
+    public IHubProtocol Protocol { get; set; } = null!;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
 
     public async Task SendAsync(byte[] data, CancellationToken ct)
     {
         await _sendLock.WaitAsync(ct);
         try { await socket.SendAsync(data.AsMemory(), WebSocketMessageType.Text, true); }
+        finally { _sendLock.Release(); }
+    }
+
+    public async Task SendHubMessageAsync(HubMessage message, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(Protocol);
+
+        var data = Protocol.GetMessageBytes(message);
+        var messageType = Protocol.TransferFormat == TransferFormat.Binary
+            ? WebSocketMessageType.Binary
+            : WebSocketMessageType.Text;
+
+        await _sendLock.WaitAsync(ct);
+        try { await socket.SendAsync(data, messageType, true); }
         finally { _sendLock.Release(); }
     }
 }

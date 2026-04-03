@@ -115,7 +115,7 @@ Key design decisions:
 - Middleware pipeline (`UseLogging`, `UseCors`, `UseJwtAuthentication`, custom `IMiddleware`)
 - Built-in scheduler via `AddScheduler()` / `UseScheduler(...)`
 - WebSockets (`UseWebSockets()` + `context.AcceptWebSocketAsync()`)
-- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, and ASP.NET SignalR client-compatible JSON/WebSocket support for the standard path, including server streaming
+- **SignalR** — Hub base class, `MapHub<THub>(path)`, `IHubContext<THub>`, groups, all-except, and ASP.NET SignalR client-compatible JSON and MessagePack support over the standard WebSocket path, including server streaming, cancellation, and reconnect-after-restart
 - **gRPC** — 5-byte framing, `GrpcServiceBase`, `MapGrpcService<T>()`, unary + server-streaming contexts
 - **Health Checks** — `AddHealthChecks()`, `AddCheck<T>()`, `/health` endpoint with JSON report
 - **Problem Details** — RFC 7807 `IProblemDetailsService`, `AddProblemDetails()`
@@ -859,7 +859,7 @@ app.MapPost("/broadcast", async ctx =>
 });
 ```
 
-Features: groups (`AddToGroupAsync` / `RemoveFromGroupAsync`), per-client proxy (`Clients.Client(id)`), `AllExcept`, `OthersInGroup`, and JSON protocol framing with SignalR record separator (`\u001e`).
+Features: groups (`AddToGroupAsync` / `RemoveFromGroupAsync`), per-client proxy (`Clients.Client(id)`), `AllExcept`, `OthersInGroup`, and SignalR protocol framing for both JSON and MessagePack over WebSockets.
 
 Current compatibility scope:
 
@@ -868,17 +868,14 @@ Current compatibility scope:
 - Invoke / return values
 - Multi-argument invocation
 - One-way `SendAsync(...)`
+- JSON and MessagePack hub protocols
 - Server-streaming hub methods
 - Stream failure propagation
+- Stream cancellation via raw SignalR cancel frames and `StreamAsChannelAsync(..., cancellationToken)`
 - `IHubContext<THub>` sends to all, specific clients, and groups
 - Group membership and `OthersInGroup`
 - Disconnect callback and invocation error propagation
 - Reconnect-enabled clients on the standard path, including reconnect after server restart
-
-Still intentionally out of scope for now:
-
-- Invocation cancellation / stream cancellation messages
-- MessagePack hub protocol
 
 ---
 

@@ -1,6 +1,7 @@
 using CosmoApiServer.Core.SignalR;
 using CosmoApiServer.Core.Http;
 using System.Text.Json;
+using Microsoft.AspNetCore.SignalR.Protocol;
 using HttpMethod = CosmoApiServer.Core.Http.HttpMethod;
 
 namespace CosmoApiServer.Core.Tests.SignalR;
@@ -57,9 +58,10 @@ public class SignalRTests
     [Fact]
     public void BuildInvocation_ProducesValidFrame()
     {
-        var frame = HubConnectionManager.BuildInvocation("SendMessage", ["hello", 42]);
+        var message = HubConnectionManager.BuildInvocation("SendMessage", ["hello", 42]);
+        var frame = new JsonHubProtocol().GetMessageBytes(message);
 
-        var text = System.Text.Encoding.UTF8.GetString(frame);
+        var text = System.Text.Encoding.UTF8.GetString(frame.Span);
         Assert.EndsWith("\u001e", text);
         Assert.Contains("\"type\":1", text);
         Assert.Contains("\"target\":\"sendMessage\"", text); // camelCase
@@ -99,6 +101,7 @@ public class SignalRTests
         Assert.Contains("\"connectionToken\":\"abc123\"", json);
         Assert.Contains("\"negotiateVersion\":1", json);
         Assert.Contains("\"transport\":\"WebSockets\"", json);
+        Assert.Contains("\"Binary\"", json);
     }
 
     [Fact]

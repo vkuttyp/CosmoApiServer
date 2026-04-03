@@ -2,10 +2,13 @@ using System.Net.Http;
 using System.Net.WebSockets;
 using System.Text;
 using System.Collections.Concurrent;
+using System.Text.Json;
+using System.Runtime.CompilerServices;
 using CosmoApiServer.Core.Hosting;
 using CosmoApiServer.Core.SignalR;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.AspNetCore.SignalR.Client;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Tests.SignalR;
 
@@ -71,6 +74,45 @@ public class SignalRClientIntegrationTests
     }
 
     [Fact]
+    public async Task SignalR_AspNetClient_MessagePack_CanConnect_And_Invoke()
+    {
+        int port = GetFreeTcpPort();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var builder = CosmoWebApplicationBuilder.Create();
+        builder.ListenOn(port);
+        builder.AddSignalR();
+
+        var app = builder.Build();
+        app.MapHub<InteropHub>("/chat");
+
+        var runTask = Task.Run(() => app.RunAsync(cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, cts.Token);
+
+            await using var conn = new HubConnectionBuilder()
+                .WithUrl($"http://localhost:{port}/chat")
+                .ConfigureLogging(logging => logging.SetMinimumLevel(LogLevel.Debug))
+                .AddMessagePackProtocol()
+                .Build();
+
+            await conn.StartAsync(cts.Token);
+
+            var echoed = await conn.InvokeAsync<string>("Echo", "messagepack", cts.Token);
+            Assert.Equal("messagepack", echoed);
+
+            await conn.StopAsync(cts.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await runTask; } catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
     public async Task SignalR_WebSocket_InvalidHandshake_ClosesConnection()
     {
         int port = GetFreeTcpPort();
@@ -98,7 +140,7 @@ public class SignalRClientIntegrationTests
             ws.Options.AddSubProtocol("json");
             await ws.ConnectAsync(new Uri($"ws://localhost:{port}/chat?id={token}"), cts.Token);
 
-            var badHandshake = Encoding.UTF8.GetBytes("{\"protocol\":\"messagepack\",\"version\":1}\u001e");
+            var badHandshake = Encoding.UTF8.GetBytes("{\"protocol\":\"unsupported\",\"version\":1}\u001e");
             await ws.SendAsync(badHandshake, WebSocketMessageType.Text, true, cts.Token);
 
             var buffer = new byte[256];
@@ -677,6 +719,131 @@ public class SignalRClientIntegrationTests
         }
     }
 
+    [Fact]
+    public async Task SignalR_WebSocket_StreamCancelFrame_CancelsServerInvocation()
+    {
+        int port = GetFreeTcpPort();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var tracker = new StreamCancellationTracker();
+        tracker.Reset();
+
+        var builder = CosmoWebApplicationBuilder.Create();
+        builder.ListenOn(port);
+        builder.AddSignalR();
+        builder.Services.AddSingleton(tracker);
+
+        var app = builder.Build();
+        app.MapHub<StreamingHub>("/streaming");
+
+        var runTask = Task.Run(() => app.RunAsync(cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, cts.Token);
+
+            using var http = new HttpClient();
+            var negotiateJson = await http.GetStringAsync($"http://localhost:{port}/streaming/negotiate", cts.Token);
+            var token = ExtractConnectionToken(negotiateJson);
+            Assert.False(string.IsNullOrWhiteSpace(token));
+
+            using var ws = new ClientWebSocket();
+            ws.Options.AddSubProtocol("json");
+            await ws.ConnectAsync(new Uri($"ws://localhost:{port}/streaming?id={token}"), cts.Token);
+
+            await SendWebSocketTextAsync(ws, "{\"protocol\":\"json\",\"version\":1}\u001e", cts.Token);
+            await ReceiveSignalRFrameAsync(ws, cts.Token); // handshake ack
+
+            const string invocationId = "stream-1";
+            await SendWebSocketTextAsync(ws,
+                "{\"type\":4,\"invocationId\":\"stream-1\",\"target\":\"CountUntilCanceled\",\"arguments\":[]}\u001e",
+                cts.Token);
+
+            var items = new List<int>();
+            while (items.Count < 3)
+            {
+                var frame = await ReceiveSignalRFrameAsync(ws, cts.Token);
+                using var doc = JsonDocument.Parse(frame);
+                if (doc.RootElement.TryGetProperty("type", out var typeProp) &&
+                    typeProp.GetInt32() == 2 &&
+                    doc.RootElement.TryGetProperty("invocationId", out var invProp) &&
+                    invProp.GetString() == invocationId)
+                {
+                    items.Add(doc.RootElement.GetProperty("item").GetInt32());
+                }
+            }
+
+            Assert.Equal([1, 2, 3], items);
+
+            await SendWebSocketTextAsync(ws,
+                "{\"type\":5,\"invocationId\":\"stream-1\"}\u001e",
+                cts.Token);
+
+            var winner = await Task.WhenAny(tracker.Canceled.Task, Task.Delay(TimeSpan.FromSeconds(5), cts.Token));
+            Assert.Same(tracker.Canceled.Task, winner);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await runTask; } catch (OperationCanceledException) { }
+        }
+    }
+
+    [Fact]
+    public async Task SignalR_AspNetClient_StreamAsChannelAsync_CancellationToken_CancelsServerInvocation()
+    {
+        int port = GetFreeTcpPort();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+
+        var tracker = new StreamCancellationTracker();
+        tracker.Reset();
+
+        var builder = CosmoWebApplicationBuilder.Create();
+        builder.ListenOn(port);
+        builder.AddSignalR();
+        builder.Services.AddSingleton(tracker);
+
+        var app = builder.Build();
+        app.MapHub<StreamingHub>("/streaming");
+
+        var runTask = Task.Run(() => app.RunAsync(cts.Token));
+
+        try
+        {
+            await WaitForServerAsync(port, cts.Token);
+
+            await using var conn = new HubConnectionBuilder()
+                .WithUrl($"http://localhost:{port}/streaming")
+                .Build();
+
+            await conn.StartAsync(cts.Token);
+
+            using var streamCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+            var reader = await conn.StreamAsChannelAsync<int>("CountUntilCanceled", streamCts.Token);
+
+            var items = new List<int>();
+            for (var i = 0; i < 3; i++)
+            {
+                Assert.True(await reader.WaitToReadAsync(cts.Token));
+                Assert.True(reader.TryRead(out var item));
+                items.Add(item);
+            }
+
+            Assert.Equal([1, 2, 3], items);
+            streamCts.Cancel();
+
+            var winner = await Task.WhenAny(tracker.Canceled.Task, Task.Delay(TimeSpan.FromSeconds(5), cts.Token));
+            Assert.Same(tracker.Canceled.Task, winner);
+
+            await conn.StopAsync(cts.Token);
+        }
+        finally
+        {
+            cts.Cancel();
+            try { await runTask; } catch (OperationCanceledException) { }
+        }
+    }
+
     private static async Task WaitForServerAsync(int port, CancellationToken ct)
     {
         using var client = new HttpClient();
@@ -711,6 +878,18 @@ public class SignalRClientIntegrationTests
     {
         using var doc = System.Text.Json.JsonDocument.Parse(json);
         return doc.RootElement.TryGetProperty("connectionToken", out var token) ? token.GetString() : null;
+    }
+
+    private static Task SendWebSocketTextAsync(ClientWebSocket ws, string payload, CancellationToken ct) =>
+        ws.SendAsync(Encoding.UTF8.GetBytes(payload), WebSocketMessageType.Text, true, ct);
+
+    private static async Task<string> ReceiveSignalRFrameAsync(ClientWebSocket ws, CancellationToken ct)
+    {
+        var buffer = new byte[4096];
+        var result = await ws.ReceiveAsync(buffer, ct);
+        return Encoding.UTF8.GetString(buffer, 0, result.Count)
+            .Split('\u001e', StringSplitOptions.RemoveEmptyEntries)
+            .FirstOrDefault() ?? string.Empty;
     }
 
     private sealed class InteropHub : Hub
@@ -748,6 +927,28 @@ public class SignalRClientIntegrationTests
         }
     }
 
+    private sealed class StreamingHub(StreamCancellationTracker tracker) : Hub
+    {
+        public async IAsyncEnumerable<int> CountUntilCanceled([EnumeratorCancellation] CancellationToken cancellationToken)
+        {
+            var i = 0;
+            try
+            {
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    await Task.Delay(10, cancellationToken);
+                    yield return ++i;
+                }
+            }
+            finally
+            {
+                if (cancellationToken.IsCancellationRequested)
+                    tracker.Canceled.TrySetResult(true);
+            }
+        }
+    }
+
     private sealed class DisconnectTrackingHub(DisconnectTracker tracker) : Hub
     {
         public override Task OnDisconnectedAsync(Exception? exception)
@@ -767,5 +968,14 @@ public class SignalRClientIntegrationTests
     }
 
     private sealed record DisconnectRecord(string ConnectionId, string? ExceptionMessage);
+
+    private sealed class StreamCancellationTracker
+    {
+        public TaskCompletionSource<bool> Canceled { get; private set; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public void Reset() =>
+            Canceled = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+    }
 
 }
