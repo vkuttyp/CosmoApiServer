@@ -267,7 +267,9 @@ internal static class Http3Connection
             else
             {
                 Trace($"stream={stream.Id} dispose-success");
-                _ = DisposeSuccessfulRequestStreamAsync(stream);
+                // Dispose on a background task — DisposeAsync may block on pending FlushAsync
+                // but must not stall the stream-accept loop on the connection.
+                _ = Task.Run(() => DisposeSuccessfulRequestStreamAsync(stream));
             }
         }
 #pragma warning restore CA1416
@@ -1785,9 +1787,14 @@ internal static class Http3Connection
             if (_disposed)
                 return;
 
-            if (_staging.WrittenCount > 0)
+            // Snapshot before clearing — used below to avoid a double final-frame.
+            bool hasStagedData = _staging.WrittenCount > 0;
+
+            if (hasStagedData)
             {
                 var payload = _staging.WrittenMemory;
+                // If there are no trailers, this is the final write — mark completeWrites=true.
+                // If there are trailers, we must leave the stream open for the HEADERS frame.
                 await WriteFrameAsync(stream, FrameData, payload, trailerBlock is null, ct);
                 _staging.Clear();
             }
@@ -1796,10 +1803,13 @@ internal static class Http3Connection
             {
                 await WriteFrameAsync(stream, FrameHeaders, trailerBlock.Value, true, ct);
             }
-            else if (_staging.WrittenCount == 0)
+            else if (!hasStagedData)
             {
+                // Nothing staged this call; all prior data was flushed via FlushAsync
+                // (each with completeWrites=false). Send an empty DATA frame to FIN the stream.
                 await WriteFrameAsync(stream, FrameData, ReadOnlyMemory<byte>.Empty, true, ct);
             }
+            // else: hasStagedData && no trailers — stream already closed by WriteFrameAsync above.
 
             _disposed = true;
         }

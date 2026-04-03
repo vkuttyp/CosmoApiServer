@@ -35,9 +35,9 @@ Still intentionally incomplete:
 
 ## Remaining TODO
 
-- Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments
+- Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments (use `test_http3_interop.sh`)
 - Add repeatable HTTP/3 benchmark runs to the Windows VM workflow and publish those numbers in the README
-- Investigate stream reuse failures under repeated large responses (`/large-json`, `/file`, `/stream`) once external interop is confirmed stable
+- **Fixed (v2.1.1):** `QuicException: Stream aborted by peer (268)` under repeated large responses — double final-frame bug in `Http3DataFrameStream.CompleteAsync` (see below)
 
 ## Phase 1: QPACK groundwork
 
