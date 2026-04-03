@@ -1,5 +1,6 @@
 using System.Linq.Expressions;
 using System.Reflection;
+using CosmoApiServer.Core.Auth.Authorization;
 using CosmoApiServer.Core.Controllers.Attributes;
 using CosmoApiServer.Core.Controllers.Filters;
 using CosmoApiServer.Core.Http;
@@ -46,6 +47,10 @@ public static class ControllerScanner
         /// <summary>Precomputed auth requirements.</summary>
         public required bool RequiresAuth { get; init; }
         public required bool AllowAnonymous { get; init; }
+        /// <summary>Named policy from [Authorize(Policy = "...")] — null means default (authenticated user only).</summary>
+        public string? PolicyName { get; init; }
+        /// <summary>Inline roles from [Authorize(Roles = "...")] — null means no role restriction.</summary>
+        public string[]? Roles { get; init; }
 
         /// <summary>Precomputed action filters.</summary>
         public required IActionFilter[] ActionFilters { get; init; }
@@ -59,7 +64,8 @@ public static class ControllerScanner
         var routePrefix = controllerType.GetCustomAttribute<RouteAttribute>()?.Template ?? string.Empty;
         routePrefix = routePrefix.Replace("[controller]", controllerName, StringComparison.OrdinalIgnoreCase);
 
-        bool controllerRequiresAuth = controllerType.GetCustomAttribute<AuthorizeAttribute>() is not null;
+        var controllerAuthAttr = controllerType.GetCustomAttribute<AuthorizeAttribute>();
+        bool controllerRequiresAuth = controllerAuthAttr is not null;
         var controllerFilters = controllerType.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
 
         foreach (var method in controllerType.GetMethods(BindingFlags.Public | BindingFlags.Instance))
@@ -93,24 +99,58 @@ public static class ControllerScanner
 
             // ── Build descriptor ONCE at startup (all reflection happens here) ──
             var methodFilters = method.GetCustomAttributes<ActionFilterAttribute>(true).Cast<IActionFilter>().ToArray();
+            var methodAuthAttr = method.GetCustomAttribute<AuthorizeAttribute>();
+            var effectiveAuthAttr = methodAuthAttr ?? controllerAuthAttr;
             var desc = new ActionDescriptor
             {
                 Invoker             = CompileInvoker(method),
                 Resolvers           = method.GetParameters().Select(BuildResolver).ToArray(),
                 TaskResultExtractor = BuildTaskResultExtractor(method.ReturnType),
-                RequiresAuth        = controllerRequiresAuth || method.GetCustomAttribute<AuthorizeAttribute>() is not null,
+                RequiresAuth        = controllerRequiresAuth || methodAuthAttr is not null,
                 AllowAnonymous      = method.GetCustomAttribute<AllowAnonymousAttribute>() is not null,
+                PolicyName          = effectiveAuthAttr?.Policy,
+                Roles               = effectiveAuthAttr?.Roles?.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries),
                 ActionFilters       = controllerFilters.Concat(methodFilters).ToArray(),
             };
 
             RequestDelegate handler = async ctx =>
             {
-                // Auth check — no reflection, flags precomputed
-                if (desc.RequiresAuth && !desc.AllowAnonymous && ctx.User is null)
+                // Auth check — flags and policy precomputed at startup
+                if (desc.RequiresAuth && !desc.AllowAnonymous)
                 {
-                    ctx.Response.StatusCode = 401;
-                    ctx.Response.WriteJson(new { error = "Unauthorized", message = "A valid Bearer token is required." });
-                    return;
+                    if (ctx.User is null)
+                    {
+                        ctx.Response.StatusCode = 401;
+                        ctx.Response.WriteJson(new { error = "Unauthorized", message = "A valid Bearer token is required." });
+                        return;
+                    }
+
+                    // Policy or roles evaluation via IAuthorizationService (if registered)
+                    if (desc.PolicyName is not null || desc.Roles is not null)
+                    {
+                        var authzService = ctx.RequestServices.GetService<IAuthorizationService>();
+                        if (authzService is not null)
+                        {
+                            AuthorizationResult authzResult;
+                            if (desc.PolicyName is not null)
+                            {
+                                authzResult = await authzService.AuthorizeAsync(ctx.User, desc.PolicyName);
+                            }
+                            else
+                            {
+                                // Inline roles — build a transient policy
+                                var rolePolicy = new AuthorizationPolicyBuilder().RequireRole(desc.Roles!).Build();
+                                authzResult = await authzService.AuthorizeAsync(ctx.User, rolePolicy);
+                            }
+
+                            if (!authzResult.Succeeded)
+                            {
+                                ctx.Response.StatusCode = 403;
+                                ctx.Response.WriteJson(new { error = "Forbidden", message = authzResult.FailureReason ?? "Access denied." });
+                                return;
+                            }
+                        }
+                    }
                 }
 
                 // Resolve controller from DI scope

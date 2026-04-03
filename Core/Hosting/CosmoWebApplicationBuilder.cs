@@ -1,8 +1,12 @@
 using System.Reflection;
 using CosmoApiServer.Core.Auth;
+using CosmoApiServer.Core.Auth.Authorization;
 using CosmoApiServer.Core.Controllers;
+using CosmoApiServer.Core.HealthChecks;
 using CosmoApiServer.Core.Middleware;
+using CosmoApiServer.Core.ProblemDetails;
 using CosmoApiServer.Core.Routing;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -240,6 +244,72 @@ public sealed class CosmoWebApplicationBuilder
     public CosmoWebApplicationBuilder UseHttp3()
     {
         _options.EnableHttp3 = true;
+        return this;
+    }
+
+    // ── Health Checks ────────────────────────────────────────────────────────
+
+    public HealthChecksBuilder AddHealthChecks()
+    {
+        var service = new HealthCheckService();
+        _services.AddSingleton(service);
+        return new HealthChecksBuilder(_services, service);
+    }
+
+    public CosmoWebApplicationBuilder UseHealthChecks(string path = "/health")
+    {
+        _middlewarePipeline.UseInstance(new HealthCheckMiddleware(path));
+        return this;
+    }
+
+    // ── Problem Details (RFC 7807) ───────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddProblemDetails(Action<ProblemDetailsOptions>? configure = null)
+    {
+        var opts = new ProblemDetailsOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton(opts);
+        _services.AddSingleton<IProblemDetailsService, DefaultProblemDetailsService>();
+        return this;
+    }
+
+    // ── Memory Cache ─────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddMemoryCache(Action<MemoryCacheOptions>? configure = null)
+    {
+        var opts = new MemoryCacheOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton<IMemoryCache>(new MemoryCache(opts));
+        return this;
+    }
+
+    // ── IHttpClientFactory ───────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddHttpClient(string name, Action<HttpClient>? configure = null)
+    {
+        if (configure is not null)
+            _services.AddHttpClient(name, configure);
+        else
+            _services.AddHttpClient(name);
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder AddHttpClient<TClient, TImplementation>()
+        where TClient : class
+        where TImplementation : class, TClient
+    {
+        _services.AddHttpClient<TClient, TImplementation>();
+        return this;
+    }
+
+    // ── Policy-Based Authorization ───────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddAuthorization(Action<AuthorizationOptions>? configure = null)
+    {
+        var opts = new AuthorizationOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton(opts);
+        _services.AddScoped<IAuthorizationService, DefaultAuthorizationService>();
         return this;
     }
 

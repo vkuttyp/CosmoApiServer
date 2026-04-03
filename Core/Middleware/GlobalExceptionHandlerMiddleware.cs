@@ -1,10 +1,13 @@
 using System.Net;
 using CosmoApiServer.Core.Http;
+using CosmoApiServer.Core.ProblemDetails;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace CosmoApiServer.Core.Middleware;
 
 /// <summary>
-/// Middleware that catches all unhandled exceptions and returns a JSON response.
+/// Middleware that catches all unhandled exceptions and returns a JSON error response.
+/// Uses IProblemDetailsService (RFC 7807) when registered; falls back to a plain JSON body.
 /// </summary>
 public class GlobalExceptionHandlerMiddleware : IMiddleware
 {
@@ -20,7 +23,7 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
         }
     }
 
-    private static ValueTask HandleExceptionAsync(HttpContext context, Exception exception)
+    private static async ValueTask HandleExceptionAsync(HttpContext context, Exception exception)
     {
         // Log full details server-side only
         Console.Error.WriteLine($"[ERROR] {DateTime.UtcNow:O} {context.Request.Method} {context.Request.Path}");
@@ -28,22 +31,28 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
 
         context.Response.StatusCode = (int)HttpStatusCode.InternalServerError;
 
-        // Do NOT expose exception.Message to clients — it may contain sensitive info
-        // (SQL queries, file paths, internal stack details)
-        var errorResponse = new
-        {
-            message = "An unexpected error occurred.",
-            status = 500
-        };
-
         try
         {
-            context.Response.WriteJson(errorResponse);
+            var problemDetailsService = context.RequestServices.GetService<IProblemDetailsService>();
+            if (problemDetailsService is not null)
+            {
+                await problemDetailsService.WriteAsync(new ProblemDetailsContext
+                {
+                    HttpContext = context,
+                    Exception = exception,
+                    ProblemDetails = new ProblemDetails.ProblemDetails { Status = 500 }
+                });
+            }
+            else
+            {
+                // Do NOT expose exception.Message to clients — it may contain sensitive info
+                // (SQL queries, file paths, internal stack details)
+                context.Response.WriteJson(new { message = "An unexpected error occurred.", status = 500 });
+            }
         }
         catch
         {
             // Response may have already started; swallow to avoid crashing the connection
         }
-        return ValueTask.CompletedTask;
     }
 }
