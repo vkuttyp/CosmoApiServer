@@ -972,7 +972,7 @@ public sealed class MetricsCollector : IHostedService
 - **Fix: `ProblemDetails.TitleForStatus(500)`** — Changed from a non-standard phrase to the standard HTTP reason phrase `"Internal Server Error"`.
 - 222 unit tests (up from 215).
 
-### v2.1.3
+### v2.1.4
 - **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
 - **HTTP/3 logging & metrics** — `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` keeps shutdown noise at zero, and the Windows HTTP/3 repeat table documents clean ops/sec (e.g., `/ping` 2,375.3 ops/s, `/json` 2,448.6 ops/s, `/large-json` 1,082.3 ops/s) so downstream consumers can see the stable metrics in this changelog entry.
 
