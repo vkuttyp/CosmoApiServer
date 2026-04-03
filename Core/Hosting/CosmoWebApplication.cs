@@ -1,8 +1,10 @@
 using System.Reflection;
 using CosmoApiServer.Core.Controllers;
+using CosmoApiServer.Core.Grpc;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.Routing;
+using CosmoApiServer.Core.SignalR;
 using CosmoApiServer.Core.Transport;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -71,6 +73,52 @@ public sealed class CosmoWebApplication
     {
         _routeTable.Add(Http.HttpMethod.PATCH, template, handler);
         return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.PATCH, template, handler);
+    }
+
+    // ── gRPC ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Registers all gRPC methods from <typeparamref name="TService"/> into the gRPC route registry.
+    /// <typeparamref name="TService"/> must implement <see cref="IGrpcServiceDescriptor"/> via a
+    /// static factory — or use the descriptor pattern. Call <c>builder.AddGrpc()</c> first.
+    /// </summary>
+    public CosmoWebApplication MapGrpcService<TService>()
+        where TService : GrpcServiceBase, IGrpcServiceDescriptor
+    {
+        var registry = _services.GetRequiredService<Middleware.GrpcRouteRegistry>();
+        // Create a temporary instance to enumerate method descriptors.
+        var descriptor = (IGrpcServiceDescriptor)ActivatorUtilities.CreateInstance(_services, typeof(TService));
+        foreach (var method in descriptor.Methods)
+            registry.Register(method.Route, method.ServiceType, method.Handler);
+        return this;
+    }
+
+    // ── SignalR ─────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Maps a SignalR hub at the given path (e.g., "/chathub").
+    /// Registers negotiate + WebSocket routes and <see cref="IHubContext{THub}"/> in DI.
+    /// Call <c>builder.AddSignalR()</c> before calling this.
+    /// </summary>
+    public CosmoWebApplication MapHub<THub>(string path)
+        where THub : Hub
+    {
+        var manager = new HubConnectionManager();
+        var dispatcher = new HubDispatcher<THub>(manager);
+
+        // Register in the hub context registry so server-side code can push messages
+        var registry = _services.GetService<HubContextRegistry>();
+        registry?.Register<THub>(manager);
+
+        // Negotiate endpoint (SignalR clients POST to /hub/negotiate)
+        var negotiatePath = path.TrimEnd('/') + "/negotiate";
+        _routeTable.Add(Http.HttpMethod.POST, negotiatePath, ctx => new ValueTask(dispatcher.HandleAsync(ctx)));
+        _routeTable.Add(Http.HttpMethod.GET,  negotiatePath, ctx => new ValueTask(dispatcher.HandleAsync(ctx)));
+
+        // WebSocket upgrade endpoint (GET on hub path itself)
+        _routeTable.Add(Http.HttpMethod.GET, path, ctx => new ValueTask(dispatcher.HandleAsync(ctx)));
+
+        return this;
     }
 
     // ── Lifecycle ──────────────────────────────────────────────────────────

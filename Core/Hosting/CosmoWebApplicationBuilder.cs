@@ -4,11 +4,13 @@ using CosmoApiServer.Core.Auth.Authorization;
 using CosmoApiServer.Core.Auth.OAuth;
 using CosmoApiServer.Core.Caching;
 using CosmoApiServer.Core.Controllers;
+using CosmoApiServer.Core.Grpc;
 using CosmoApiServer.Core.HealthChecks;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
 using CosmoApiServer.Core.ProblemDetails;
 using CosmoApiServer.Core.Routing;
+using CosmoApiServer.Core.SignalR;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -365,6 +367,26 @@ public sealed class CosmoWebApplicationBuilder
     public CosmoWebApplicationBuilder AddDistributedCache<TImpl>() where TImpl : class, IDistributedCache
     {
         _services.AddSingleton<IDistributedCache, TImpl>();
+        return this;
+    }
+
+    // ── gRPC ─────────────────────────────────────────────────────────────────
+
+    private Middleware.GrpcRouteRegistry? _grpcRegistry;
+
+    public CosmoWebApplicationBuilder AddGrpc()
+    {
+        _grpcRegistry = new Middleware.GrpcRouteRegistry();
+        _services.AddSingleton(_grpcRegistry);
+        _middlewarePipeline.UseInstance(new Middleware.GrpcMiddleware(_grpcRegistry));
+        return this;
+    }
+
+    // ── SignalR ───────────────────────────────────────────────────────────────
+
+    public CosmoWebApplicationBuilder AddSignalR()
+    {
+        _services.AddSingleton<SignalR.HubContextRegistry>();
         return this;
     }
 
