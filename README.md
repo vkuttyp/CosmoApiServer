@@ -976,6 +976,14 @@ public sealed class MetricsCollector : IHostedService
 
 ## Changelog
 
+### v3.0.0
+- **HTTP/3 production-ready** — all roadmap phases complete; 313/313 tests on macOS (Network.framework) and Windows (MsQuic); 32/32 interop scenarios validated via `tools/run_windows_interop.ps1`
+- **Rate Limiting** — `UseRateLimiting()`, fixed-window per-IP limiter with `Retry-After`, configurable limit/window/status code, proxy-trust mode
+- **README audit** — corrected project paths, test count (287), changelog ordering, and removed stale benchmark data
+- **H3Interop tool** — `tools/H3Interop/` + `tools/run_windows_interop.ps1` for repeatable Windows HTTP/3 interop runs
+- **Windows benchmarks** — `tools/run_windows_benchmark.ps1` publishes fresh HTTP/1.1 and HTTP/3 numbers; latest: `/ping` 3,046 ops/s, `/headers` 5,774 ops/s over HTTP/3
+- 313 tests.
+
 ### v2.1.4
 - **HTTP/3 production-ready** — interop validated (32/32 PASS via `tools/run_windows_interop.ps1`); all HTTP/3 roadmap items complete. 313 tests pass on macOS (Network.framework) and Windows (MsQuic).
 - **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
