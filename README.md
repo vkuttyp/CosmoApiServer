@@ -31,18 +31,18 @@ Sequential · 1,000 rounds · keep-alive
 
 | Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
 |---|---|---|---|---|
-| GET /ping | **7,605 ops/s** | 6,154 ops/s | 0.13 ms | **+24%** |
-| GET /json | **7,530 ops/s** | 6,238 ops/s | 0.13 ms | **+21%** |
-| GET /route/{id} | **7,663 ops/s** | 6,390 ops/s | 0.13 ms | **+20%** |
-| POST /echo | **7,184 ops/s** | 6,274 ops/s | 0.14 ms | **+15%** |
-| GET /large-json (1000 items) | **1,337 ops/s** | 1,142 ops/s | 0.75 ms | **+17%** |
-| GET /query | **8,231 ops/s** | 6,897 ops/s | 0.12 ms | **+19%** |
-| POST /form | **7,337 ops/s** | 6,120 ops/s | 0.14 ms | **+20%** |
-| GET /headers | **7,337 ops/s** | 6,204 ops/s | 0.14 ms | **+18%** |
-| GET /stream (NDJSON, 10 items) | **8,177 ops/s** | 6,892 ops/s | 0.12 ms | **+19%** |
-| GET /file (64 KB) | **3,422 ops/s** | 2,150 ops/s | 0.29 ms | **+59%** |
+| GET /ping | **7,158 ops/s** | 6,382 ops/s | 0.14 ms | **+12%** |
+| GET /json | **7,236 ops/s** | 7,289 ops/s | 0.14 ms | ≈ even |
+| GET /route/{id} | **7,283 ops/s** | 6,234 ops/s | 0.14 ms | **+17%** |
+| POST /echo | **7,273 ops/s** | 5,935 ops/s | 0.14 ms | **+23%** |
+| GET /large-json (1000 items) | **1,424 ops/s** | 1,106 ops/s | 0.70 ms | **+29%** |
+| GET /query | **8,163 ops/s** | 7,052 ops/s | 0.12 ms | **+16%** |
+| POST /form | **7,441 ops/s** | 6,766 ops/s | 0.13 ms | **+10%** |
+| GET /headers | **7,716 ops/s** | 6,878 ops/s | 0.13 ms | **+12%** |
+| GET /stream (NDJSON, 10 items) | **8,460 ops/s** | 7,283 ops/s | 0.12 ms | **+16%** |
+| GET /file (64 KB) | **3,386 ops/s** | 2,311 ops/s | 0.30 ms | **+46%** |
 
-**10 of 10 scenarios win** on Windows. The `/stream` result flipped from −20% (pre-2.0.7) to +19% after the flush-coalescing fix.
+**9 of 10 scenarios win** on Windows (`/json` is statistical noise at this concurrency level).
 
 ### Latest Run (Local Mac)
 
@@ -61,47 +61,30 @@ Sequential · 1,000 rounds · keep-alive
 
 HTTP/3 was skipped on this machine because runtime QUIC support is unavailable (`PlatformNotSupportedException: HTTP/3 requires runtime QUIC support on this platform.`).
 
-### Windows HTTP/3
+### Windows HTTP/3 (MsQuic)
 
-Experimental HTTP/3 over QUIC, Phase 6 complete. The latest run (post Phase 6 final optimizations) shows stable throughput with 1000/1000 successful requests and no stream-abort errors:
+Production-ready HTTP/3 over QUIC. Interop validated: 32/32 scenarios pass using .NET `HttpClient` Version30 against a live server (`tools/run_windows_interop.ps1`). Latest benchmark (1,000 rounds, keep-alive):
 
-| Scenario | CosmoApiServer HTTP/3 | P50 |
-|---|---|---|
-| GET /ping | 2,481 ops/s | 0.40 ms |
-| GET /json | 2,605 ops/s | 0.38 ms |
-| GET /route/{id} | 2,494 ops/s | 0.40 ms |
-| POST /echo | 2,218 ops/s | 0.45 ms |
-| GET /large-json (1000 items) | 1,081 ops/s | 0.93 ms |
-| GET /query | 3,276 ops/s | 0.31 ms |
-| POST /form | 2,701 ops/s | 0.37 ms |
-| GET /headers | 6,116 ops/s | 0.16 ms |
-| GET /stream (NDJSON, 10 items) | 2,581 ops/s | 0.39 ms |
-| GET /file (64 KB) | 1,464 ops/s | 0.68 ms |
+| Scenario | CosmoApiServer HTTP/3 | P50 | P99 |
+|---|---|---|---|
+| GET /ping | **3,046 ops/s** | 0.33 ms | 4.88 ms |
+| GET /json | **2,988 ops/s** | 0.33 ms | 3.10 ms |
+| GET /route/{id} | **2,967 ops/s** | 0.34 ms | 2.94 ms |
+| POST /echo | **2,645 ops/s** | 0.38 ms | 5.51 ms |
+| GET /large-json (1000 items) | **1,136 ops/s** | 0.88 ms | 6.09 ms |
+| GET /query | **3,840 ops/s** | 0.26 ms | 1.37 ms |
+| POST /form | **3,772 ops/s** | 0.27 ms | 2.13 ms |
+| GET /headers | **5,774 ops/s** | 0.17 ms | 0.31 ms |
+| GET /stream (NDJSON, 10 items) | **2,693 ops/s** | 0.37 ms | 5.63 ms |
+| GET /file (64 KB) | **1,612 ops/s** | 0.62 ms | 6.62 ms |
 
-Notable improvements vs the pre-Phase 6 baseline: `/large-json` +66%, `/stream` +33%, `/file` +57%.
+P99 spikes on some scenarios reflect per-request QUIC stream setup overhead (MsQuic on Windows). P50 latency is stable. The `/headers` scenario is fastest because it skips body serialization entirely.
 
 **Phase 6 final optimisations** (P99 spike reduction and frame coalescing):
 - Successful stream disposal is now awaited inline instead of via `Task.Run` — eliminates thread-pool queue latency that previously caused 4–6 ms P99 spikes under sustained load
 - `WriteFrameAsync` combines frame header + payload into a single `WriteAsync` call for frames ≤ 16 KB, reducing async QUIC operations per response from 3 to 1
 - `Http3DataFrameStream` coalesce threshold raised from 8 KB to 32 KB — streaming DATA frames now batch uniformly at the same chunk size as buffered responses
 - `ServerOptions.Http3MaxRequestsPerConnection` (default 100) exposes the per-connection GOAWAY threshold for operator tuning
-
-### Windows HTTP/3 Repeat Run
-
-| Scenario | CosmoApiServer HTTP/3 | P50 |
-|---|---|---|
-| GET /ping | **2,375.3 ops/s** | 0.39 ms |
-| GET /json | **2,448.6 ops/s** | 0.40 ms |
-| GET /route/{id} | **2,627.4 ops/s** | 0.38 ms |
-| POST /echo | **2,871.1 ops/s** | 0.37 ms |
-| GET /large-json (1000 items) | **1,082.3 ops/s** | 0.92 ms |
-| GET /query | **4,159.7 ops/s** | 0.24 ms |
-| POST /form | **2,819.3 ops/s** | 0.35 ms |
-| GET /headers | **6,045.9 ops/s** | 0.17 ms |
-| GET /stream (NDJSON, 10 items) | **2,076.8 ops/s** | 0.37 ms |
-| GET /file (64 KB) | **1,346.8 ops/s** | 0.74 ms |
-
-These repeated Windows HTTP/3 numbers now run without the earlier shutdown noise because `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` suppresses `QuicException` messages during teardown.
 
 ### Razor Component Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |

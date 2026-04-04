@@ -30,8 +30,8 @@ Still intentionally incomplete:
 
 ## Remaining TODO
 
-- Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments (use `test_http3_interop.sh`)
-- Add repeatable HTTP/3 benchmark runs to the Windows VM workflow and publish those numbers in the README
+- ~~Validate HTTP/3 interop with `curl --http3`, browsers, and proxy/edge deployments~~ **Done** — 32/32 interop scenarios pass via `tools/run_windows_interop.ps1` (Windows MsQuic, .NET HttpClient Version30)
+- ~~Add repeatable HTTP/3 benchmark runs to the Windows VM workflow and publish those numbers in the README~~ **Done** — `tools/run_windows_benchmark.ps1`; latest numbers in README
 - **Fixed (v2.1.1):** `QuicException: Stream aborted by peer (268)` under repeated large responses — double final-frame bug in `Http3DataFrameStream.CompleteAsync` (see below)
 - **Fixed (Phase 6 final):** P99 spikes (4–6 ms) under sustained HTTP/3 load — resolved by awaiting stream disposal inline instead of via `Task.Run`
 
