@@ -44,22 +44,7 @@ Sequential · 1,000 rounds · keep-alive
 
 **9 of 10 scenarios win** on Windows (`/json` is statistical noise at this concurrency level).
 
-### Latest Run (Local Mac)
 
-| Scenario | CosmoApiServer | ASP.NET Core | P50 (Cosmo) | Advantage |
-|---|---|---|---|---|
-| GET /ping | **10,649.6 ops/s** | 8,163.3 ops/s | 0.09 ms | **+31%** |
-| GET /json | **9,784.7 ops/s** | 7,315.3 ops/s | 0.10 ms | **+34%** |
-| GET /route/{id} | **10,905.1 ops/s** | 8,064.5 ops/s | 0.09 ms | **+35%** |
-| POST /echo | **9,328.4 ops/s** | 8,230.5 ops/s | 0.11 ms | **+13%** |
-| GET /large-json (1000 items) | **2,235.6 ops/s** | 1,615.5 ops/s | 0.45 ms | **+38%** |
-| GET /query | **10,661.0 ops/s** | 9,191.2 ops/s | 0.09 ms | **+16%** |
-| POST /form | **8,525.1 ops/s** | 7,518.8 ops/s | 0.12 ms | **+13%** |
-| GET /headers | **9,551.1 ops/s** | 8,045.1 ops/s | 0.10 ms | **+19%** |
-| GET /stream (NDJSON, 10 items) | **10,752.7 ops/s** | 8,748.9 ops/s | 0.09 ms | **+23%** |
-| GET /file (64 KB) | **5,980.9 ops/s** | 4,319.7 ops/s | 0.17 ms | **+39%** |
-
-HTTP/3 was skipped on this machine because runtime QUIC support is unavailable (`PlatformNotSupportedException: HTTP/3 requires runtime QUIC support on this platform.`).
 
 ### Windows HTTP/3 (MsQuic)
 
@@ -119,7 +104,7 @@ Key design decisions:
 
 - HTTP/1.1 keep-alive (pipelined)
 - HTTP/2 (h2c cleartext + ALPN over TLS)
-- Experimental HTTP/3 over QUIC (`UseHttp3()`) with request trailers, response trailers, streamed request bodies, NDJSON streaming responses, dynamic QPACK decode, and graceful GOAWAY handling
+- HTTP/3 over QUIC (`UseHttp3()`) — production-ready; request/response trailers, streamed request bodies, NDJSON streaming, dynamic QPACK decode, graceful GOAWAY, interop validated on Windows MsQuic and macOS Network.framework
 - TLS via `SslStream` with ALPN (`h2` / `http/1.1`)
 - **Razor Components** — Full `.razor` support with `@page`, `[Parameter]`, and `CascadingParameters`
 - **Routable Components** — Components can define their own routes via `@page` without a controller
@@ -164,7 +149,7 @@ Key design decisions:
 - OpenAPI & Swagger UI auto-generation
 - Security Middlewares (CSRF, HSTS, HTTPS Redirection)
 - Model Validation via DataAnnotations (Controllers & Components)
-- **Zero-Copy File Serving** — `HttpResponse.SendFileAsync()` streams directly from disk to socket
+- **Rate Limiting** — `UseRateLimiting()`, fixed-window per-IP limiter, configurable limit/window/status code, `Retry-After` header, proxy-trust mode (`TrustProxy`) for X-Forwarded-For
 
 ---
 
@@ -583,11 +568,21 @@ Share values with all descendant components without explicit parameter passing:
 
 | Project | Description |
 |---|---|
-| `src/CosmoApiServer.Core` | Core framework library |
-| `samples/BlazorSqlSample` | Replicated Blazor structure with SQL streaming and components |
+| `Core/` | Core framework library (`CosmoApiServer.Core`) |
+| `samples/CosmoApiBenchHost` | HTTP/1.1 benchmark host (used by `run_benchmark.sh` and `tools/run_windows_benchmark.ps1`) |
+| `samples/AspNetBenchHost` | ASP.NET Core benchmark host for head-to-head comparison |
+| `samples/CosmoBlazorSample` | Blazor-style SSR sample with Razor components |
+| `samples/BlazorSqlSample` | SQL streaming + components sample |
+| `samples/CosmoKitchenSink` | Kitchen-sink sample covering most features |
+| `samples/HelloWorldSample` | Minimal getting-started example |
+| `samples/FeatureShowcase` | Feature showcase with auth, SignalR, gRPC, output cache, etc. |
 | `samples/WeatherApp` | Full REST API: JWT auth, DI, streaming, CosmoSQLClient |
-| `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` template |
-| `tests/CosmoApiServer.Core.Tests` | 222 unit tests for routing, middleware, components, forms, change detection, SignalR, gRPC, output cache, antiforgery |
+| `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` project template |
+| `tests/CosmoApiServer.Core.Tests` | 287 tests covering routing, middleware, HTTP/3, SignalR, gRPC, Razor, output cache, antiforgery, and more |
+| `tests/ApiServer.Benchmark` | BenchmarkDotNet suite for HTTP/1.1 and HTTP/3 scenarios |
+| `tools/H3Interop/` | .NET HTTP/3 interop validation tool (32-scenario end-to-end client) |
+| `tools/run_windows_benchmark.ps1` | Windows benchmark script (builds, starts hosts, runs all scenarios) |
+| `tools/run_windows_interop.ps1` | Windows HTTP/3 interop script (starts server, runs H3Interop) |
 
 ---
 
@@ -849,6 +844,33 @@ Rewrites `ctx.Request.RemoteIpAddress`, `ctx.Request.Host`, and `ctx.Request.IsH
 
 ---
 
+## Rate Limiting
+
+Fixed-window per-IP rate limiter with atomic counters, `Retry-After` header, and optional proxy-trust mode.
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseRateLimiting(opts =>
+    {
+        opts.Limit      = 200;                        // max requests per window
+        opts.Window     = TimeSpan.FromMinutes(1);    // window size
+        opts.StatusCode = 429;                        // response code when exceeded
+        opts.TrustProxy = true;                       // use X-Forwarded-For (rightmost value)
+    });
+```
+
+When the limit is exceeded the response is:
+
+```
+HTTP/1.1 429 Too Many Requests
+Retry-After: 42
+{"error":"RateLimitExceeded","message":"Rate limit exceeded. Try again later."}
+```
+
+Expired entries are cleaned up automatically every 60 seconds. `TrustProxy = true` picks the rightmost `X-Forwarded-For` value (appended by the trusted proxy) to prevent IP spoofing via client-controlled headers.
+
+---
+
 ## SignalR
 
 ```csharp
@@ -954,16 +976,19 @@ public sealed class MetricsCollector : IHostedService
 
 ## Changelog
 
+### v2.1.4
+- **HTTP/3 production-ready** — interop validated (32/32 PASS via `tools/run_windows_interop.ps1`); all HTTP/3 roadmap items complete. 313 tests pass on macOS (Network.framework) and Windows (MsQuic).
+- **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
+- **HTTP/3 logging** — `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` suppresses `QuicException` shutdown noise.
+- Latest Windows HTTP/3 numbers (post-Phase-6): `/ping` 3,046 ops/s, `/query` 3,840 ops/s, `/headers` 5,774 ops/s.
+- 313 tests.
+
 ### v2.1.2
 - **Fix: Content-Type preservation for Problem Details** — `DefaultProblemDetailsService` and `TypedResults.Problem` now write raw UTF-8 bytes instead of calling `WriteJson`, which was silently overwriting `application/problem+json` with `application/json`.
 - **Fix: Request timeout catch condition** — `RequestTimeoutMiddleware` now saves the original `RequestAborted` token before replacing it with the linked CTS token, so client disconnects are correctly distinguished from server-side timeouts.
 - **Fix: SignalR target name casing** — `HubConnectionManager.BuildInvocation` now applies `JsonNamingPolicy.CamelCase` to the method name so clients receive `"sendMessage"` instead of `"SendMessage"`.
 - **Fix: `ProblemDetails.TitleForStatus(500)`** — Changed from a non-standard phrase to the standard HTTP reason phrase `"Internal Server Error"`.
-- 222 unit tests (up from 215).
-
-### v2.1.4
-- **SignalR** — JSON + MessagePack protocols now run through `IHubProtocol`, covering streaming, cancellation, `IHubContext` broadcasts, and reconnect-after-restart; the new client tests prove the path end-to-end.
-- **HTTP/3 logging & metrics** — `COSMO_HTTP3_SUPPRESS_ABORT_LOGS=1` keeps shutdown noise at zero, and the Windows HTTP/3 repeat table documents clean ops/sec (e.g., `/ping` 2,375.3 ops/s, `/json` 2,448.6 ops/s, `/large-json` 1,082.3 ops/s) so downstream consumers can see the stable metrics in this changelog entry.
+- 222 tests (up from 215).
 
 ### v2.1.1
 - **Output Caching** — `AddOutputCache()` + `UseOutputCaching()`, `IOutputCacheStore`, `InMemoryOutputCacheStore`, vary-by-header/query, tag-based eviction, `X-Output-Cache: HIT/MISS`.
@@ -989,7 +1014,7 @@ public sealed class MetricsCollector : IHostedService
 
 ### v2.0.7
 - **Stream flush coalescing** — `Http3DataFrameStream.CompleteAsync` double final-frame bug fixed. `hasStagedData` is now captured before clearing `_staging`, eliminating spurious empty DATA frames that caused `QuicException: Stream aborted by peer (268)` (H3_REQUEST_CANCELLED) under repeated large-response workloads.
-- Stream disposal moved to `Task.Run()` to avoid blocking the QUIC stream-accept loop.
+- Stream disposal moved to `Task.Run()` to reduce blocking on the QUIC stream-accept loop. (Note: this was later reversed in Phase 6 — stream disposal is now awaited inline to eliminate the 4–6 ms P99 spikes the `Task.Run` scheduling introduced.)
 
 ### v2.0.6
 - **HTTP/3** — QPACK dynamic table encode/decode, request and response trailers, server-initiated GOAWAY, graceful shutdown, feature-parity coverage for HEAD, ranges, forms, multipart, OpenAPI, Swagger UI, and auth/header propagation.
