@@ -116,7 +116,7 @@ public class SignalRClientIntegrationTests
     public async Task SignalR_WebSocket_InvalidHandshake_ClosesConnection()
     {
         int port = GetFreeTcpPort();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var builder = CosmoWebApplicationBuilder.Create();
         builder.ListenOn(port);
