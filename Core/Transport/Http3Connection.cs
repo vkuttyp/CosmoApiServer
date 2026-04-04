@@ -4,6 +4,8 @@ using System.Net.Quic;
 using System.Text;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Transport;
 
@@ -35,6 +37,10 @@ internal static class Http3Connection
 
     private const long SettingsQpackMaxTableCapacity = 0x01;
     private const long SettingsQpackBlockedStreams = 0x07;
+    private const long SettingsMaxFieldSectionSize = 0x06;
+
+    // Per-process logger resolved once from the first IServiceProvider seen.
+    private static ILogger? _logger;
 
     private static bool SupportsQuicPlatform() =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
@@ -46,17 +52,22 @@ internal static class Http3Connection
         QuicConnection connection,
         RequestDelegate pipeline,
         IServiceProvider services,
-        CancellationToken ct)
+        int maxRequestsPerConnection,
+        CancellationToken ct,
+        int maxFieldSectionSize = 16 * 1024)
     {
         if (!SupportsQuicPlatform() || !QuicConnection.IsSupported)
             return;
+
+        // Resolve logger once per process from the DI container (ILogger is thread-safe).
+        _logger ??= services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer.Http3");
 
 #pragma warning disable CA1416
         var remoteIp = (connection.RemoteEndPoint as IPEndPoint)?.Address.ToString();
         var qpackState = new QpackDecoderState();
         var encoderState = new QpackEncoderState();
         var connectionState = new Http3ConnectionState();
-        var controlStreams = await InitializeServerStreamsAsync(connection, ct);
+        var controlStreams = await InitializeServerStreamsAsync(connection, maxFieldSectionSize, ct);
         var streamTasks = new List<Task>(16);
         bool goAwaySent = false;
         qpackState.SetInsertCountIncrementSink(increment =>
@@ -82,7 +93,7 @@ internal static class Http3Connection
                     streamTasks.RemoveAll(static t => t.IsCompleted);
                 }
 
-                if (connectionState.RequestCount >= MaxRequestsPerConnection)
+                if (maxRequestsPerConnection > 0 && connectionState.RequestCount >= maxRequestsPerConnection)
                 {
                     if (!goAwaySent)
                     {
@@ -124,7 +135,7 @@ internal static class Http3Connection
 #pragma warning restore CA1416
     }
 
-    private static async Task<ServerControlStreams> InitializeServerStreamsAsync(QuicConnection connection, CancellationToken ct)
+    private static async Task<ServerControlStreams> InitializeServerStreamsAsync(QuicConnection connection, int maxFieldSectionSize, CancellationToken ct)
     {
 #pragma warning disable CA1416
         var control = await connection.OpenOutboundStreamAsync(QuicStreamType.Unidirectional, ct);
@@ -133,12 +144,15 @@ internal static class Http3Connection
 
         await WriteVarIntAsync(control, StreamTypeControl, ct);
 
-        var settingsPayload = new byte[16];
+        // SETTINGS frame: QPACK table capacity=0, QPACK blocked streams=0, MAX_FIELD_SECTION_SIZE
+        var settingsPayload = new byte[24];
         int settingsLen = 0;
         settingsLen += EncodeVarInt(SettingsQpackMaxTableCapacity, settingsPayload.AsSpan(settingsLen));
         settingsLen += EncodeVarInt(0, settingsPayload.AsSpan(settingsLen));
         settingsLen += EncodeVarInt(SettingsQpackBlockedStreams, settingsPayload.AsSpan(settingsLen));
         settingsLen += EncodeVarInt(0, settingsPayload.AsSpan(settingsLen));
+        settingsLen += EncodeVarInt(SettingsMaxFieldSectionSize, settingsPayload.AsSpan(settingsLen));
+        settingsLen += EncodeVarInt(maxFieldSectionSize, settingsPayload.AsSpan(settingsLen));
         await WriteFrameAsync(control, FrameSettings, settingsPayload.AsMemory(0, settingsLen), false, ct);
 
         await WriteVarIntAsync(encoder, StreamTypeQpackEncoder, ct);
@@ -223,8 +237,16 @@ internal static class Http3Connection
             }
             catch (Exception ex)
             {
-                httpContext.Response.StatusCode = 500;
-                httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                // Re-throw protocol errors from the request body stream (e.g. pseudo-headers in trailers)
+                // so they reach the outer catch, which aborts the stream with the correct error code.
+                if (httpContext.Request.BodyStream is Http3RequestBodyStream bs && bs.HasPendingProtocolError)
+                    throw;
+
+                if (!httpContext.Response.IsStarted)
+                {
+                    httpContext.Response.StatusCode = 500;
+                    httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                }
             }
             finally
             {
@@ -257,7 +279,7 @@ internal static class Http3Connection
         {
             if (!SuppressShutdownAbortLogs || !(ex is QuicException))
             {
-                Console.Error.WriteLine($"[HTTP/3] stream={stream.Id} {ex.GetType().Name}: {ex.Message}");
+                _logger?.LogError(ex, "[HTTP/3] stream={StreamId} {ExType}", stream.Id, ex.GetType().Name);
             }
             abortStream = true;
             try { stream.Abort(QuicAbortDirection.Both, IsProtocolError(ex) ? Http3GeneralProtocolError : Http3InternalError); } catch { }
@@ -273,35 +295,28 @@ internal static class Http3Connection
             else
             {
                 Trace($"stream={stream.Id} dispose-success");
-                // Dispose on a background task — DisposeAsync may block on pending FlushAsync
-                // but must not stall the stream-accept loop on the connection.
-                _ = Task.Run(() => DisposeSuccessfulRequestStreamAsync(stream));
+                await stream.DisposeAsync();
             }
         }
-#pragma warning restore CA1416
-    }
-
-    private static async Task DisposeSuccessfulRequestStreamAsync(QuicStream stream)
-    {
-#pragma warning disable CA1416
-        try
-        {
-            await stream.DisposeAsync();
-        }
-        catch { }
 #pragma warning restore CA1416
     }
 
     private static void Trace(string message)
     {
         if (TraceHttp3)
-            Console.Error.WriteLine($"[HTTP/3 TRACE] {message}");
+        {
+            if (_logger is not null) _logger.LogTrace("[HTTP/3 TRACE] {Message}", message);
+            else Console.Error.WriteLine($"[HTTP/3 TRACE] {message}");
+        }
     }
 
     private static void TraceWrite(long? streamId, string message)
     {
         if (TraceHttp3 && streamId is not null)
-            Console.Error.WriteLine($"[HTTP/3 TRACE] stream={streamId} write {message}");
+        {
+            if (_logger is not null) _logger.LogTrace("[HTTP/3 TRACE] stream={StreamId} write {Message}", streamId, message);
+            else Console.Error.WriteLine($"[HTTP/3 TRACE] stream={streamId} write {message}");
+        }
     }
 
     private static async Task ConsumeControlStreamAsync(QuicStream stream, QpackDecoderState qpackState, CancellationToken ct)
@@ -1286,24 +1301,65 @@ internal static class Http3Connection
         bool completeWrites,
         CancellationToken ct)
     {
-        var header = ArrayPool<byte>.Shared.Rent(16);
+        // Encode the 2-part frame header (type + length) — at most 9+9 = 18 bytes, 16 is sufficient for QUIC frames.
+        Span<byte> headerBuf = stackalloc byte[16];
+        int headerLength = EncodeVarInt(frameType, headerBuf);
+        headerLength += EncodeVarInt(payload.Length, headerBuf[headerLength..]);
+
+#pragma warning disable CA1416
+        if (payload.IsEmpty)
+        {
+            // Header-only frame (e.g. empty DATA to FIN stream): single write.
+            var header = ArrayPool<byte>.Shared.Rent(headerLength);
+            try
+            {
+                headerBuf[..headerLength].CopyTo(header);
+                await stream.WriteAsync(header.AsMemory(0, headerLength), completeWrites, ct);
+                if (!completeWrites)
+                    await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(header);
+            }
+            return;
+        }
+
+        int combinedLength = headerLength + payload.Length;
+        if (combinedLength <= 16384)
+        {
+            // Small frame: combine header + payload into one write to minimise QUIC send operations.
+            var combined = ArrayPool<byte>.Shared.Rent(combinedLength);
+            try
+            {
+                headerBuf[..headerLength].CopyTo(combined);
+                payload.Span.CopyTo(combined.AsSpan(headerLength));
+                await stream.WriteAsync(combined.AsMemory(0, combinedLength), completeWrites, ct);
+                if (!completeWrites)
+                    await stream.FlushAsync(ct);
+            }
+            finally
+            {
+                ArrayPool<byte>.Shared.Return(combined);
+            }
+            return;
+        }
+
+        // Large frame: write header and payload separately to avoid copying.
+        var headerArr = ArrayPool<byte>.Shared.Rent(headerLength);
         try
         {
-            int headerLength = EncodeVarInt(frameType, header.AsSpan());
-            headerLength += EncodeVarInt(payload.Length, header.AsSpan(headerLength));
-#pragma warning disable CA1416
-            bool completeOnHeader = completeWrites && payload.IsEmpty;
-            await stream.WriteAsync(header.AsMemory(0, headerLength), completeOnHeader, ct);
-            if (!payload.IsEmpty)
-                await stream.WriteAsync(payload, completeWrites, ct);
+            headerBuf[..headerLength].CopyTo(headerArr);
+            await stream.WriteAsync(headerArr.AsMemory(0, headerLength), false, ct);
+            await stream.WriteAsync(payload, completeWrites, ct);
             if (!completeWrites)
                 await stream.FlushAsync(ct);
-#pragma warning restore CA1416
         }
         finally
         {
-            ArrayPool<byte>.Shared.Return(header);
+            ArrayPool<byte>.Shared.Return(headerArr);
         }
+#pragma warning restore CA1416
     }
 
     private static async ValueTask<(long Type, byte[] Payload)?> TryReadFrameAsync(QuicStream stream, CancellationToken ct)
@@ -1394,6 +1450,18 @@ internal static class Http3Connection
         }
 
         return buffer;
+    }
+
+    private static async Task ReadExactlyIntoAsync(Stream stream, byte[] buffer, int length, CancellationToken ct)
+    {
+        int offset = 0;
+        while (offset < length)
+        {
+            int read = await stream.ReadAsync(buffer.AsMemory(offset, length - offset), ct);
+            if (read == 0)
+                throw new EndOfStreamException();
+            offset += read;
+        }
     }
 
     private static void WriteVarInt(Stream stream, long value)
@@ -1630,9 +1698,14 @@ internal static class Http3Connection
         HttpRequest request) : Stream
     {
         private ReadOnlyMemory<byte> _currentData = ReadOnlyMemory<byte>.Empty;
+        // Rented buffer backing _currentData — returned when the frame is fully consumed.
+        private byte[]? _rentedDataBuffer;
         private bool _endOfBody;
         private bool _trailersSeen;
         private bool _disposed;
+        private bool _hasPendingProtocolError;
+
+        public bool HasPendingProtocolError => _hasPendingProtocolError;
 
         public override bool CanRead => !_disposed;
         public override bool CanSeek => false;
@@ -1654,37 +1727,87 @@ internal static class Http3Connection
 
             while (_currentData.IsEmpty)
             {
-                var frame = await TryReadFrameAsync(stream, cancellationToken);
-                if (frame is null)
+                // Return the previous frame's rented buffer before fetching the next frame.
+                if (_rentedDataBuffer is not null)
+                {
+                    ArrayPool<byte>.Shared.Return(_rentedDataBuffer);
+                    _rentedDataBuffer = null;
+                }
+
+                long frameType;
+                long frameLength;
+                try
+                {
+                    frameType = await ReadVarIntAsync(stream, cancellationToken);
+                    frameLength = await ReadVarIntAsync(stream, cancellationToken);
+                }
+                catch (EndOfStreamException)
                 {
                     _endOfBody = true;
                     return 0;
                 }
 
-                switch (frame.Value.Type)
+                if (frameLength < 0 || frameLength > int.MaxValue)
+                    throw new InvalidOperationException("Invalid HTTP/3 frame length.");
+
+                switch (frameType)
                 {
                     case FrameData:
                         if (_trailersSeen)
                             throw new InvalidOperationException("HTTP/3 DATA frame received after trailers.");
-                        _currentData = frame.Value.Payload;
+                        if (frameLength == 0)
+                            continue;
+                        // Rent a pooled buffer for this DATA frame — avoids a heap allocation per frame.
+                        _rentedDataBuffer = ArrayPool<byte>.Shared.Rent((int)frameLength);
+                        await ReadExactlyIntoAsync(stream, _rentedDataBuffer, (int)frameLength, cancellationToken);
+                        _currentData = _rentedDataBuffer.AsMemory(0, (int)frameLength);
                         break;
                     case FrameHeaders:
                         if (_trailersSeen)
                             throw new InvalidOperationException("HTTP/3 request sent multiple trailer HEADERS frames.");
-                        var trailers = await DecodeFieldSectionAsync(frame.Value.Payload, qpackState, decoderWriter, streamId, cancellationToken);
-                        if (trailers.RequiredInsertCount > 0)
-                            await decoderWriter.SendSectionAcknowledgmentAsync(streamId, cancellationToken);
-                        MergeTrailers(request, trailers.Headers);
+                        // HEADERS (trailers) are small; use a rented buffer to avoid heap allocation.
+                        var trailerBuffer = ArrayPool<byte>.Shared.Rent((int)frameLength);
+                        try
+                        {
+                            await ReadExactlyIntoAsync(stream, trailerBuffer, (int)frameLength, cancellationToken);
+                            var trailers = await DecodeFieldSectionAsync(trailerBuffer.AsMemory(0, (int)frameLength), qpackState, decoderWriter, streamId, cancellationToken);
+                            if (trailers.RequiredInsertCount > 0)
+                                await decoderWriter.SendSectionAcknowledgmentAsync(streamId, cancellationToken);
+                            try
+                            {
+                                MergeTrailers(request, trailers.Headers);
+                            }
+                            catch
+                            {
+                                // Flag that the exception originated from a protocol rule in trailers
+                                // so the outer request handler can abort the stream rather than
+                                // sending a 500 response, which wouldn't propagate to the client.
+                                _hasPendingProtocolError = true;
+                                throw;
+                            }
+                        }
+                        finally
+                        {
+                            ArrayPool<byte>.Shared.Return(trailerBuffer);
+                        }
                         _trailersSeen = true;
                         continue;
                     default:
-                        throw new InvalidOperationException($"HTTP/3 frame type {frame.Value.Type} is not valid in the request body stream.");
+                        throw new InvalidOperationException($"HTTP/3 frame type {frameType} is not valid in the request body stream.");
                 }
             }
 
             int toCopy = Math.Min(buffer.Length, _currentData.Length);
             _currentData[..toCopy].CopyTo(buffer);
             _currentData = _currentData[toCopy..];
+
+            // Once the entire rented frame is consumed, return the buffer immediately.
+            if (_currentData.IsEmpty && _rentedDataBuffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(_rentedDataBuffer);
+                _rentedDataBuffer = null;
+            }
+
             return toCopy;
 #pragma warning restore CA1416
         }
@@ -1709,6 +1832,11 @@ internal static class Http3Connection
         protected override void Dispose(bool disposing)
         {
             _disposed = true;
+            if (_rentedDataBuffer is not null)
+            {
+                ArrayPool<byte>.Shared.Return(_rentedDataBuffer);
+                _rentedDataBuffer = null;
+            }
             base.Dispose(disposing);
         }
     }
@@ -1749,7 +1877,7 @@ internal static class Http3Connection
         }
 
         // DATA frames ≤ this threshold are coalesced into a single WriteAsync to reduce async ops.
-        private const int CoalesceThreshold = 8 * 1024;
+        private const int CoalesceThreshold = 32 * 1024;
 
         public override async Task FlushAsync(CancellationToken cancellationToken)
         {
@@ -1793,29 +1921,31 @@ internal static class Http3Connection
             if (_disposed)
                 return;
 
-            // Snapshot before clearing — used below to avoid a double final-frame.
             bool hasStagedData = _staging.WrittenCount > 0;
 
             if (hasStagedData)
             {
                 var payload = _staging.WrittenMemory;
-                // If there are no trailers, this is the final write — mark completeWrites=true.
-                // If there are trailers, we must leave the stream open for the HEADERS frame.
-                await WriteFrameAsync(stream, FrameData, payload, trailerBlock is null, ct);
+                // Never use endStream=true on DATA frames — always FIN explicitly via CompleteWrites().
+                // Using endStream=true followed by DisposeAsync causes Windows/MsQuic to emit an
+                // extra empty frame, corrupting the stream.
+                await WriteFrameAsync(stream, FrameData, payload, false, ct);
                 _staging.Clear();
             }
 
             if (trailerBlock is not null)
             {
+                // Trailing HEADERS is always the last frame; FIN via completeWrites is appropriate.
                 await WriteFrameAsync(stream, FrameHeaders, trailerBlock.Value, true, ct);
             }
-            else if (!hasStagedData)
+            else
             {
-                // Nothing staged this call; all prior data was flushed via FlushAsync
-                // (each with completeWrites=false). Send an empty DATA frame to FIN the stream.
-                await WriteFrameAsync(stream, FrameData, ReadOnlyMemory<byte>.Empty, true, ct);
+                // No trailers: close the write side explicitly.
+                // This is idempotent and avoids Windows/MsQuic double-FIN artifacts.
+#pragma warning disable CA1416
+                stream.CompleteWrites();
+#pragma warning restore CA1416
             }
-            // else: hasStagedData && no trailers — stream already closed by WriteFrameAsync above.
 
             _disposed = true;
         }

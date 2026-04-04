@@ -153,6 +153,11 @@ public sealed class CosmoWebApplication
             _options.CertificatePath, _options.CertificatePassword, _options.EnableHttp2,
             _options.EnableHttp3,
             _options.ConnectionTimeoutSeconds,
+            _options.Http3MaxRequestsPerConnection,
+            _options.Http3MaxConcurrentStreams,
+            _options.Http3IdleTimeoutSeconds,
+            _options.Http3MaxUnidirectionalStreams,
+            _options.Http3MaxFieldSectionSize,
             cancellationToken);
 
         // Wait until cancelled

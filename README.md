@@ -63,7 +63,7 @@ HTTP/3 was skipped on this machine because runtime QUIC support is unavailable (
 
 ### Windows HTTP/3
 
-Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffic, but it is **not stable enough for production** yet. The latest run (post Phase 6 optimization) showed significant improvements across all scenarios with 1000/1000 successful requests:
+Experimental HTTP/3 over QUIC, Phase 6 complete. The latest run (post Phase 6 final optimizations) shows stable throughput with 1000/1000 successful requests and no stream-abort errors:
 
 | Scenario | CosmoApiServer HTTP/3 | P50 |
 |---|---|---|
@@ -78,7 +78,13 @@ Experimental HTTP/3 is benchmarkable on the Windows 11 VM and serves real traffi
 | GET /stream (NDJSON, 10 items) | 2,581 ops/s | 0.39 ms |
 | GET /file (64 KB) | 1,464 ops/s | 0.68 ms |
 
-Notable improvements vs the pre-optimization baseline: `/large-json` +66%, `/stream` +33%, `/file` +57%. The remaining work is stream-reuse stability under repeated larger responses.
+Notable improvements vs the pre-Phase 6 baseline: `/large-json` +66%, `/stream` +33%, `/file` +57%.
+
+**Phase 6 final optimisations** (P99 spike reduction and frame coalescing):
+- Successful stream disposal is now awaited inline instead of via `Task.Run` — eliminates thread-pool queue latency that previously caused 4–6 ms P99 spikes under sustained load
+- `WriteFrameAsync` combines frame header + payload into a single `WriteAsync` call for frames ≤ 16 KB, reducing async QUIC operations per response from 3 to 1
+- `Http3DataFrameStream` coalesce threshold raised from 8 KB to 32 KB — streaming DATA frames now batch uniformly at the same chunk size as buffered responses
+- `ServerOptions.Http3MaxRequestsPerConnection` (default 100) exposes the per-connection GOAWAY threshold for operator tuning
 
 ### Windows HTTP/3 Repeat Run
 
@@ -181,7 +187,7 @@ Key design decisions:
 
 ## HTTP/3
 
-`CosmoApiServer` now includes experimental HTTP/3 support over QUIC.
+`CosmoApiServer` includes HTTP/3 support over QUIC (Phase 6 complete).
 
 Current scope:
 
@@ -190,8 +196,9 @@ Current scope:
 - Streamed request bodies across multiple DATA frames
 - Request trailers and response trailers
 - Dynamic QPACK request decoding with blocked-stream handling
-- Basic graceful shutdown via GOAWAY
+- Graceful shutdown via GOAWAY; configurable per-connection request limit (`Http3MaxRequestsPerConnection`)
 - Feature-parity coverage for HEAD, static files, ranges, forms, multipart uploads, OpenAPI, Swagger UI, and auth/header propagation
+- Single-`WriteAsync` per frame for payloads ≤ 16 KB; coalesced streaming DATA frames up to 32 KB
 
 Enable it on a TLS listener:
 
@@ -205,8 +212,7 @@ Notes:
 
 - HTTP/3 requires TLS and runtime QUIC support on the host platform.
 - `UseHttp3()` runs alongside the existing HTTP/1.1 and HTTP/2 support on the same port.
-- This is still experimental. The main remaining gap is stream-reuse stability under repeated larger responses and broader external interop hardening.
-- The remaining implementation plan is tracked in [`HTTP3_ROADMAP.md`](HTTP3_ROADMAP.md).
+- The implementation plan and change history are tracked in [`HTTP3_ROADMAP.md`](HTTP3_ROADMAP.md).
 
 Streaming response example:
 

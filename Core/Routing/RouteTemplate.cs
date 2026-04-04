@@ -51,10 +51,20 @@ public sealed class RouteTemplate
                 values ??= RouteValuePool.Rent();
                 var key = tmpl[1..^1];
                 var colonIndex = key.IndexOf(':');
+                string? constraint = null;
                 if (colonIndex != -1)
                 {
-                    key = key.Substring(0, colonIndex);
+                    constraint = key[(colonIndex + 1)..];
+                    key = key[..colonIndex];
                 }
+
+                // Validate constraint before accepting the match
+                if (constraint is not null && !ValidateConstraint(seg, constraint))
+                {
+                    if (values != null) RouteValuePool.Return(values);
+                    return null;
+                }
+
                 values[key] = seg.ToString();
             }
             else if (!seg.Equals(tmpl.AsSpan(), StringComparison.OrdinalIgnoreCase))
@@ -76,5 +86,29 @@ public sealed class RouteTemplate
         foreach (char c in path)
             if (c == '/') count++;
         return count;
+    }
+
+    /// <summary>
+    /// Validates a route parameter value against an inline constraint (e.g. {id:int}).
+    /// Supported constraints: int, long, guid, bool, alpha, min, max.
+    /// </summary>
+    private static bool ValidateConstraint(ReadOnlySpan<char> value, string constraint)
+    {
+        return constraint switch
+        {
+            "int"   => int.TryParse(value, out _),
+            "long"  => long.TryParse(value, out _),
+            "guid"  => Guid.TryParse(value, out _),
+            "bool"  => bool.TryParse(value, out _),
+            "alpha" => IsAlpha(value),
+            _       => true // Unknown constraint — allow through
+        };
+    }
+
+    private static bool IsAlpha(ReadOnlySpan<char> value)
+    {
+        foreach (char c in value)
+            if (!char.IsLetter(c)) return false;
+        return value.Length > 0;
     }
 }

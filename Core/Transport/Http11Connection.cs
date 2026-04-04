@@ -7,6 +7,7 @@ using CosmoApiServer.Core.Http;
 using Cosmo.Transport.Pipelines;
 using CosmoApiServer.Core.Middleware;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Transport;
 
@@ -26,7 +27,8 @@ internal static class Http11Connection
         int maxBodySize,
         bool enableHttp2,
         string? remoteIp,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? altSvcValue = null)
     {
         // Linked CTS lets either side cancel the other when the connection shuts down.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -37,7 +39,7 @@ internal static class Http11Connection
             resumeWriterThreshold: maxBodySize / 2));
 
         var fillTask = FillPipeAsync(stream, pipe.Writer, cts.Token);
-        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token);
+        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token, altSvcValue);
 
         // When either side finishes, cancel the other half of the connection.
         await Task.WhenAny(fillTask.AsTask(), processTask.AsTask());
@@ -93,7 +95,8 @@ internal static class Http11Connection
         IServiceProvider services,
         bool enableHttp2,
         string? remoteIp,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? altSvcValue = null)
     {
         // Create a PipeWriter for the outbound stream (response side)
         var writer = PipeWriter.Create(stream, new StreamPipeWriterOptions(leaveOpen: true));
@@ -113,7 +116,7 @@ internal static class Http11Connection
 
                 if (isH2c)
                 {
-                    await Http2Connection.RunAsync(reader, writer, pipeline, services, ct);
+                    await Http2Connection.RunAsync(reader, writer, pipeline, services, ct, altSvcValue);
                     return null;
                 }
             }
@@ -153,13 +156,25 @@ internal static class Http11Connection
                 
                 httpContext.Items["__RawStream"] = stream;
                 httpContext.Response.BodyWriter = writer;
+                httpContext.Response.AltSvcValue = altSvcValue;
 
                 // Run the full middleware + router pipeline
                 try { await pipeline(httpContext); }
                 catch (Exception ex)
                 {
-                    httpContext.Response.StatusCode = 500;
-                    httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                    if (!httpContext.Response.IsStarted)
+                    {
+                        httpContext.Response.StatusCode = 500;
+                        httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                    }
+                    else
+                    {
+                        // Headers already sent to wire — cannot change status code.
+                        // Log and let the connection drain naturally.
+                        var logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer.Http11");
+                        logger?.LogError(ex, "[Http11] Unhandled exception after response started");
+                        if (logger is null) Console.Error.WriteLine($"[Http11] Unhandled exception after response started: {ex.GetType().Name}: {ex.Message}");
+                    }
                 }
                 finally
                 {
@@ -178,7 +193,8 @@ internal static class Http11Connection
                         writer,
                         httpContext.Response.StatusCode,
                         httpContext.StreamingBodyWriter,
-                        ct);
+                        ct,
+                        altSvcValue);
 
                     bool streamingConnectionClose =
                         (httpContext.Request.Headers.TryGetValue("Connection", out var streamingConn) &&
@@ -198,7 +214,7 @@ internal static class Http11Connection
                 if (!httpContext.Response.IsStarted)
                 {
                     // If not started, it was buffered. Write everything at once.
-                    Http11Writer.WriteResponse(writer, httpContext.Response);
+                    Http11Writer.WriteResponse(writer, httpContext.Response, altSvcValue);
                 }
                 else
                 {
@@ -330,12 +346,19 @@ internal static class Http11Connection
                 // Small body — buffer it now for convenience (e.g. S3 metadata)
                 ctx.Request.Body = new byte[req.ContentLength];
                 var bodyStream = new HttpBodyStream(reader, req.ContentLength, false);
-                int totalRead = 0;
-                while (totalRead < req.ContentLength)
+                try
                 {
-                    int read = await bodyStream.ReadAsync(ctx.Request.Body, totalRead, (int)req.ContentLength - totalRead, ct);
-                    if (read <= 0) break;
-                    totalRead += read;
+                    int totalRead = 0;
+                    while (totalRead < req.ContentLength)
+                    {
+                        int read = await bodyStream.ReadAsync(ctx.Request.Body, totalRead, (int)req.ContentLength - totalRead, ct);
+                        if (read <= 0) break;
+                        totalRead += read;
+                    }
+                }
+                finally
+                {
+                    bodyStream.Dispose();
                 }
                 ctx.Request.BodyStream = Stream.Null;
                 ctx.Request.BodyReader = null;

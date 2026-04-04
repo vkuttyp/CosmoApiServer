@@ -45,15 +45,8 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
 
         var entry = _cache.GetOrAdd(ip, _ => new RateLimitEntry(now.Add(options.Window)));
 
-        // Atomic increment and window check
-        var windowEnd = entry.WindowEnd;
-        if (now > windowEnd)
-        {
-            // Window expired — reset atomically
-            entry.Reset(now.Add(options.Window));
-        }
-
-        var count = entry.Increment();
+        // Atomically check expiry and reset within the entry to avoid TOCTOU race
+        var count = entry.IncrementWithWindowReset(now, options.Window);
 
         if (count > options.Limit)
         {
@@ -108,15 +101,33 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
         private int _count;
         // Store ticks as long so WindowEnd reads/writes are atomic via Interlocked
         private long _windowEndTicks = windowEnd.Ticks;
+        private readonly Lock _resetLock = new();
 
         public DateTime WindowEnd => new(Interlocked.Read(ref _windowEndTicks), DateTimeKind.Utc);
 
         public int Increment() => Interlocked.Increment(ref _count);
 
+        /// <summary>
+        /// Atomically checks if the window has expired, resets if necessary, then increments.
+        /// Using a per-entry lock makes the check+reset+increment sequence race-free.
+        /// </summary>
+        public int IncrementWithWindowReset(DateTime now, TimeSpan window)
+        {
+            lock (_resetLock)
+            {
+                var windowEndTicks = Interlocked.Read(ref _windowEndTicks);
+                if (now.Ticks > windowEndTicks)
+                {
+                    // Window expired — reset count and advance window
+                    Interlocked.Exchange(ref _count, 0);
+                    Interlocked.Exchange(ref _windowEndTicks, now.Add(window).Ticks);
+                }
+                return Interlocked.Increment(ref _count);
+            }
+        }
+
         public void Reset(DateTime newWindowEnd)
         {
-            // Reset count first, then update window — any increments between the two
-            // belong to the new window, which is acceptable for a fixed-window limiter.
             Interlocked.Exchange(ref _count, 0);
             Interlocked.Exchange(ref _windowEndTicks, newWindowEnd.Ticks);
         }

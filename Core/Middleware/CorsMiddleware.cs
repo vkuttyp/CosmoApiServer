@@ -33,18 +33,28 @@ public sealed class CorsMiddleware : IMiddleware
         string origin = context.Request.Headers.TryGetValue("Origin", out var o) ? o : "*";
         bool allowed = _allowAll || Array.IndexOf(_options.AllowedOrigins, origin) >= 0;
 
+        // Handle pre-flight OPTIONS request
+        if (context.Request.Method == Http.HttpMethod.OPTIONS)
+        {
+            if (!allowed)
+            {
+                // Deny the preflight — return 403 so the browser knows the origin is blocked
+                context.Response.StatusCode = 403;
+                return;
+            }
+            context.Response.Headers["Access-Control-Allow-Origin"]  = origin;
+            context.Response.Headers["Access-Control-Allow-Methods"] = _allowedMethodsHeader;
+            context.Response.Headers["Access-Control-Allow-Headers"] = _allowedHeadersHeader;
+            context.Response.Headers["Access-Control-Max-Age"]       = "3600";
+            context.Response.StatusCode = 204;
+            return;
+        }
+
         if (allowed)
         {
             context.Response.Headers["Access-Control-Allow-Origin"]  = origin;
             context.Response.Headers["Access-Control-Allow-Methods"] = _allowedMethodsHeader;
             context.Response.Headers["Access-Control-Allow-Headers"] = _allowedHeadersHeader;
-        }
-
-        // Handle pre-flight
-        if (context.Request.Method == Http.HttpMethod.OPTIONS)
-        {
-            context.Response.StatusCode = 204;
-            return;
         }
 
         await next(context);

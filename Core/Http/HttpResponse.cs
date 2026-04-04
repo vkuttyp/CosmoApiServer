@@ -67,7 +67,7 @@ public sealed class HttpResponse
                 Headers["Transfer-Encoding"] = "chunked";
             }
             
-            Http11Writer.WriteHeaders(pw, this, null);
+            Http11Writer.WriteHeaders(pw, this, altSvcValue: AltSvcValue);
         }
         _headersWritten = true;
     }
@@ -328,9 +328,16 @@ public sealed class HttpResponse
     }
 
     private bool _hasStarted;
+    private bool _endCalled;
     public bool IsStarted => _hasStarted || _body is not null;
     public bool IsBuffered => _body is not null;
     internal bool IsTransportHandled => _transportHandled;
+
+    /// <summary>
+    /// Alt-Svc value injected by the transport layer so EnsureHeadersWritten can include it
+    /// without the handler needing to know about HTTP/3 upgrade headers.
+    /// </summary>
+    internal string? AltSvcValue { get; set; }
 
     /// <summary>
     /// Clears the current buffered body.
@@ -342,9 +349,12 @@ public sealed class HttpResponse
 
     /// <summary>
     /// Finishes the response, writing terminating chunk if needed.
+    /// Idempotent — safe to call multiple times.
     /// </summary>
     public void End()
     {
+        if (_endCalled) return;
+        _endCalled = true;
         if (_isChunked && BodyWriter != null)
         {
             BodyWriter.Write("0\r\n\r\n"u8);
@@ -365,6 +375,8 @@ public sealed class HttpResponse
         _isChunked = false;
         _transportHandled = false;
         BodyCapture = null;
+        _endCalled = false;
+        AltSvcValue = null;
     }
 
     /// <summary>

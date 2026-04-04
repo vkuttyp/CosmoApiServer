@@ -6,6 +6,8 @@ using System.Text;
 using System.Net;
 using CosmoApiServer.Core.Http;
 using CosmoApiServer.Core.Middleware;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Transport;
 
@@ -46,6 +48,8 @@ internal sealed class Http2Connection
     private readonly RequestDelegate _pipeline;
     private readonly IServiceProvider _services;
     private readonly CancellationToken _ct;
+    private readonly string? _altSvcValue;
+    private readonly ILogger? _logger;
 
     private readonly HpackDecoder _hpack = new();
     private readonly SemaphoreSlim _writeLock = new(1, 1);
@@ -63,9 +67,10 @@ internal sealed class Http2Connection
         PipeWriter writer,
         RequestDelegate pipeline,
         IServiceProvider services,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? altSvcValue = null)
     {
-        var conn = new Http2Connection(reader, writer, pipeline, services, ct);
+        var conn = new Http2Connection(reader, writer, pipeline, services, ct, altSvcValue);
         await conn.RunAsync();
     }
 
@@ -73,18 +78,21 @@ internal sealed class Http2Connection
         System.IO.Stream stream,
         RequestDelegate pipeline,
         IServiceProvider services,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? altSvcValue = null)
     {
         var reader = PipeReader.Create(stream);
         var writer = PipeWriter.Create(stream);
-        await RunAsync(reader, writer, pipeline, services, ct);
+        await RunAsync(reader, writer, pipeline, services, ct, altSvcValue);
     }
 
     private Http2Connection(PipeReader reader, PipeWriter writer,
-        RequestDelegate pipeline, IServiceProvider services, CancellationToken ct)
+        RequestDelegate pipeline, IServiceProvider services, CancellationToken ct, string? altSvcValue = null)
     {
         _reader = reader; _writer = writer;
         _pipeline = pipeline; _services = services; _ct = ct;
+        _altSvcValue = altSvcValue;
+        _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer.Http2");
     }
 
     private async ValueTask RunAsync()
@@ -110,7 +118,8 @@ internal sealed class Http2Connection
         catch (Exception ex) when (ex is System.IO.IOException or System.Net.Sockets.SocketException) { }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[HTTP/2 ERROR] {ex.GetType().Name}: {ex.Message}");
+            _logger?.LogError(ex, "[HTTP/2 ERROR] {ExType}", ex.GetType().Name);
+            if (_logger is null) Console.Error.WriteLine($"[HTTP/2 ERROR] {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -207,31 +216,39 @@ internal sealed class Http2Connection
 
         if (padLen > 0) payload = payload[..^padLen];
 
-        // Accumulate header block (may continue via CONTINUATION frames)
+        // Accumulate header block; may span multiple CONTINUATION frames (RFC 7540 §6.10)
         var headerBlock = payload.ToArray();
 
-        // TODO: handle CONTINUATION frames for large header blocks
-        // For now, we assume END_HEADERS is always set (true for most clients)
         bool endHeaders = (frame.Flags & FlagEndHeaders) != 0;
         bool endStream  = (frame.Flags & FlagEndStream)  != 0;
 
         var stream = _streams.GetOrAdd(frame.StreamId, id => new Http2Stream(id));
         stream.HeaderBlock.AddRange(headerBlock);
 
-        if (endHeaders)
+        // Accumulate CONTINUATION frames until END_HEADERS is set (RFC 7540 §6.10)
+        while (!endHeaders)
         {
-            var decodedHeaders = _hpack.Decode(stream.HeaderBlock.ToArray());
-            stream.Headers = decodedHeaders.Select(h => new HeaderEntry(
-                new ReadOnlySequence<byte>(Encoding.ASCII.GetBytes(h.name)),
-                new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes(h.value)))).ToList();
-            stream.HeadersComplete = true;
-
-            if (endStream)
+            var contFrame = await ReadFrameAsync();
+            if (contFrame is null || contFrame.Type != FrameContinuation || contFrame.StreamId != frame.StreamId)
             {
-                // No body — dispatch immediately
-                _ = RunStreamAsync(stream);
-                _streams.TryRemove(frame.StreamId, out _);
+                // Protocol error: expected CONTINUATION on the same stream
+                await SendGoAwayAsync(frame.StreamId, ErrProtocolError);
+                return;
             }
+            stream.HeaderBlock.AddRange(contFrame.Payload);
+            endHeaders = (contFrame.Flags & FlagEndHeaders) != 0;
+        }
+
+        var decodedHeaders = _hpack.Decode(stream.HeaderBlock.ToArray());
+        stream.Headers = decodedHeaders.Select(h => new HeaderEntry(
+            new ReadOnlySequence<byte>(Encoding.ASCII.GetBytes(h.name)),
+            new ReadOnlySequence<byte>(Encoding.UTF8.GetBytes(h.value)))).ToList();
+        stream.HeadersComplete = true;
+
+        if (endStream)
+        {
+            // No body — dispatch immediately
+            _ = RunStreamAsync(stream);
         }
 
         // Send connection WINDOW_UPDATE to allow client to send more data
@@ -257,7 +274,6 @@ internal sealed class Http2Connection
         if (endStream)
         {
             _ = RunStreamAsync(stream);
-            _streams.TryRemove(frame.StreamId, out _);
         }
     }
 
@@ -273,19 +289,25 @@ internal sealed class Http2Connection
             try { await _pipeline(httpContext); }
             catch (Exception ex)
             {
-                httpContext.Response.StatusCode = 500;
-                httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                if (!httpContext.Response.IsStarted)
+                {
+                    httpContext.Response.StatusCode = 500;
+                    httpContext.Response.WriteText($"Internal Server Error: {ex.Message}");
+                }
             }
 
             await SendResponseAsync(stream.StreamId, httpContext.Response);
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[H2 Stream {stream.StreamId}] {ex.GetType().Name}: {ex.Message}");
+            _logger?.LogError(ex, "[H2 Stream {StreamId}] {ExType}", stream.StreamId, ex.GetType().Name);
+            if (_logger is null) Console.Error.WriteLine($"[H2 Stream {stream.StreamId}] {ex.GetType().Name}: {ex.Message}");
             await SendRstStreamAsync(stream.StreamId, ErrStreamClosed);
         }
         finally
         {
+            // Always remove the stream from active tracking and clean up resources
+            _streams.TryRemove(stream.StreamId, out _);
             httpContext._disposeScope?.Dispose();
             HttpContextPool.Return(httpContext);
         }
@@ -317,8 +339,9 @@ internal sealed class Http2Connection
         try { httpMethod = HttpMethodExtensions.Parse(method); }
         catch { httpMethod = Http.HttpMethod.GET; }
 
-        // Flatten body segments
-        int totalLen = stream.BodySegments.Sum(s => s.Length);
+        // Flatten body segments (avoid LINQ enumerator allocation on hot path)
+        int totalLen = 0;
+        foreach (var seg in stream.BodySegments) totalLen += seg.Length;
         byte[] body = new byte[totalLen];
         int offset = 0;
         foreach (var seg in stream.BodySegments) { seg.CopyTo(body, offset); offset += seg.Length; }
@@ -371,6 +394,8 @@ internal sealed class Http2Connection
             responseHeaders[name.ToLowerInvariant()] = value;
         if (!responseHeaders.ContainsKey("content-type") && response.Body.Length > 0)
             responseHeaders["content-type"] = "text/plain";
+        if (_altSvcValue is not null && !responseHeaders.ContainsKey("alt-svc"))
+            responseHeaders["alt-svc"] = _altSvcValue;
 
         var headersBlock = HpackEncoder.EncodeResponse(response.StatusCode, responseHeaders);
 
@@ -448,8 +473,22 @@ internal sealed class Http2Connection
         finally { _writeLock.Release(); }
     }
 
-    private async ValueTask SendRstStreamAsync(int streamId, uint errorCode)
+    private async ValueTask SendGoAwayAsync(int lastStreamId, uint errorCode)
     {
+        await _writeLock.WaitAsync(_ct);
+        try
+        {
+            WriteFrameHeader(_writer, 8, FrameGoaway, 0, 0);
+            Span<byte> payload = stackalloc byte[8];
+            BinaryPrimitives.WriteUInt32BigEndian(payload, (uint)lastStreamId & 0x7FFFFFFFu);
+            BinaryPrimitives.WriteUInt32BigEndian(payload[4..], errorCode);
+            _writer.Write(payload);
+            await _writer.FlushAsync(_ct);
+        }
+        finally { _writeLock.Release(); }
+    }
+
+    private async ValueTask SendRstStreamAsync(int streamId, uint errorCode)    {
         await _writeLock.WaitAsync(_ct);
         try
         {

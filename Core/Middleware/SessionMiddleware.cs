@@ -16,7 +16,8 @@ public sealed class SessionMiddleware(SessionOptions options) : IMiddleware
     // In-memory session store: sessionId → (data, lastAccessed)
     private readonly Dictionary<string, (Dictionary<string, byte[]> Data, DateTimeOffset LastAccess)> _store = new();
     private readonly Lock _lock = new();
-    private DateTimeOffset _lastCleanup = DateTimeOffset.UtcNow;
+    // Use ticks stored as long so Interlocked operations are atomic
+    private long _lastCleanupTicks = DateTimeOffset.UtcNow.UtcTicks;
 
     public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
@@ -75,14 +76,22 @@ public sealed class SessionMiddleware(SessionOptions options) : IMiddleware
 
     private void CleanupExpiredSessions()
     {
-        var now = DateTimeOffset.UtcNow;
-        if (now - _lastCleanup < TimeSpan.FromMinutes(5)) return;
-        _lastCleanup = now;
+        var nowTicks = DateTimeOffset.UtcNow.UtcTicks;
+        var lastTicks = Interlocked.Read(ref _lastCleanupTicks);
+        // Fast pre-check outside the lock — avoid contention on every request
+        if (nowTicks - lastTicks < TimeSpan.FromMinutes(5).Ticks) return;
+
         lock (_lock)
         {
+            // Double-check inside lock: another thread may have cleaned up while we waited
+            if (nowTicks - Interlocked.Read(ref _lastCleanupTicks) < TimeSpan.FromMinutes(5).Ticks) return;
+
+            var now = new DateTimeOffset(nowTicks, TimeSpan.Zero);
             var expired = _store.Where(kv => now - kv.Value.LastAccess > options.IdleTimeout)
                                 .Select(kv => kv.Key).ToList();
             foreach (var id in expired) _store.Remove(id);
+
+            Interlocked.Exchange(ref _lastCleanupTicks, nowTicks);
         }
     }
 

@@ -140,4 +140,138 @@ public class Http11ConnectionTests
 
         return sb.ToString();
     }
+
+    // ── Alt-Svc injection integration tests ───────────────────────────────
+
+    [Fact]
+    public async Task RunAsync_WithAltSvcValue_ResponseContainsAltSvcHeader()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        const string altSvc = "h3=\":443\"; ma=86400";
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var serverTask = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptSocketAsync(cts.Token);
+            using var stream = new NetworkStream(socket, ownsSocket: true);
+            await Http11Connection.RunAsync(
+                stream,
+                ctx => { ctx.Response.WriteText("ok"); return ValueTask.CompletedTask; },
+                services,
+                maxBodySize: 1024 * 1024,
+                enableHttp2: false,
+                remoteIp: null,
+                cts.Token,
+                altSvcValue: altSvc);
+        }, cts.Token);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
+        await using var clientStream = client.GetStream();
+
+        byte[] request = Encoding.ASCII.GetBytes(
+            "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        await clientStream.WriteAsync(request, cts.Token);
+
+        string response = await ReadToEndAsync(clientStream, cts.Token);
+
+        Assert.Contains("Alt-Svc:", response);
+        Assert.Contains(altSvc, response);
+
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task RunAsync_WithoutAltSvcValue_ResponseOmitsAltSvcHeader()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var serverTask = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptSocketAsync(cts.Token);
+            using var stream = new NetworkStream(socket, ownsSocket: true);
+            await Http11Connection.RunAsync(
+                stream,
+                ctx => { ctx.Response.WriteText("ok"); return ValueTask.CompletedTask; },
+                services,
+                maxBodySize: 1024 * 1024,
+                enableHttp2: false,
+                remoteIp: null,
+                cts.Token,
+                altSvcValue: null);
+        }, cts.Token);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
+        await using var clientStream = client.GetStream();
+
+        byte[] request = Encoding.ASCII.GetBytes(
+            "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        await clientStream.WriteAsync(request, cts.Token);
+
+        string response = await ReadToEndAsync(clientStream, cts.Token);
+
+        Assert.DoesNotContain("Alt-Svc:", response);
+
+        await serverTask;
+    }
+
+    [Fact]
+    public async Task RunAsync_AltSvcNotDuplicated_WhenResponseAlreadySetsIt()
+    {
+        using var services = new ServiceCollection().BuildServiceProvider();
+        using var listener = new TcpListener(IPAddress.Loopback, 0);
+        listener.Start();
+        int port = ((IPEndPoint)listener.LocalEndpoint).Port;
+        const string serverAltSvc = "h3=\":443\"; ma=86400";
+        const string appAltSvc = "h3=\":8443\"; ma=3600";
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        var serverTask = Task.Run(async () =>
+        {
+            using var socket = await listener.AcceptSocketAsync(cts.Token);
+            using var stream = new NetworkStream(socket, ownsSocket: true);
+            await Http11Connection.RunAsync(
+                stream,
+                ctx =>
+                {
+                    // App sets its own Alt-Svc — the server-injected one should be suppressed
+                    ctx.Response.Headers["Alt-Svc"] = appAltSvc;
+                    ctx.Response.WriteText("ok");
+                    return ValueTask.CompletedTask;
+                },
+                services,
+                maxBodySize: 1024 * 1024,
+                enableHttp2: false,
+                remoteIp: null,
+                cts.Token,
+                altSvcValue: serverAltSvc);
+        }, cts.Token);
+
+        using var client = new TcpClient();
+        await client.ConnectAsync(IPAddress.Loopback, port, cts.Token);
+        await using var clientStream = client.GetStream();
+
+        byte[] request = Encoding.ASCII.GetBytes(
+            "GET /ping HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+        await clientStream.WriteAsync(request, cts.Token);
+
+        string response = await ReadToEndAsync(clientStream, cts.Token);
+
+        // App's Alt-Svc should appear; server's injected one should not
+        Assert.Contains(appAltSvc, response);
+        Assert.DoesNotContain(serverAltSvc, response);
+
+        await serverTask;
+    }
 }

@@ -41,7 +41,9 @@ internal static class Http11Parser
             // Fast check for well-known headers
             if (entry.IsName("Content-Length"u8))
             {
-                TryParseInt64(valueSeq, out contentLength);
+                if (TryParseInt64(valueSeq, out var cl) && cl >= 0)
+                    contentLength = cl;
+                // Malformed or negative Content-Length: leave at 0 (body will not be read)
             }
             else if (entry.IsName("Content-Type"u8))
             {
@@ -213,7 +215,26 @@ public readonly struct HeaderEntry
 
     public bool ValueContains(ReadOnlySpan<byte> valueUtf8)
     {
-        return Value.Contains(Encoding.UTF8.GetString(valueUtf8), StringComparison.OrdinalIgnoreCase);
+        // Byte-level case-insensitive search over the UTF-8 representation of Value
+        // avoids allocating a decoded string just to call string.Contains()
+        var valueBytes = System.Text.Encoding.UTF8.GetBytes(Value);
+        var full = valueBytes.AsSpan();
+        if (full.Length < valueUtf8.Length) return false;
+        for (int i = 0; i <= full.Length - valueUtf8.Length; i++)
+        {
+            bool match = true;
+            for (int j = 0; j < valueUtf8.Length; j++)
+            {
+                byte c1 = full[i + j];
+                byte c2 = valueUtf8[j];
+                if (c1 == c2) continue;
+                if (c1 >= 'A' && c1 <= 'Z') c1 |= 0x20;
+                if (c2 >= 'A' && c2 <= 'Z') c2 |= 0x20;
+                if (c1 != c2) { match = false; break; }
+            }
+            if (match) return true;
+        }
+        return false;
     }
     public void Deconstruct(out string name, out string value)
     {

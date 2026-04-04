@@ -72,4 +72,33 @@ public class RateLimitingTests
         await middleware.InvokeAsync(ctx2, _ => ValueTask.CompletedTask);
         Assert.Equal(200, ctx2.Response.StatusCode);
     }
+
+    [Fact]
+    public async Task RateLimiting_ConcurrentRequests_NeverExceedConfiguredLimit()
+    {
+        const int limit = 5;
+        const int total = 40;
+        var options = new RateLimitOptions { Limit = limit, Window = TimeSpan.FromSeconds(30) };
+        var middleware = new RateLimitingMiddleware(options);
+
+        int successCount = 0;
+        int limitedCount = 0;
+
+        // Fire all requests concurrently — TOCTOU fix must ensure exactly `limit` succeed
+        await Parallel.ForEachAsync(
+            Enumerable.Range(0, total),
+            new ParallelOptions { MaxDegreeOfParallelism = total },
+            async (_, _) =>
+            {
+                var ctx = MakeContext();
+                await middleware.InvokeAsync(ctx, _ => ValueTask.CompletedTask);
+                if (ctx.Response.StatusCode == 200)
+                    Interlocked.Increment(ref successCount);
+                else
+                    Interlocked.Increment(ref limitedCount);
+            });
+
+        Assert.Equal(limit, successCount);
+        Assert.Equal(total - limit, limitedCount);
+    }
 }

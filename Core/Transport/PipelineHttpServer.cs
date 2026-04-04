@@ -6,6 +6,8 @@ using System.Security.Authentication;
 using System.Security.Cryptography.X509Certificates;
 using System.Collections.Concurrent;
 using CosmoApiServer.Core.Middleware;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 
 namespace CosmoApiServer.Core.Transport;
 
@@ -26,6 +28,15 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 #pragma warning restore CA1416
     private static readonly SslApplicationProtocol Http3Protocol = new("h3");
 
+    // Certificate hot-reload: new connections always read from this volatile field.
+#pragma warning disable CA1416
+    private volatile SslStreamCertificateContext? _quicCertContext;
+#pragma warning restore CA1416
+    private FileSystemWatcher? _certWatcher;
+    private string? _certPath;
+    private string? _certPassword;
+    private ILogger? _logger;
+
     private static bool SupportsQuicPlatform() =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
@@ -39,16 +50,30 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         bool enableHttp2 = false,
         bool enableHttp3 = false,
         int connectionTimeoutSeconds = 120,
+        int http3MaxRequestsPerConnection = 100,
+        int http3MaxConcurrentStreams = 100,
+        int http3IdleTimeoutSeconds = 30,
+        int http3MaxUnidirectionalStreams = 10,
+        int http3MaxFieldSectionSize = 16 * 1024,
         CancellationToken cancellationToken = default)
     {
+        _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer");
+        _certPath = certPath;
+        _certPassword = certPassword;
+
 #pragma warning disable SYSLIB0057
         X509Certificate2? cert = certPath is not null
             ? new X509Certificate2(certPath, certPassword)
             : null;
 #pragma warning restore SYSLIB0057
-        SslStreamCertificateContext? quicCertContext = cert is not null && enableHttp3
-            ? SslStreamCertificateContext.Create(cert, additionalCertificates: null)
-            : null;
+
+        if (cert is not null && enableHttp3)
+        {
+#pragma warning disable CA1416
+            _quicCertContext = SslStreamCertificateContext.Create(cert, additionalCertificates: null);
+#pragma warning restore CA1416
+            SetupCertificateHotReload(certPath!);
+        }
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
 
@@ -59,7 +84,9 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _listener.Listen(backlog: 512);
 
         var scheme = cert is not null ? "https" : "http";
-        Console.WriteLine($"CosmoApiServer listening on {scheme}://0.0.0.0:{port}");
+        var startMsg = $"CosmoApiServer listening on {scheme}://0.0.0.0:{port}";
+        _logger?.LogInformation(startMsg);
+        if (_logger is null) Console.WriteLine(startMsg);
 
         if (enableHttp3)
         {
@@ -81,11 +108,13 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                     {
                         DefaultCloseErrorCode = Http3NoError,
                         DefaultStreamErrorCode = Http3NoError,
-                                MaxInboundBidirectionalStreams = 100,
-                        MaxInboundUnidirectionalStreams = 100,
+                        IdleTimeout = TimeSpan.FromSeconds(http3IdleTimeoutSeconds),
+                        MaxInboundBidirectionalStreams = http3MaxConcurrentStreams,
+                        MaxInboundUnidirectionalStreams = http3MaxUnidirectionalStreams,
                         ServerAuthenticationOptions = new SslServerAuthenticationOptions
                         {
-                            ServerCertificateContext = quicCertContext,
+                            // Read from volatile field so hot-reloaded certs are picked up automatically.
+                            ServerCertificateContext = _quicCertContext,
                             ApplicationProtocols = [Http3Protocol],
                             EnabledSslProtocols = SslProtocols.Tls13
                         }
@@ -95,12 +124,17 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             }, _cts.Token);
 #pragma warning restore CA1416
 
-            Console.WriteLine($"CosmoApiServer experimental HTTP/3 listener on https://0.0.0.0:{port}");
-            _ = AcceptQuicLoopAsync(pipeline, services, connectionTimeoutSeconds, _cts.Token);
+            var h3Msg = $"CosmoApiServer experimental HTTP/3 listener on https://0.0.0.0:{port}";
+            _logger?.LogInformation(h3Msg);
+            if (_logger is null) Console.WriteLine(h3Msg);
+            _ = AcceptQuicLoopAsync(pipeline, services, connectionTimeoutSeconds, http3MaxRequestsPerConnection, http3MaxFieldSectionSize, _cts.Token);
         }
 
+        // Compute Alt-Svc value once; null when HTTP/3 is not enabled.
+        string? altSvcValue = enableHttp3 ? $"h3=\":{port}\"; ma=86400" : null;
+
         // Accept loop runs in background — fire and forget (bounded by OS)
-        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, _cts.Token);
+        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token);
     }
 
     private async ValueTask AcceptLoopAsync(
@@ -110,6 +144,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         X509Certificate2? cert,
         bool enableHttp2,
         int connectionTimeoutSeconds,
+        string? altSvcValue,
         CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
@@ -120,7 +155,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             catch { continue; } // transient accept errors
 
             // Handle each connection independently; don't await (keep accepting)
-            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, ct);
+            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, ct);
         }
     }
 
@@ -128,6 +163,8 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         RequestDelegate pipeline,
         IServiceProvider services,
         int connectionTimeoutSeconds,
+        int http3MaxRequestsPerConnection,
+        int http3MaxFieldSectionSize,
         CancellationToken ct)
     {
 #pragma warning disable CA1416
@@ -141,11 +178,12 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             catch (OperationCanceledException) { break; }
             catch (Exception ex)
             {
-                Console.Error.WriteLine($"[HTTP/3 Accept] {ex.GetType().Name}: {ex.Message}");
+                _logger?.LogError(ex, "[HTTP/3 Accept] {ExType}", ex.GetType().Name);
+                if (_logger is null) Console.Error.WriteLine($"[HTTP/3 Accept] {ex.GetType().Name}: {ex.Message}");
                 continue;
             }
 
-            _ = HandleQuicConnectionAsync(connection, pipeline, services, connectionTimeoutSeconds, ct);
+            _ = HandleQuicConnectionAsync(connection, pipeline, services, connectionTimeoutSeconds, http3MaxRequestsPerConnection, http3MaxFieldSectionSize, ct);
         }
 #pragma warning restore CA1416
     }
@@ -158,6 +196,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         X509Certificate2? cert,
         bool enableHttp2,
         int connectionTimeoutSeconds,
+        string? altSvcValue,
         CancellationToken ct)
     {
         _activeSockets.TryAdd(socket, 0);
@@ -191,23 +230,25 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
                 if (enableHttp2 && ssl.NegotiatedApplicationProtocol == SslApplicationProtocol.Http2)
                 {
-                    await Http2Connection.RunAsync(ssl, pipeline, services, connectionCt);
+                    await Http2Connection.RunAsync(ssl, pipeline, services, connectionCt, altSvcValue);
                     return;
                 }
             }
 
             // HTTP/1.1 (with optional h2c upgrade detection inside)
-            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, remoteIp, connectionCt);
+            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, remoteIp, connectionCt, altSvcValue);
         }
         catch (AuthenticationException ex)
         {
-            Console.Error.WriteLine($"[TLS] {ex.Message}");
+            _logger?.LogWarning(ex, "[TLS] {Message}", ex.Message);
+            if (_logger is null) Console.Error.WriteLine($"[TLS] {ex.Message}");
         }
         catch (OperationCanceledException) { }
         catch (Exception ex) when (ex is IOException or SocketException) { }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"[Connection] {ex.GetType().Name}: {ex.Message}");
+            _logger?.LogError(ex, "[Connection] {ExType}", ex.GetType().Name);
+            if (_logger is null) Console.Error.WriteLine($"[Connection] {ex.GetType().Name}: {ex.Message}");
         }
         finally
         {
@@ -221,6 +262,8 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         RequestDelegate pipeline,
         IServiceProvider services,
         int connectionTimeoutSeconds,
+        int http3MaxRequestsPerConnection,
+        int http3MaxFieldSectionSize,
         CancellationToken ct)
     {
 #pragma warning disable CA1416
@@ -233,12 +276,13 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         try
         {
-            await Http3Connection.RunAsync(connection, pipeline, services, connectionCt);
+            await Http3Connection.RunAsync(connection, pipeline, services, http3MaxRequestsPerConnection, connectionCt, http3MaxFieldSectionSize);
         }
         catch (OperationCanceledException) { }
         catch (QuicException ex)
         {
-            Console.Error.WriteLine($"[HTTP/3] {ex.Message}");
+            _logger?.LogError(ex, "[HTTP/3] {Message}", ex.Message);
+            if (_logger is null) Console.Error.WriteLine($"[HTTP/3] {ex.Message}");
         }
         finally
         {
@@ -272,7 +316,47 @@ public sealed class PipelineHttpServer : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         await StopAsync();
+        _certWatcher?.Dispose();
         _listener?.Dispose();
         _cts?.Dispose();
+    }
+
+    private void SetupCertificateHotReload(string certFilePath)
+    {
+        var dir = Path.GetDirectoryName(Path.GetFullPath(certFilePath))!;
+        var file = Path.GetFileName(certFilePath);
+
+        _certWatcher = new FileSystemWatcher(dir, file)
+        {
+            NotifyFilter = NotifyFilters.LastWrite | NotifyFilters.Size,
+            EnableRaisingEvents = true
+        };
+
+        _certWatcher.Changed += (_, _) => ReloadCertificate();
+        _certWatcher.Created += (_, _) => ReloadCertificate();
+    }
+
+    private void ReloadCertificate()
+    {
+        if (_certPath is null) return;
+        try
+        {
+            // Brief delay to allow the file write to complete before reading.
+            Thread.Sleep(500);
+#pragma warning disable SYSLIB0057
+            var newCert = new X509Certificate2(_certPath, _certPassword);
+#pragma warning restore SYSLIB0057
+#pragma warning disable CA1416
+            var newContext = SslStreamCertificateContext.Create(newCert, additionalCertificates: null);
+            _quicCertContext = newContext; // volatile write — immediately visible to new connections
+#pragma warning restore CA1416
+            _logger?.LogInformation("HTTP/3 TLS certificate hot-reloaded from {Path}", _certPath);
+            if (_logger is null) Console.WriteLine($"[TLS] Certificate hot-reloaded from {_certPath}");
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogError(ex, "HTTP/3 TLS certificate hot-reload failed for {Path}", _certPath);
+            if (_logger is null) Console.Error.WriteLine($"[TLS] Certificate hot-reload failed: {ex.Message}");
+        }
     }
 }

@@ -37,7 +37,7 @@ internal static class Http11Writer
         _   => Encoding.ASCII.GetBytes($"{status} Unknown").AsSpan()
     };
 
-    public static void WriteHeaders(PipeWriter writer, HttpResponse response, int? contentLength = null)
+    public static void WriteHeaders(PipeWriter writer, HttpResponse response, int? contentLength = null, string? altSvcValue = null)
     {
         // Status line
         writer.Write(Http11Ok);
@@ -64,6 +64,14 @@ internal static class Http11Writer
             WriteStringAscii(writer, name);
             writer.Write(HeaderSep);
             WriteStringUtf8(writer, value);
+            writer.Write(CrLf);
+        }
+
+        // Alt-Svc: advertise HTTP/3 endpoint so browsers can upgrade automatically.
+        if (altSvcValue is not null && !response.Headers.ContainsKey("Alt-Svc"))
+        {
+            writer.Write("Alt-Svc: "u8);
+            WriteStringAscii(writer, altSvcValue);
             writer.Write(CrLf);
         }
 
@@ -99,9 +107,9 @@ internal static class Http11Writer
     }
 
     /// <summary>Write a complete buffered response to the pipe.</summary>
-    public static void WriteResponse(PipeWriter writer, HttpResponse response)
+    public static void WriteResponse(PipeWriter writer, HttpResponse response, string? altSvcValue = null)
     {
-        WriteHeaders(writer, response, response.Body.Length);
+        WriteHeaders(writer, response, response.Body.Length, altSvcValue);
 
         // Body
         if (response.Body.Length > 0)
@@ -119,7 +127,8 @@ internal static class Http11Writer
         PipeWriter writer,
         int statusCode,
         Func<Stream, Task> bodyWriter,
-        CancellationToken ct)
+        CancellationToken ct,
+        string? altSvcValue = null)
     {
         // Response headers — chunked keep-alive to amortise TCP setup across requests.
         writer.Write(Http11Ok);
@@ -127,6 +136,12 @@ internal static class Http11Writer
         writer.Write(CrLf);
         writer.Write(TransferChunked);
         writer.Write(ContentTypeNdjson);
+        if (altSvcValue is not null)
+        {
+            writer.Write("Alt-Svc: "u8);
+            WriteStringAscii(writer, altSvcValue);
+            writer.Write(CrLf);
+        }
         writer.Write(CrLf);
 
         // Stage all writes between FlushAsync calls into a single chunk each.

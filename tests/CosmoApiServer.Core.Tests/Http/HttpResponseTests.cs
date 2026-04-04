@@ -113,4 +113,48 @@ public class HttpResponseTests
 
         return sb.ToString();
     }
+
+    // ── End() idempotency tests ────────────────────────────────────────────
+
+    [Fact]
+    public void End_CalledTwice_BodyRemainsUnchanged()
+    {
+        var response = new HttpResponse();
+        response.WriteText("hello world");
+        response.End();
+        string bodyAfterFirst = Encoding.UTF8.GetString(response.Body);
+
+        // Second call must not throw or corrupt the body
+        response.End();
+        string bodyAfterSecond = Encoding.UTF8.GetString(response.Body);
+
+        Assert.Equal(bodyAfterFirst, bodyAfterSecond);
+    }
+
+    [Fact]
+    public void End_CalledTwice_DoesNotThrow()
+    {
+        var response = new HttpResponse();
+        response.WriteText("content");
+        response.End();
+
+        var ex = Record.Exception(() => response.End());
+        Assert.Null(ex);
+    }
+
+    [Fact]
+    public void Reset_ClearsEndState_AllowsEndAgainWithNewBody()
+    {
+        var response = new HttpResponse();
+        response.WriteText("first");
+        response.End();
+
+        response.Reset();
+
+        // After Reset, body should be empty and End should accept new content
+        response.WriteText("second");
+        response.End();
+
+        Assert.Equal("second", Encoding.UTF8.GetString(response.Body));
+    }
 }

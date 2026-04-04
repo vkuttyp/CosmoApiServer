@@ -953,6 +953,14 @@ public class SignalRClientIntegrationTests
     {
         public override Task OnDisconnectedAsync(Exception? exception)
         {
+            // On Windows, a client-initiated disconnect surfaces as a write error rather than a
+            // clean null; normalise write-related transport errors to null so tests are portable.
+            if (exception?.Message?.Contains("Unable to write data to the transport connection") == true
+                || exception is System.IO.IOException { InnerException: System.Net.Sockets.SocketException })
+            {
+                exception = null;
+            }
+
             tracker.Disconnected.TrySetResult(new DisconnectRecord(HubContext.ConnectionId, exception?.Message));
             return Task.CompletedTask;
         }

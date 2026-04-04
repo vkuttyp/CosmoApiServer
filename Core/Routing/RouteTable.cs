@@ -6,10 +6,12 @@ namespace CosmoApiServer.Core.Routing;
 
 public sealed class RouteTable
 {
+    private const int MaxCacheSize = 10_000;
+
     // Group routes by HTTP method
     private readonly Dictionary<Http.HttpMethod, List<RouteEntry>> _routes = new();
     
-    // Fast cache for previously matched paths
+    // Fast cache for previously matched paths (bounded to prevent unbounded memory growth)
     private readonly ConcurrentDictionary<(Http.HttpMethod, string), RouteMatch> _cache = new();
 
     public void Add(Http.HttpMethod method, string template, RequestDelegate handler)
@@ -53,7 +55,7 @@ public sealed class RouteTable
                 // Only cache non-parameterized routes to prevent unbounded memory growth.
                 // Parameterized routes (e.g., /users/{id}) produce unique paths that would
                 // leak memory indefinitely if cached.
-                if (!entry.Template.HasParams)
+                if (!entry.Template.HasParams && _cache.Count < MaxCacheSize)
                 {
                     _cache.TryAdd((method, path), match);
                 }

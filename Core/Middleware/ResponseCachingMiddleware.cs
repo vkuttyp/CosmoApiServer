@@ -29,6 +29,20 @@ public sealed class ResponseCachingMiddleware(ResponseCachingOptions options) : 
             context.Request.Method != CosmoApiServer.Core.Http.HttpMethod.HEAD)
         {
             await next(context);
+
+            // After a mutating request completes, evict stale cached GET responses for the same path
+            var basePath = context.Request.Path;
+            List<string>? toRemove = null;
+            lock (_lock)
+            {
+                foreach (var cacheKey in _store.Keys)
+                {
+                    if (cacheKey == basePath || cacheKey.StartsWith(basePath + "?", StringComparison.OrdinalIgnoreCase))
+                        (toRemove ??= new()).Add(cacheKey);
+                }
+                if (toRemove is not null)
+                    foreach (var k in toRemove) _store.Remove(k);
+            }
             return;
         }
 
@@ -110,8 +124,15 @@ public sealed class ResponseCachingMiddleware(ResponseCachingOptions options) : 
 
     private static string BuildKey(HttpRequest req)
     {
+        // Canonicalize query string by sorting parameters so ?a=1&b=2 and ?b=2&a=1
+        // map to the same cache entry, preventing fragmentation.
         var sb = new StringBuilder(req.Path);
-        if (!string.IsNullOrEmpty(req.QueryString)) sb.Append('?').Append(req.QueryString);
+        if (!string.IsNullOrEmpty(req.QueryString))
+        {
+            var pairs = req.QueryString.Split('&', StringSplitOptions.RemoveEmptyEntries);
+            Array.Sort(pairs, StringComparer.Ordinal);
+            sb.Append('?').Append(string.Join('&', pairs));
+        }
         return sb.ToString();
     }
 

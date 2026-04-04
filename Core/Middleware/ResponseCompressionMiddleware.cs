@@ -32,7 +32,7 @@ public sealed class ResponseCompressionMiddleware(ResponseCompressionOptions opt
             return;
 
         // Check for compatible MIME types
-        if (!response.Headers.TryGetValue("content-type", out var ct) || !options.MimeTypes.Any(m => ct.StartsWith(m)))
+        if (!response.Headers.TryGetValue("content-type", out var ct) || !options.MimeTypes.Any(m => ct.StartsWith(m, StringComparison.OrdinalIgnoreCase)))
             return;
 
         // Compress!
