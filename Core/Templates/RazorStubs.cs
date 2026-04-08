@@ -160,6 +160,15 @@ namespace Microsoft.AspNetCore.Components
             public void AddAttribute(int sequence, string name, object? value) =>
                 _frames.Add(new RenderFrame { Type = RenderFrameType.AddAttribute, Text = name, Value = value });
 
+            public void AddAttribute(int sequence, string name) =>
+                _frames.Add(new RenderFrame { Type = RenderFrameType.AddAttribute, Text = name });
+
+            public void AddAttribute(string name, string? value) =>
+                _frames.Add(new RenderFrame { Type = RenderFrameType.AddAttribute, Text = name, Value = value });
+
+            public void AddAttribute(string name, object? value) =>
+                _frames.Add(new RenderFrame { Type = RenderFrameType.AddAttribute, Text = name, Value = value });
+
             public void OpenComponent<TComponent>(int sequence) where TComponent : IComponent =>
                 OpenComponent(sequence, typeof(TComponent));
 
