@@ -976,6 +976,11 @@ public sealed class MetricsCollector : IHostedService
 
 ## Changelog
 
+### v3.0.1 
+- **Razor Components enhancements** — added `InputDate`, `InputRadioGroup`, `InputRadio`, and `InputFile` components for broader Blazor-standard form compatibility. 
+- **RenderTreeBuilder stubs** — added comprehensive `AddAttribute` overloads and `MarkupString`/`ElementReference` stubs to resolve Razor compiler ambiguity. 
+
+
 ### v3.0.0
 - **HTTP/3 production-ready** — all roadmap phases complete; 313/313 tests on macOS (Network.framework) and Windows (MsQuic); 32/32 interop scenarios validated via `tools/run_windows_interop.ps1`
 - **Rate Limiting** — `UseRateLimiting()`, fixed-window per-IP limiter with `Retry-After`, configurable limit/window/status code, proxy-trust mode
