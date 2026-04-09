@@ -430,6 +430,89 @@ namespace Microsoft.AspNetCore.Components
         }
     }
 
+
+    // ── InputRadioGroup ─────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Groups a set of InputRadio components.
+    /// </summary>
+    public class InputRadioGroup<TValue> : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<TValue> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Name { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public Microsoft.AspNetCore.Components.RenderFragment? ChildContent { get; set; }
+
+        protected override async ValueTask BuildRenderTreeAsync(System.Buffers.IBufferWriter<byte> buffer)
+        {
+            // Cascade the group context to children
+            if (ChildContent is not null)
+            {
+                var builder = new RenderTreeBuilder(buffer, this);
+                this._activeBuilder = builder;
+                
+                // We use a simple cascading mechanism here for the group
+                ChildContent(builder);
+                await builder.ProcessAsync();
+            }
+        }
+    }
+
+    // ── InputRadio ──────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an <input type="radio"> element.
+    /// </summary>
+    public class InputRadio<TValue> : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Name { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            var group = FindParentGroup();
+            var effectiveName = Name ?? group?.Name;
+            var isChecked = false;
+
+            if (group != null && group.Value != null && Value != null)
+            {
+                isChecked = group.Value.Equals(Value);
+            }
+
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "radio");
+            if (!string.IsNullOrEmpty(effectiveName)) builder.AddAttribute(2, "name", effectiveName);
+            builder.AddAttribute(3, "value", Value?.ToString() ?? string.Empty);
+            if (isChecked) builder.AddAttribute(4, "checked", true);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
+            builder.CloseElement();
+        }
+
+        private InputRadioGroup<TValue>? FindParentGroup()
+        {
+            var current = Parent;
+            while (current != null)
+            {
+                if (current is InputRadioGroup<TValue> group) return group;
+                current = current.Parent;
+            }
+            return null;
+        }
+    }
+
     // ── InputTextArea ────────────────────────────────────────────────────────────
 
     /// <summary>
@@ -523,6 +606,46 @@ namespace Microsoft.AspNetCore.Components
                 builder.AddAttribute(10, "value", Value ? "true" : "false");
                 builder.CloseElement();
             }
+        }
+    }
+
+
+    // ── InputFile ───────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an <input type="file"> element.
+    /// </summary>
+    public class InputFile : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Multiple { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string? Accept { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", "file");
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(4, "class", CssClass);
+            if (Multiple) builder.AddAttribute(5, "multiple", true);
+            if (!string.IsNullOrEmpty(Accept)) builder.AddAttribute(6, "accept", Accept);
+            if (Disabled) builder.AddAttribute(7, "disabled", true);
+            builder.CloseElement();
         }
     }
 
