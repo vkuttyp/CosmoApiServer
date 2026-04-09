@@ -1,3 +1,4 @@
+using CosmoApiServer.Core.Templates;
 using System.Buffers;
 using System.Runtime.CompilerServices;
 using CosmoApiServer.Core.Http;
@@ -325,6 +326,58 @@ namespace Microsoft.AspNetCore.Components
             if (Step is not null) builder.AddAttribute(8, "step", Step);
             if (Disabled) builder.AddAttribute(9, "disabled", true);
             if (Required) builder.AddAttribute(10, "required", true);
+            builder.CloseElement();
+        }
+    }
+
+
+    // ── InputDate ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Renders an <input type="date"> bound to a model property.
+    /// </summary>
+    public class InputDate<TValue> : Microsoft.AspNetCore.Components.ComponentBase
+    {
+        [Microsoft.AspNetCore.Components.Parameter]
+        public TValue? Value { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public EventCallback<TValue> ValueChanged { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Id { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Name { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string CssClass { get; set; } = string.Empty;
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Disabled { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public bool Required { get; set; }
+
+        [Microsoft.AspNetCore.Components.Parameter]
+        public string Type { get; set; } = "date";
+
+        protected override void BuildRenderTree(RenderTreeBuilder builder)
+        {
+            builder.OpenElement(0, "input");
+            builder.AddAttribute(1, "type", Type);
+            if (!string.IsNullOrEmpty(Id)) builder.AddAttribute(2, "id", Id);
+            if (!string.IsNullOrEmpty(Name)) builder.AddAttribute(3, "name", Name);
+            
+            string formattedValue = string.Empty;
+            if (Value is DateTime dt) formattedValue = BindConverter.FormatValue(dt, Type == "datetime-local" ? "yyyy-MM-ddTHH:mm" : "yyyy-MM-dd");
+            else if (Value is DateTimeOffset dto) formattedValue = BindConverter.FormatValue(dto, Type == "datetime-local" ? "yyyy-MM-ddTHH:mm" : "yyyy-MM-dd");
+            else formattedValue = Value?.ToString() ?? string.Empty;
+
+            builder.AddAttribute(4, "value", formattedValue);
+            if (!string.IsNullOrEmpty(CssClass)) builder.AddAttribute(5, "class", CssClass);
+            if (Disabled) builder.AddAttribute(6, "disabled", true);
+            if (Required) builder.AddAttribute(7, "required", true);
             builder.CloseElement();
         }
     }
