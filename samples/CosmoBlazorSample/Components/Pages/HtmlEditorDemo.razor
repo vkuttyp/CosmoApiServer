@@ -1,0 +1,12 @@
+@page "/editor"
+@layout MainLayout
+
+<h1>HTML Editor</h1>
+
+<p>This page demonstrates a lightweight SSR-friendly rich text editor for CosmoApiServer Blazor pages.</p>
+
+<HtmlEditor FieldName="htmlBody" Placeholder="Compose an HTML message..." Value="<p><strong>Hello</strong> from <em>CosmoApiServer</em>.</p>" />
+
+<div class="html-editor-preview" style="margin-top:1.5rem;">
+    <strong>Usage:</strong> place <code>&lt;HtmlEditor FieldName="htmlBody" /&gt;</code> inside a normal form. The component keeps a hidden input synced with the contenteditable HTML surface.
+</div>

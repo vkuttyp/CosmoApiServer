@@ -12,7 +12,7 @@
 
   <ItemGroup>
     <PackageReference Include="CosmoApiServer.Core" Version="3.0.1" />
-    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="9.0.2" />
+    <PackageReference Include="Microsoft.Extensions.Configuration.Binder" Version="10.0.1" />
   </ItemGroup>
 
 </Project>
