@@ -1,0 +1,8 @@
+{
+  "src/entry-client.ts": {
+    "file": "assets/app-prebuilt.js",
+    "css": [
+      "assets/app-prebuilt.css"
+    ]
+  }
+}

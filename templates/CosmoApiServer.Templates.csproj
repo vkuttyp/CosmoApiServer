@@ -19,6 +19,7 @@
   <ItemGroup>
     <Content Include="CosmoApiServerTemplate\**\*" Exclude="CosmoApiServerTemplate\bin\**;CosmoApiServerTemplate\obj\**" />
     <Content Include="CosmoRazorServerTemplate\**\*" Exclude="CosmoRazorServerTemplate\bin\**;CosmoRazorServerTemplate\obj\**" />
+    <Content Include="CosmoVueServerTemplate\**\*" Exclude="CosmoVueServerTemplate\bin\**;CosmoVueServerTemplate\obj\**" />
     <Compile Remove="**\*" />
   </ItemGroup>
 

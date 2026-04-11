@@ -1,0 +1,10 @@
+{
+  "name": "nuxt-ui-sample",
+  "private": true,
+  "scripts": {
+    "dev": "./run-dev.sh",
+    "frontend:dev": "cd frontend && npm run dev",
+    "frontend:build": "cd frontend && npm run build",
+    "backend:dev": "dotnet run"
+  }
+}

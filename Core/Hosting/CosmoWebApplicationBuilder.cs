@@ -100,6 +100,33 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseSpaFallback(Action<SpaFallbackOptions>? configure = null)
+    {
+        var options = new SpaFallbackOptions();
+        configure?.Invoke(options);
+        _middlewarePipeline.UseInstance(new SpaFallbackMiddleware(options));
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder UseVueFrontend(string rootPath = "wwwroot", Action<SpaFallbackOptions>? configure = null)
+    {
+        UseStaticFiles(rootPath);
+
+        return UseSpaFallback(options =>
+        {
+            options.RootPath = rootPath;
+            configure?.Invoke(options);
+        });
+    }
+
+    public CosmoWebApplicationBuilder UseViteFrontend(Action<ViteFrontendOptions>? configure = null)
+    {
+        var options = new ViteFrontendOptions();
+        configure?.Invoke(options);
+        _middlewarePipeline.UseInstance(new ViteFrontendMiddleware(options));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseCors(Action<CorsOptions>? configure = null)
     {
         var opts = new CorsOptions();

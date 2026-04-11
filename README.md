@@ -4,6 +4,8 @@ A high-performance, zero-dependency HTTP server framework for .NET 10, built ent
 
 No DotNetty. No ASP.NET. No Kestrel. Just raw sockets → pipes → your handlers.
 
+Recommended frontend path: Vue + Vite + SSR bridge via `UseViteFrontend()`. The built-in Razor/Blazor-style component model is still available, but it is no longer the primary frontend story in this repo.
+
 ---
 
 ## Benchmark
@@ -71,7 +73,7 @@ P99 spikes on some scenarios reflect per-request QUIC stream setup overhead (MsQ
 - `Http3DataFrameStream` coalesce threshold raised from 8 KB to 32 KB — streaming DATA frames now batch uniformly at the same chunk size as buffered responses
 - `ServerOptions.Http3MaxRequestsPerConnection` (default 100) exposes the per-connection GOAWAY threshold for operator tuning
 
-### Razor Component Rendering (100-row table)
+### Cosmo Razor Rendering (100-row table)
 | Framework | Throughput | P50 Latency | Advantage |
 |---|---|---|---|
 | **CosmoApiServer** | **4,235 ops/sec** | **0.24 ms** | **+141%** |
@@ -106,6 +108,8 @@ Key design decisions:
 - HTTP/2 (h2c cleartext + ALPN over TLS)
 - HTTP/3 over QUIC (`UseHttp3()`) — production-ready; request/response trailers, streamed request bodies, NDJSON streaming, dynamic QPACK decode, graceful GOAWAY, interop validated on Windows MsQuic and macOS Network.framework
 - TLS via `SslStream` with ALPN (`h2` / `http/1.1`)
+- **Vue + Vite Frontends** — `UseViteFrontend()` supports manifest-based assets, dev-server mode, server-provided head/state, and external SSR bridges
+- **Vue SPA Frontends** — `UseVueFrontend()` serves static Vue assets plus history-mode SPA fallback for client-side routing
 - **Razor Components** — Full `.razor` support with `@page`, `[Parameter]`, and `CascadingParameters`
 - **Routable Components** — Components can define their own routes via `@page` without a controller
 - **Form Components** — `<EditForm>`, `<InputText>`, `<InputNumber>`, `<InputSelect>`, `<InputCheckbox>`, `<InputTextArea>`
@@ -198,6 +202,96 @@ app.MapGet("/stream", async ctx =>
 
 ---
 
+## Vue Frontends
+
+If you want the simplest Vue frontend path, host it directly from `wwwroot`:
+
+```csharp
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseVueFrontend();
+
+var app = builder.Build();
+
+app.MapGet("/api/health", ctx =>
+{
+    ctx.Response.WriteJson(new { status = "ok" });
+    return ValueTask.CompletedTask;
+});
+```
+
+`UseVueFrontend()` composes two pieces:
+
+- static asset serving from `wwwroot`
+- SPA fallback to `index.html` for client-side routes such as `/dashboard` or `/users/42`
+
+Server-owned paths like `/api`, `/swagger`, `/openapi.json`, and `/health` are excluded from the fallback by default, so API and tooling endpoints continue to behave normally.
+
+The repo now includes a `CosmoVueServerTemplate` starter that uses Vue + Vue Router in history mode. It is a lightweight client-rendered shell; if you later want a full Nuxt or Vite pipeline, you can replace the template's `wwwroot` output with generated assets and keep the same server-side hosting model.
+
+---
+
+## Vite Frontends
+
+This is the preferred frontend model for this repo.
+
+For a build-pipeline setup closer to modern Vue/Nuxt workflows, use `UseViteFrontend()` with a Vite manifest and HTML template:
+
+```csharp
+var projectRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../"));
+
+var builder = CosmoWebApplicationBuilder.Create()
+    .UseStaticFiles(Path.Combine(projectRoot, "wwwroot"))
+    .UseViteFrontend(options =>
+    {
+        options.HtmlTemplatePath = Path.Combine(projectRoot, "frontend", "index.html");
+        options.ManifestPath = Path.Combine(projectRoot, "wwwroot", ".vite", "manifest.json");
+        options.DevServerUrl = Environment.GetEnvironmentVariable("VITE_DEV_SERVER_URL");
+    });
+```
+
+`UseViteFrontend()` renders the app shell for browser routes and injects either:
+
+- Vite dev-server scripts when `DevServerUrl` is set
+- hashed production assets from `.vite/manifest.json`
+- optional server-provided head tags, app HTML, and initial state via `RenderAsync`
+
+The `CosmoVueServerTemplate` now ships with a Vite source tree, a Vue SSR bridge, and prebuilt client assets in `wwwroot`, so it can run immediately and still be rebuilt through Vite later.
+
+Example with server-provided initial state:
+
+```csharp
+builder.UseViteFrontend(options =>
+{
+    options.RenderAsync = ctx => ValueTask.FromResult<ViteRenderResult?>(new ViteRenderResult
+    {
+        HeadHtml = "<title>Dashboard</title>",
+        InitialState = new { route = ctx.HttpContext.Request.Path, user = "Ada" }
+    });
+});
+```
+
+---
+
+## Recommended Starting Point
+
+For new frontend work in this repo:
+
+- use `templates/CosmoVueServerTemplate`
+- use `UseViteFrontend()` for production assets and SSR integration
+- use the template's `run-dev.sh` for the local three-process dev loop
+- use `samples/NuxtUiSample` when you want a ready-made Nuxt 4 + Nuxt UI example backed by Cosmo APIs
+
+Quick start for the Nuxt UI sample:
+
+```bash
+cd samples/NuxtUiSample
+npm run dev
+```
+
+Use the Razor component system when you explicitly want a C#-first SSR component model instead of a Vue frontend.
+
+---
+
 ## Scheduling
 
 `CosmoApiServer` includes a built-in scheduler based on the Coravel-style scheduling API already shipped in the core package.
@@ -275,6 +369,8 @@ app.UseScheduler(scheduler =>
 ---
 
 ## Razor Components
+
+This frontend path is still supported, but it is now secondary to the Vue/Vite/SSR path above.
 
 `CosmoApiServer` includes a first-class implementation of Razor Components (similar to Blazor SSR). This provides the power of Razor syntax (C# + HTML) with the performance of a zero-dependency framework.
 
@@ -569,16 +665,18 @@ Share values with all descendant components without explicit parameter passing:
 | Project | Description |
 |---|---|
 | `Core/` | Core framework library (`CosmoApiServer.Core`) |
+| `templates/CosmoVueServerTemplate` | Preferred Vue + Vite + SSR starter template with `run-dev.sh` |
+| `samples/NuxtUiSample` | Nuxt 4 + Nuxt UI sample app backed by Cosmo JSON APIs |
 | `samples/CosmoApiBenchHost` | HTTP/1.1 benchmark host (used by `run_benchmark.sh` and `tools/run_windows_benchmark.ps1`) |
 | `samples/AspNetBenchHost` | ASP.NET Core benchmark host for head-to-head comparison |
-| `samples/CosmoBlazorSample` | Blazor-style SSR sample with Razor components |
-| `samples/BlazorSqlSample` | SQL streaming + components sample |
-| `samples/CosmoKitchenSink` | Kitchen-sink sample covering most features |
+| `samples/CosmoKitchenSink` | Kitchen-sink sample covering most backend features |
 | `samples/HelloWorldSample` | Minimal getting-started example |
 | `samples/FeatureShowcase` | Feature showcase with auth, SignalR, gRPC, output cache, etc. |
 | `samples/WeatherApp` | Full REST API: JWT auth, DI, streaming, CosmoSQLClient |
+| `samples/CosmoBlazorSample` | Blazor-style SSR sample with Razor components |
+| `samples/BlazorSqlSample` | SQL streaming + components sample |
 | `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` project template |
-| `tests/CosmoApiServer.Core.Tests` | 287 tests covering routing, middleware, HTTP/3, SignalR, gRPC, Razor, output cache, antiforgery, and more |
+| `tests/CosmoApiServer.Core.Tests` | 320 tests covering routing, middleware, HTTP/3, SignalR, gRPC, Vue hosting, Razor, output cache, antiforgery, and more |
 | `tests/ApiServer.Benchmark` | BenchmarkDotNet suite for HTTP/1.1 and HTTP/3 scenarios |
 | `tools/H3Interop/` | .NET HTTP/3 interop validation tool (32-scenario end-to-end client) |
 | `tools/run_windows_benchmark.ps1` | Windows benchmark script (builds, starts hosts, runs all scenarios) |
