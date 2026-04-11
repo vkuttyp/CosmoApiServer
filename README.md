@@ -1074,6 +1074,13 @@ public sealed class MetricsCollector : IHostedService
 
 ## Changelog
 
+### v3.0.3
+- **Vue frontend hosting** — added `ViteFrontendMiddleware` for hosting Vite/Vue/Nuxt applications directly within CosmoApiServer.
+- **Nuxt UI sample** — added `samples/NuxtUiSample` demonstrating full-stack integration with a modern frontend.
+
+### v3.0.2
+- **HtmlEditorComponent** — added a new rich-text editor component for Razor slices.
+
 ### v3.0.1 
 - **Razor Components enhancements** — added `InputDate`, `InputRadioGroup`, `InputRadio`, and `InputFile` components for broader Blazor-standard form compatibility. 
 - **RenderTreeBuilder stubs** — added comprehensive `AddAttribute` overloads and `MarkupString`/`ElementReference` stubs to resolve Razor compiler ambiguity. 
