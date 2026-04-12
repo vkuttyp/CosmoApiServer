@@ -178,6 +178,30 @@ public sealed class CosmoWebApplicationBuilder
         => UseStaticFrontend(outputPath, configureFallback);
 
     /// <summary>
+    /// Hosts a published Blazor WebAssembly application from <paramref name="outputPath"/>
+    /// (default: <c>blazor/wwwroot</c>, the <c>wwwroot/</c> folder produced by
+    /// <c>dotnet publish</c> on the Blazor WASM project).
+    ///
+    /// Extends <see cref="UseStaticFrontend"/> with Blazor-specific behaviour:
+    /// <list type="bullet">
+    ///   <item>Serves pre-compressed <c>_framework/*.br</c> / <c>*.gz</c> files directly
+    ///   with <c>Content-Encoding</c> set — skipping on-the-fly compression for the large
+    ///   WASM/assembly bundles that Blazor pre-compresses at publish time.</item>
+    ///   <item>Adds <c>application/wasm</c> as the MIME type for <c>.wasm</c> files —
+    ///   browsers refuse to instantiate WASM served as <c>application/octet-stream</c>.</item>
+    ///   <item>Sets <c>Cache-Control: public, max-age=31536000, immutable</c> on all
+    ///   <c>_framework/</c> files — they are content-addressed by Blazor's linker.</item>
+    /// </list>
+    /// </summary>
+    public CosmoWebApplicationBuilder UseBlazorWasm(
+        string outputPath = "blazor/wwwroot",
+        Action<SpaFallbackOptions>? configureFallback = null)
+    {
+        _middlewarePipeline.UseInstance(new BlazorWasmMiddleware(outputPath));
+        return UseStaticFrontend(outputPath, configureFallback);
+    }
+
+    /// <summary>
     /// Pre-configured <see cref="UseViteDevProxy"/> for React + Vite dev mode.
     /// Proxies <c>/@vite</c>, <c>/@fs</c>, <c>/@id</c>, and <c>/@react-refresh</c>
     /// to the Vite dev server so the browser can use a single origin.

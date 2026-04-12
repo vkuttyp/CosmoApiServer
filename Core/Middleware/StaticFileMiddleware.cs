@@ -30,6 +30,7 @@ public class StaticFileMiddleware(string rootPath) : IMiddleware
         { ".webp",  "image/webp" },
         { ".txt",   "text/plain" },
         { ".pdf",   "application/pdf" },
+        { ".wasm",  "application/wasm" },
         { ".woff",  "font/woff" },
         { ".woff2", "font/woff2" },
         { ".ttf",   "font/ttf" },

@@ -296,6 +296,43 @@ builder.UseReverseProxy(o =>
     }));
 ```
 
+### Blazor WebAssembly
+
+Blazor WASM runs entirely in the browser — the .NET runtime and your assemblies are compiled to WebAssembly and downloaded once. CosmoApiServer hosts the published output as static files with two additions over a plain SPA:
+
+- **`application/wasm` MIME type** — browsers reject WASM modules served as `application/octet-stream`
+- **Pre-compressed `_framework/` file serving** — Blazor's publish pipeline emits `.br` and `.gz` variants of every framework file. Streaming these directly (with `Content-Encoding: br`) is far faster than re-compressing `dotnet.native.wasm` (30–60 MB) on every request
+
+**Setup**
+
+1. Publish your Blazor WASM project to the `blazor/wwwroot` folder of your CosmoApiServer project:
+
+```bash
+dotnet publish BlazorApp/BlazorApp.csproj -c Release -o blazor
+```
+
+2. Register the middleware:
+
+```csharp
+builder.UseBlazorWasm(
+    outputPath: "blazor/wwwroot",
+    configureFallback: o => o.ExcludedPrefixes = ["/api"]);
+```
+
+The SPA fallback returns `index.html` for all routes not matched by the API, enabling Blazor's client-side router.
+
+**Co-hosting API + Blazor WASM**
+
+```csharp
+var app = builder.Build();
+
+app.MapGet("/api/weather", ctx => { ... });
+
+// Blazor WASM handles everything else
+```
+
+Blazor calls your API endpoints the same way any SPA would — using `HttpClient` with a base address pointing at the same origin.
+
 ### Dev proxy paths by framework
 
 | Framework | Dev server default port | Paths to proxy |
@@ -733,6 +770,10 @@ Cloudflare is suitable for frontends that are mostly static or read-heavy withou
 ---
 
 ## Changelog
+
+### v3.2.2
+- `UseBlazorWasm` — hosts published Blazor WebAssembly apps with pre-compressed `_framework/` file serving and `application/wasm` MIME type
+- `StaticFileMiddleware` — added `.wasm → application/wasm` to the MIME table
 
 ### v3.2.0
 - Frontend integration for React + Vite, Angular, Next.js, and SvelteKit
