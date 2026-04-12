@@ -20,7 +20,7 @@ var builder = CosmoWebApplicationBuilder.Create()
     .UseCors(o =>
     {
         if (isDev) o.AllowAnyOrigin();
-        else o.WithOrigins(["https://liveops.example.com"]);
+        else o.AllowedOrigins = ["https://liveops.example.com"];
         o.AllowAnyMethod();
         o.AllowAnyHeader();
     })
