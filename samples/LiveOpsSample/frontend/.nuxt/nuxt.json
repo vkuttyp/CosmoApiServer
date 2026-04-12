@@ -1,0 +1,9 @@
+{
+  "_hash": "TLC3Pyg6CAtdp11BUIPgkILNHbYtEzC5kBssX4DCbnM",
+  "project": {
+    "rootDir": "/Users/kutty/dev/CosmoApiServer/samples/LiveOpsSample/frontend"
+  },
+  "versions": {
+    "nuxt": "4.4.2"
+  }
+}

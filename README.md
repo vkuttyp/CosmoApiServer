@@ -421,7 +421,6 @@ Quick start for the LiveOps sample:
 
 ```bash
 cd samples/LiveOpsSample
-npm install
 npm run frontend:install
 npm run dev
 ```
