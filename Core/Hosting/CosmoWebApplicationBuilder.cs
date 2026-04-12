@@ -120,12 +120,13 @@ public sealed class CosmoWebApplicationBuilder
     }
 
     /// <summary>
-    /// Configures a complete Nuxt integrated deployment from a single output path.
-    /// Serves static assets from <paramref name="outputPath"/> (Nuxt's <c>.output/public</c>),
-    /// enables response compression, and adds an SPA fallback for client-side routes.
+    /// Serves a pre-built frontend SPA from <paramref name="outputPath"/>.
+    /// Registers static file serving, response compression (Brotli/GZip), and an SPA
+    /// fallback that returns <c>index.html</c> for unmatched client-side routes.
+    /// This is the shared base used by all framework-specific integrations.
     /// </summary>
-    public CosmoWebApplicationBuilder UseNuxtIntegrated(
-        string outputPath = "frontend/.output/public",
+    public CosmoWebApplicationBuilder UseStaticFrontend(
+        string outputPath,
         Action<SpaFallbackOptions>? configureFallback = null)
     {
         UseStaticFiles(outputPath);
@@ -136,6 +137,124 @@ public sealed class CosmoWebApplicationBuilder
             configureFallback?.Invoke(opts);
         });
     }
+
+    /// <summary>
+    /// Serves a pre-built Nuxt SPA from <paramref name="outputPath"/> (default:
+    /// <c>frontend/.output/public</c>). Delegates to <see cref="UseStaticFrontend"/>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseNuxtIntegrated(
+        string outputPath = "frontend/.output/public",
+        Action<SpaFallbackOptions>? configureFallback = null)
+        => UseStaticFrontend(outputPath, configureFallback);
+
+    /// <summary>
+    /// Serves a pre-built Next.js static export from <paramref name="outputPath"/>
+    /// (default: <c>frontend/out</c>, produced by <c>next build</c> with
+    /// <c>output: 'export'</c> in <c>next.config.js</c>).
+    /// For Next.js SSR use <see cref="UseReverseProxy"/> pointing at <c>next start</c>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseNextStaticExport(
+        string outputPath = "frontend/out",
+        Action<SpaFallbackOptions>? configureFallback = null)
+        => UseStaticFrontend(outputPath, configureFallback);
+
+    /// <summary>
+    /// Serves a pre-built Angular application from <paramref name="outputPath"/>
+    /// (default: <c>frontend/dist/browser</c>, produced by <c>ng build</c>).
+    /// </summary>
+    public CosmoWebApplicationBuilder UseAngularFrontend(
+        string outputPath = "frontend/dist/browser",
+        Action<SpaFallbackOptions>? configureFallback = null)
+        => UseStaticFrontend(outputPath, configureFallback);
+
+    /// <summary>
+    /// Serves a pre-built SvelteKit application from <paramref name="outputPath"/>
+    /// (default: <c>frontend/build</c>, produced by <c>vite build</c> with
+    /// <c>adapter-static</c>). For <c>adapter-node</c> use <see cref="UseReverseProxy"/>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseSvelteKitStatic(
+        string outputPath = "frontend/build",
+        Action<SpaFallbackOptions>? configureFallback = null)
+        => UseStaticFrontend(outputPath, configureFallback);
+
+    /// <summary>
+    /// Pre-configured <see cref="UseViteDevProxy"/> for React + Vite dev mode.
+    /// Proxies <c>/@vite</c>, <c>/@fs</c>, <c>/@id</c>, and <c>/@react-refresh</c>
+    /// to the Vite dev server so the browser can use a single origin.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseReactDevProxy(
+        string devServerUrl = "http://127.0.0.1:5173",
+        Action<ViteDevProxyOptions>? configure = null)
+        => UseViteDevProxy(o =>
+        {
+            o.DevServerUrl    = devServerUrl;
+            o.ProxiedPrefixes = ["/@vite", "/@fs", "/@id", "/@react-refresh"];
+            configure?.Invoke(o);
+        });
+
+    /// <summary>
+    /// Pre-configured <see cref="UseViteDevProxy"/> for Next.js dev mode.
+    /// Proxies <c>/__next</c>, <c>/_next</c>, <c>/webpack-hmr</c>, and related
+    /// Next.js internal paths to the dev server.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseNextDevProxy(
+        string devServerUrl = "http://127.0.0.1:3000",
+        Action<ViteDevProxyOptions>? configure = null)
+        => UseViteDevProxy(o =>
+        {
+            o.DevServerUrl    = devServerUrl;
+            o.ProxiedPrefixes = ["/__next", "/_next", "/__nextjs_original-stack-frame", "/webpack-hmr"];
+            configure?.Invoke(o);
+        });
+
+    /// <summary>
+    /// Pre-configured <see cref="UseReverseProxy"/> for Angular dev mode (<c>ng serve</c>).
+    /// Forwards all non-API traffic to the Angular dev server. Angular does not use
+    /// Vite's module graph paths, so a full reverse proxy is required rather than
+    /// selective path forwarding.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseAngularDevProxy(
+        string devServerUrl = "http://127.0.0.1:4200",
+        string[] excludedPrefixes = default!,
+        Action<ReverseProxyOptions>? configure = null)
+        => UseReverseProxy(o =>
+        {
+            o.Routes.Add(new ProxyRoute
+            {
+                PathPrefix       = "/",
+                Destination      = devServerUrl,
+                ExcludedPrefixes = excludedPrefixes ?? ["/api", "/health"]
+            });
+            configure?.Invoke(o);
+        });
+
+    /// <summary>
+    /// Pre-configured <see cref="UseViteDevServer"/> for Next.js. Sets the ready
+    /// pattern to the string Next.js prints when compilation succeeds.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseNextDevServer(Action<ViteDevServerOptions>? configure = null)
+        => UseViteDevServer(o =>
+        {
+            o.Command      = "npm";
+            o.Arguments    = "run dev";
+            o.ReadyPattern = "Ready";
+            o.LogPrefix    = "[next]";
+            configure?.Invoke(o);
+        });
+
+    /// <summary>
+    /// Pre-configured <see cref="UseViteDevServer"/> for Angular (<c>ng serve</c>).
+    /// Sets the ready pattern to the line Angular CLI prints after initial compilation.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseAngularDevServer(Action<ViteDevServerOptions>? configure = null)
+        => UseViteDevServer(o =>
+        {
+            o.Command      = "npx";
+            o.Arguments    = "ng serve --host 127.0.0.1";
+            o.ReadyPattern = "Application bundle generation complete";
+            o.LogPrefix    = "[angular]";
+            configure?.Invoke(o);
+        });
 
     /// <summary>
     /// Forwards Vite/Nuxt dev-server paths (virtual modules, HMR client, <c>/@vite</c>,

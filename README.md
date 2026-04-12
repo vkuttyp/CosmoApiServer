@@ -59,6 +59,14 @@ app.Run();
 
 ## Frontend Integration
 
+All framework integrations share the same three-layer structure:
+
+| Layer | Purpose | Method |
+|---|---|---|
+| Dev server | Spawn and manage the frontend process | `UseViteDevServer` / `UseAngularDevServer` / `UseNextDevServer` |
+| Dev proxy | Forward framework module paths to the dev server | `UseViteDevProxy` / `UseReactDevProxy` / `UseNextDevProxy` / `UseAngularDevProxy` |
+| Production | Serve the built output with compression + SPA fallback | `UseStaticFrontend` (or framework-specific wrapper) |
+
 ### Nuxt / Vite Dev Mode
 
 `UseViteDevServer` spawns the frontend dev process as a managed `IHostedService`, blocking server startup until it is ready. `UseViteDevProxy` forwards Vite module-graph paths to the dev server so the browser can use a single origin.
@@ -128,6 +136,149 @@ builder.UseCsp(o =>
     o.ImgSrc     = ["'self'", "data:"];
 });
 ```
+
+### React + Vite
+
+**Dev mode** — Vite runs on port 5173 by default:
+
+```csharp
+builder.UseViteDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    o.Command          = "npm";
+    o.Arguments        = "run dev";
+    o.ReadyPattern     = "Local:";
+    o.LogPrefix        = "[react]";
+});
+builder.UseReactDevProxy();  // proxies /@vite, /@fs, /@id, /@react-refresh
+builder.UseViteFrontend(o =>
+{
+    o.EntryName        = "src/main.tsx";
+    o.DevServerUrl     = "http://127.0.0.1:5173";
+    o.ExcludedPrefixes = ["/api", "/health"];
+});
+```
+
+**Production** — `vite build` outputs to `dist/` with a manifest:
+
+```csharp
+builder.UseViteFrontend(o =>
+{
+    o.ManifestPath     = "frontend/dist/.vite/manifest.json";
+    o.HtmlTemplatePath = "frontend/index.html";
+    o.EntryName        = "src/main.tsx";
+    o.ExcludedPrefixes = ["/api", "/health"];
+});
+```
+
+### Angular
+
+**Dev mode** — Angular CLI doesn't use Vite, so all traffic is reverse-proxied:
+
+```csharp
+builder.UseAngularDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    // defaults: npx ng serve --host 127.0.0.1, ready pattern "Application bundle generation complete"
+});
+builder.UseAngularDevProxy();  // reverse-proxies / → http://127.0.0.1:4200
+```
+
+**Production** — `ng build` outputs to `dist/<project>/browser/`:
+
+```csharp
+builder.UseAngularFrontend(
+    outputPath: "frontend/dist/my-app/browser",
+    configureFallback: o => o.ExcludedPrefixes = ["/api", "/health"]);
+```
+
+### Next.js
+
+**Dev mode** — Next.js uses its own HMR paths:
+
+```csharp
+builder.UseNextDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    // defaults: npm run dev, ready pattern "Ready"
+});
+builder.UseNextDevProxy();  // proxies /__next, /_next, /webpack-hmr
+builder.UseViteFrontend(o =>
+{
+    o.DevServerUrl     = "http://127.0.0.1:3000";
+    o.ExcludedPrefixes = ["/api", "/health"];
+});
+```
+
+**Production (static export)** — add `output: 'export'` to `next.config.js`, then `next build` outputs to `out/`:
+
+```csharp
+builder.UseNextStaticExport(
+    outputPath: "frontend/out",
+    configureFallback: o => o.ExcludedPrefixes = ["/api", "/health"]);
+```
+
+**Production (SSR)** — proxy all non-API traffic to `next start`:
+
+```csharp
+builder.UseReverseProxy(o =>
+    o.Routes.Add(new ProxyRoute
+    {
+        PathPrefix       = "/",
+        Destination      = "http://127.0.0.1:3000",
+        ExcludedPrefixes = ["/api", "/health"]
+    }));
+```
+
+### SvelteKit
+
+**Dev mode** — SvelteKit uses Vite:
+
+```csharp
+builder.UseViteDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    o.Command          = "npm";
+    o.Arguments        = "run dev";
+    o.ReadyPattern     = "Local:";
+    o.LogPrefix        = "[svelte]";
+});
+builder.UseViteDevProxy(o =>
+{
+    o.DevServerUrl    = "http://127.0.0.1:5173";
+    o.ProxiedPrefixes = ["/@vite", "/@fs", "/@id", "/@svelte-kit"];
+});
+```
+
+**Production (`adapter-static`)** — `vite build` outputs to `build/`:
+
+```csharp
+builder.UseSvelteKitStatic(
+    outputPath: "frontend/build",
+    configureFallback: o => o.ExcludedPrefixes = ["/api", "/health"]);
+```
+
+**Production (`adapter-node`)** — proxy to the Node server:
+
+```csharp
+builder.UseReverseProxy(o =>
+    o.Routes.Add(new ProxyRoute
+    {
+        PathPrefix       = "/",
+        Destination      = "http://127.0.0.1:3000",
+        ExcludedPrefixes = ["/api", "/health"]
+    }));
+```
+
+### Dev proxy paths by framework
+
+| Framework | Dev server default port | Paths to proxy |
+|---|---|---|
+| Nuxt | 3000 | `/@vite /@fs /@id /_nuxt /__nuxt /__vite_ping` |
+| React + Vite | 5173 | `/@vite /@fs /@id /@react-refresh` |
+| SvelteKit | 5173 | `/@vite /@fs /@id /@svelte-kit` |
+| Next.js | 3000 | `/__next /_next /__nextjs_original-stack-frame /webpack-hmr` |
+| Angular | 4200 | Full reverse proxy (no Vite module graph) |
 
 ### Reverse Proxy
 
