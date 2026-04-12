@@ -6,8 +6,10 @@ namespace CosmoApiServer.Core.Routing;
 /// </summary>
 public sealed class RouteTemplate
 {
+    // Use the same shared sentinel as RouteValuePool so RouterMiddleware's
+    // ReferenceEquals guard correctly skips returning this to the pool.
     private static readonly IReadOnlyDictionary<string, string> EmptyRouteValues =
-        new Dictionary<string, string>(0);
+        RouteValuePool.EmptyShared;
 
     private readonly string[] _segments;  // pre-split template segments
     private readonly bool _hasParams;     // fast-path: no params → no dict needed
