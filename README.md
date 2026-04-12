@@ -91,6 +91,32 @@ builder.UseViteDevProxy(o =>
 
 The `ViteDevServerService` shuts down the child process tree (`Kill(entireProcessTree: true)`) when the host stops, freeing the dev port cleanly.
 
+**Nuxt SSR with server-side API calls (`nuxt-auth-utils`, `useFetch` in SSR context)**
+
+When Nuxt uses SSR and makes API calls during its startup warmup (e.g. session checks via `nuxt-auth-utils`), set `ReadyPattern = null`. This lets the .NET HTTP listener open immediately so the backend is reachable when Nuxt's warmup fires. Without this, the default blocking behaviour delays the listener until after Nuxt is ready — causing `ECONNREFUSED` during warmup.
+
+```csharp
+builder.UseViteDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    o.Command          = "npm";
+    o.Arguments        = $"exec nuxt dev -- --host 127.0.0.1 --port 3000";
+    o.ReadyPattern     = null;   // .NET opens immediately; Nuxt starts in background
+    o.LogPrefix        = "[nuxt]";
+    o.Environment["NUXT_SESSION_PASSWORD"] = "...";
+    o.Environment["API_BASE"] = "http://127.0.0.1:9183";
+});
+
+// For SSR projects UseReverseProxy forwards page requests; UseNuxtIntegrated is for SPA/static only
+builder.UseViteDevProxy(o => o.DevServerUrl = "http://127.0.0.1:3000");
+builder.UseReverseProxy(o => o.Routes.Add(new ProxyRoute
+{
+    PathPrefix       = "/",
+    Destination      = "http://127.0.0.1:3000",
+    ExcludedPrefixes = ["/api"]
+}));
+```
+
 ### Nuxt Integrated Production
 
 Serves a pre-built Nuxt SPA from `.output/public` with tiered cache headers, Brotli/GZip compression, and SPA fallback.
