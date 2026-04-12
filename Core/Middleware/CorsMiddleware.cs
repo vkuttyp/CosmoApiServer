@@ -30,8 +30,19 @@ public sealed class CorsMiddleware : IMiddleware
 
     public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        string origin = context.Request.Headers.TryGetValue("Origin", out var o) ? o : "*";
-        bool allowed = _allowAll || Array.IndexOf(_options.AllowedOrigins, origin) >= 0;
+        // Requests with no Origin header are not cross-origin browser requests.
+        // Do not synthesise a wildcard — just skip CORS header injection entirely.
+        if (!context.Request.Headers.TryGetValue("Origin", out var o) || string.IsNullOrEmpty(o))
+        {
+            await next(context);
+            return;
+        }
+
+        string origin = o!;
+
+        // Prevent a spoofed "Origin: *" from matching the internal _allowAll sentinel.
+        bool allowed = _allowAll && origin != "*"
+                    || Array.IndexOf(_options.AllowedOrigins, origin) >= 0;
 
         // Handle pre-flight OPTIONS request
         if (context.Request.Method == Http.HttpMethod.OPTIONS)
@@ -52,9 +63,9 @@ public sealed class CorsMiddleware : IMiddleware
 
         if (allowed)
         {
-            context.Response.Headers["Access-Control-Allow-Origin"]  = origin;
-            context.Response.Headers["Access-Control-Allow-Methods"] = _allowedMethodsHeader;
-            context.Response.Headers["Access-Control-Allow-Headers"] = _allowedHeadersHeader;
+            // Only the Allow-Origin header is meaningful on non-preflight responses.
+            // Allow-Methods and Allow-Headers are preflight-only per the CORS spec.
+            context.Response.Headers["Access-Control-Allow-Origin"] = origin;
         }
 
         await next(context);

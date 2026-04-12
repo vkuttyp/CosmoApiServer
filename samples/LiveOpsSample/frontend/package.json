@@ -1,11 +1,11 @@
 {
-  "name": "nuxt-ui-sample-frontend",
+  "name": "liveops-sample-frontend",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "nuxt dev --port 3000 --host 127.0.0.1",
     "build": "nuxt build",
-    "build:integrated": "nuxt build && node -e \"const{cpSync}=require('fs');cpSync('.output/public','../wwwroot',{recursive:true})\"",
+    "build:integrated": "nuxt build",
     "preview": "nuxt preview --port 3000 --host 127.0.0.1",
     "lint": "nuxt lint",
     "lint:fix": "nuxt lint --fix"

@@ -75,6 +75,23 @@ public sealed class CosmoWebApplication
         return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.PATCH, template, handler);
     }
 
+    /// <summary>
+    /// Maps a Server-Sent Events endpoint. Sets the required SSE headers and delegates
+    /// to <paramref name="handler"/> which should call
+    /// <see cref="Http.ServerSentEventsExtensions.BeginSseAsync"/> then loop
+    /// <see cref="Http.ServerSentEventsExtensions.WriteSseAsync"/>.
+    /// </summary>
+    public RouteHandlerBuilder MapSse(string template, RequestDelegate handler)
+    {
+        RequestDelegate wrapped = async ctx =>
+        {
+            await ctx.Response.BeginSseAsync(ctx.RequestAborted);
+            await handler(ctx);
+        };
+        _routeTable.Add(Http.HttpMethod.GET, template, wrapped);
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.GET, template, wrapped);
+    }
+
     // ── gRPC ───────────────────────────────────────────────────────────────
 
     /// <summary>

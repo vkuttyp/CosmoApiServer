@@ -52,7 +52,7 @@ public sealed class RateLimitingMiddleware(RateLimitOptions options) : IMiddlewa
         {
             // Limit exceeded
             context.Response.StatusCode = options.StatusCode;
-            context.Response.Headers["Retry-After"] = ((int)(entry.WindowEnd - now).TotalSeconds).ToString();
+            context.Response.Headers["Retry-After"] = Math.Max(1, (int)(entry.WindowEnd - now).TotalSeconds).ToString();
             context.Response.WriteJson(new { error = "RateLimitExceeded", message = options.Message });
             return;
         }

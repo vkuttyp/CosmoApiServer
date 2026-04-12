@@ -74,6 +74,35 @@ public class RateLimitingTests
     }
 
     [Fact]
+    public async Task RateLimiting_RetryAfter_IsAlwaysAtLeastOne()
+    {
+        // Regression: the Retry-After value could be zero or negative when the rate-limit
+        // window expired between the count check and the header write. Math.Max(1, ...) now
+        // floors the value.
+        var options = new RateLimitOptions { Limit = 1, Window = TimeSpan.FromMilliseconds(1) };
+        var middleware = new RateLimitingMiddleware(options);
+
+        // Burn the limit
+        var ctx1 = MakeContext();
+        await middleware.InvokeAsync(ctx1, _ => ValueTask.CompletedTask);
+
+        // Wait for the window to expire so WindowEnd ≈ now
+        await Task.Delay(10);
+
+        // Next request is blocked — window has expired but the entry may not have reset yet
+        var ctx2 = MakeContext();
+        await middleware.InvokeAsync(ctx2, _ => ValueTask.CompletedTask);
+
+        if (ctx2.Response.StatusCode == 429)
+        {
+            Assert.True(ctx2.Response.Headers.ContainsKey("Retry-After"));
+            var retryAfter = int.Parse(ctx2.Response.Headers["Retry-After"]);
+            Assert.True(retryAfter >= 1, $"Retry-After must be >= 1, got {retryAfter}");
+        }
+        // If the window reset cleanly and the request was allowed (200), that's also valid.
+    }
+
+    [Fact]
     public async Task RateLimiting_ConcurrentRequests_NeverExceedConfiguredLimit()
     {
         const int limit = 5;

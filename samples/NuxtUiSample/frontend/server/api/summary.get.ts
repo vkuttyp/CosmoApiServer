@@ -2,7 +2,8 @@ import type { DashboardResponse } from '~/types/control-room'
 
 export default defineEventHandler(async () => {
   const config = useRuntimeConfig()
-  const apiBase = config.public.apiBase
+  // Use the server-only apiBase — not exposed to the browser bundle.
+  const apiBase = config.apiBase
 
   const dashboard = await $fetch<DashboardResponse>(`${apiBase}/api/dashboard`)
 

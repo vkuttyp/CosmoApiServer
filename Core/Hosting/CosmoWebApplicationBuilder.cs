@@ -119,6 +119,74 @@ public sealed class CosmoWebApplicationBuilder
         });
     }
 
+    /// <summary>
+    /// Configures a complete Nuxt integrated deployment from a single output path.
+    /// Serves static assets from <paramref name="outputPath"/> (Nuxt's <c>.output/public</c>),
+    /// enables response compression, and adds an SPA fallback for client-side routes.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseNuxtIntegrated(
+        string outputPath = "frontend/.output/public",
+        Action<SpaFallbackOptions>? configureFallback = null)
+    {
+        UseStaticFiles(outputPath);
+        UseResponseCompression();
+        return UseSpaFallback(opts =>
+        {
+            opts.RootPath = outputPath;
+            configureFallback?.Invoke(opts);
+        });
+    }
+
+    /// <summary>
+    /// Forwards Vite/Nuxt dev-server paths (virtual modules, HMR client, <c>/@vite</c>,
+    /// <c>/_nuxt</c>, etc.) to a running dev server, enabling single-port dev mode.
+    /// Register before <c>UseViteFrontend</c>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseViteDevProxy(Action<ViteDevProxyOptions>? configure = null)
+    {
+        var opts = new ViteDevProxyOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new ViteDevProxyMiddleware(opts));
+        return this;
+    }
+
+    /// <summary>
+    /// Starts the Vite or Nuxt dev server as a hosted service, eliminating the need for
+    /// a separate shell script. The process is killed cleanly on app shutdown.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseViteDevServer(Action<ViteDevServerOptions>? configure = null)
+    {
+        var opts = new ViteDevServerOptions();
+        configure?.Invoke(opts);
+        _services.AddSingleton<IHostedService>(new ViteDevServerService(opts));
+        return this;
+    }
+
+    /// <summary>
+    /// Emits a per-request CSP nonce and the <c>Content-Security-Policy</c> header.
+    /// The nonce is injected automatically into inline script tags by <c>UseViteFrontend</c>.
+    /// Register before <c>UseViteFrontend</c>.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseCsp(Action<CspOptions>? configure = null)
+    {
+        var opts = new CspOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new CspMiddleware(opts));
+        return this;
+    }
+
+    /// <summary>
+    /// Routes-based reverse proxy supporting HTTP and WebSocket connections.
+    /// Typical use: proxy all non-API traffic to a Nuxt SSR Node server.
+    /// </summary>
+    public CosmoWebApplicationBuilder UseReverseProxy(Action<ReverseProxyOptions>? configure = null)
+    {
+        var opts = new ReverseProxyOptions();
+        configure?.Invoke(opts);
+        _middlewarePipeline.UseInstance(new ReverseProxyMiddleware(opts));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseViteFrontend(Action<ViteFrontendOptions>? configure = null)
     {
         var options = new ViteFrontendOptions();

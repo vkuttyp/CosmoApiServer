@@ -78,11 +78,16 @@ public sealed class DefaultAntiforgeryService(AntiforgeryOptions options) : IAnt
         if (string.IsNullOrEmpty(cookieToken) || !IsKnownToken(cookieToken))
             return false;
 
-        // Check header first, then form body
+        // Check header first, then form body (only when Content-Type is form-encoded).
+        // Calling ReadForm() on a JSON or binary body would silently return empty and
+        // bypass validation — always guard with a Content-Type check first.
         string? requestToken = null;
         if (context.Request.Headers.TryGetValue(options.HeaderName, out var headerVal))
+        {
             requestToken = headerVal;
-        else
+        }
+        else if (context.Request.Headers.TryGetValue("Content-Type", out var ct) &&
+                 ct.ToString().StartsWith("application/x-www-form-urlencoded", StringComparison.OrdinalIgnoreCase))
         {
             var form = context.Request.ReadForm();
             form.Fields.TryGetValue(options.FormFieldName, out requestToken);

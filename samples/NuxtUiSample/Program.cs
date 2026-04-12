@@ -6,7 +6,20 @@ var builder = CosmoWebApplicationBuilder.Create()
     .UseLogging()
     .UseCors(options =>
     {
-        options.AllowAnyOrigin();
+        // Lock down allowed origins in production via COSMO_CORS_ORIGINS
+        // (comma-separated). Falls back to wildcard when the variable is absent
+        // so local dev works without extra config.
+        // Example: COSMO_CORS_ORIGINS=https://app.example.com,https://staging.example.com
+        var originsEnv = Environment.GetEnvironmentVariable("COSMO_CORS_ORIGINS");
+        if (!string.IsNullOrWhiteSpace(originsEnv))
+        {
+            var origins = originsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            options.AllowOrigins(origins);
+        }
+        else
+        {
+            options.AllowAnyOrigin();
+        }
         options.AllowAnyMethod();
         options.AllowAnyHeader();
     });

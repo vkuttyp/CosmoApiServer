@@ -43,7 +43,12 @@ public sealed class ViteFrontendMiddleware : IMiddleware
     private readonly string? _devServerUrl;
     private readonly string? _ssrEndpointUrl;
     private readonly Func<ViteRenderContext, ValueTask<ViteRenderResult?>>? _renderAsync;
-    private static readonly HttpClient SsrClient = new();
+    private static readonly HttpClient SsrClient = new() { Timeout = TimeSpan.FromSeconds(10) };
+
+    // Cache the asset tag block and the HTML template after first build — both are
+    // static in production (manifest never changes; template is read once at startup).
+    private string? _cachedAssetTags;
+    private string? _cachedTemplate;
 
     public ViteFrontendMiddleware(ViteFrontendOptions options)
     {
@@ -70,15 +75,29 @@ public sealed class ViteFrontendMiddleware : IMiddleware
 
         var renderResult = await ResolveRenderResultAsync(context);
 
-        var template = await File.ReadAllTextAsync(_htmlTemplatePath, context.RequestAborted);
-        var tags = BuildAssetTags();
+        // Use cached copies — both are static in production. ReadAllTextAsync and manifest
+        // parsing on every request caused two unnecessary disk reads per page view.
+        var template = _cachedTemplate ??= await File.ReadAllTextAsync(_htmlTemplatePath, context.RequestAborted);
+        var tagTemplate = _cachedAssetTags ??= BuildAssetTags();
+
+        // Inject the per-request CSP nonce (set by CspMiddleware) into script tags.
+        // The cached tag string uses the literal placeholder "{nonce}" which is replaced
+        // cheaply at render time. When CSP is not configured, the placeholder is removed.
+        var nonce = context.Items.TryGetValue(CspMiddleware.NonceItemKey, out var n) ? n as string : null;
+        var tags = nonce is not null
+            ? tagTemplate.Replace("{nonce}", nonce, StringComparison.Ordinal)
+            : tagTemplate.Replace(" nonce=\"{nonce}\"", "", StringComparison.Ordinal);
+
         var html = template
             .Replace("<!--app-head-->", MergeHead(tags, renderResult), StringComparison.Ordinal)
             .Replace("<!--app-html-->", renderResult?.AppHtml ?? _appElementHtml, StringComparison.Ordinal)
-            .Replace("<!--app-state-->", BuildStateScript(renderResult), StringComparison.Ordinal)
+            .Replace("<!--app-state-->", BuildStateScript(renderResult, nonce), StringComparison.Ordinal)
             .Replace("<!--app-body-end-->", renderResult?.BodyEndHtml ?? string.Empty, StringComparison.Ordinal);
 
         context.Response.StatusCode = 200;
+        // SSR and SPA shells must not be cached — they embed fingerprinted asset URLs that
+        // change on every build. A stale shell loads the wrong (or missing) JS/CSS.
+        context.Response.Headers["Cache-Control"] = "no-store";
         context.Response.WriteText(html, "text/html; charset=utf-8");
     }
 
@@ -117,22 +136,31 @@ public sealed class ViteFrontendMiddleware : IMiddleware
         return assetTags + Environment.NewLine + renderResult.HeadHtml;
     }
 
-    private static string BuildStateScript(ViteRenderResult? renderResult)
+    private static string BuildStateScript(ViteRenderResult? renderResult, string? nonce)
     {
         if (renderResult?.InitialState is null || string.IsNullOrWhiteSpace(renderResult.StateVariableName))
             return string.Empty;
 
         var json = JsonSerializer.Serialize(renderResult.InitialState);
-        return $"<script>window.{renderResult.StateVariableName} = {json};</script>";
+
+        // A string value containing "</script>" inside JSON would terminate the enclosing
+        // <script> block early, allowing script injection. Escaping "</" as "<\/" is safe
+        // per JSON spec (the backslash is ignored by JSON parsers) and is invisible to
+        // the HTML parser — the browser never sees the raw "</script>" sequence.
+        var safeJson = json.Replace("</", @"<\/", StringComparison.Ordinal);
+
+        var nonceAttr = nonce is not null ? $" nonce=\"{nonce}\"" : "";
+        return $"<script{nonceAttr}>window.{renderResult.StateVariableName} = {safeJson};</script>";
     }
 
     private string BuildAssetTags()
     {
         if (!string.IsNullOrWhiteSpace(_devServerUrl))
         {
+            // {nonce} is substituted at render time by InvokeAsync when CspMiddleware is active.
             return $$"""
-<script type="module" src="{{_devServerUrl}}/@vite/client"></script>
-<script type="module" src="{{_devServerUrl}}/{{_entryName}}"></script>
+<script type="module" nonce="{nonce}" src="{{_devServerUrl}}/@vite/client"></script>
+<script type="module" nonce="{nonce}" src="{{_devServerUrl}}/{{_entryName}}"></script>
 """;
         }
 
@@ -155,7 +183,7 @@ public sealed class ViteFrontendMiddleware : IMiddleware
             lines.Add($"<link rel=\"modulepreload\" crossorigin href=\"/{importFile}\">");
         foreach (var cssFile in cssFiles)
             lines.Add($"<link rel=\"stylesheet\" href=\"/{cssFile}\">");
-        lines.Add($"<script type=\"module\" crossorigin src=\"/{entry.File}\"></script>");
+        lines.Add($"<script type=\"module\" nonce=\"{{nonce}}\" crossorigin src=\"/{entry.File}\"></script>");
 
         return string.Join(Environment.NewLine, lines);
     }

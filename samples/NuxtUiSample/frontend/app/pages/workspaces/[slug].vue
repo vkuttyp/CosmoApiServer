@@ -6,9 +6,12 @@ const route = useRoute()
 const apiBase = config.public.apiBase
 const slug = computed(() => String(route.params.slug || ''))
 
-const { data, pending, error, refresh } = await useFetch<WorkspaceDetail>(`${apiBase}/api/workspaces/${slug.value}`, {
-  key: `nuxt-ui-sample-workspace-${slug.value}`
-})
+// Pass URL as a getter so useFetch re-runs when the slug changes (e.g. browser
+// back/forward between workspace detail pages without a full page reload).
+const { data, pending, error, refresh } = await useFetch<WorkspaceDetail>(
+  () => `${apiBase}/api/workspaces/${slug.value}`,
+  { key: `nuxt-ui-sample-workspace-${slug.value}` }
+)
 
 const statusTone = computed(() => {
   if (data.value?.status === 'Live') {

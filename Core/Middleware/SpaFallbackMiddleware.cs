@@ -45,6 +45,9 @@ public sealed class SpaFallbackMiddleware : IMiddleware
 
         context.Response.StatusCode = 200;
         context.Response.Headers["Content-Type"] = "text/html; charset=utf-8";
+        // Must not be cached — a stale SPA shell references old asset hashes and
+        // breaks the app after every deploy. Revalidate on every navigation.
+        context.Response.Headers["Cache-Control"] = "no-cache";
         await context.Response.SendFileAsync(defaultFilePath, context.RequestAborted);
     }
 

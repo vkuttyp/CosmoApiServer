@@ -14,13 +14,22 @@ public enum ForwardedHeaders
 
 public sealed class ForwardedHeadersOptions
 {
-    public ForwardedHeaders ForwardedHeaders { get; set; } = ForwardedHeaders.All;
+    /// <summary>
+    /// Which forwarded headers to process. Defaults to <see cref="ForwardedHeaders.None"/> —
+    /// you must explicitly opt in to avoid blindly trusting attacker-controlled headers.
+    /// </summary>
+    public ForwardedHeaders ForwardedHeaders { get; set; } = ForwardedHeaders.None;
     /// <summary>Maximum number of entries to read from X-Forwarded-For (0 = unlimited).</summary>
     public int ForwardLimit { get; set; } = 1;
-    /// <summary>Trusted proxy networks (CIDR notation). Empty = trust any proxy.</summary>
-    public IList<string> KnownNetworks { get; } = [];
-    /// <summary>Trusted proxy IPs. Empty = trust any proxy.</summary>
+    /// <summary>
+    /// Trusted proxy IPs. When non-empty, forwarded headers are only processed when the
+    /// direct remote IP is in this list (or <see cref="KnownNetworks"/>).
+    /// </summary>
     public IList<string> KnownProxies { get; } = [];
+    /// <summary>
+    /// Trusted proxy networks in CIDR notation (e.g. "10.0.0.0/8"). Parsed at first use.
+    /// </summary>
+    public IList<string> KnownNetworks { get; } = [];
 }
 
 /// <summary>
@@ -33,14 +42,24 @@ public sealed class ForwardedHeadersMiddleware(ForwardedHeadersOptions options) 
     {
         var req = context.Request;
 
+        // Only process forwarded headers when the direct connection comes from a
+        // trusted proxy. If KnownProxies and KnownNetworks are both empty we skip
+        // all processing — callers must explicitly configure trusted proxies.
+        if (!IsTrustedProxy(context.Items["RemoteIpAddress"] as string))
+        {
+            await next(context);
+            return;
+        }
+
         if (options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedFor) &&
             req.Headers.TryGetValue("X-Forwarded-For", out var xff) &&
             !string.IsNullOrEmpty(xff))
         {
-            // Take the first (leftmost) non-empty address, up to ForwardLimit
+            // Take the rightmost address within the ForwardLimit window —
+            // that is the entry written by the closest trusted proxy.
             var addresses = xff.Split(',', StringSplitOptions.RemoveEmptyEntries);
             var limit = options.ForwardLimit > 0 ? Math.Min(options.ForwardLimit, addresses.Length) : addresses.Length;
-            var clientIp = addresses[^limit].Trim(); // rightmost within limit = closest trusted proxy's report
+            var clientIp = addresses[^limit].Trim();
             context.Items["X-Forwarded-For"] = clientIp;
         }
 
@@ -59,5 +78,57 @@ public sealed class ForwardedHeadersMiddleware(ForwardedHeadersOptions options) 
         }
 
         await next(context);
+    }
+
+    private bool IsTrustedProxy(string? remoteIp)
+    {
+        // No trust list configured → reject all (safe default).
+        if (options.KnownProxies.Count == 0 && options.KnownNetworks.Count == 0)
+            return false;
+
+        if (string.IsNullOrEmpty(remoteIp))
+            return false;
+
+        // Exact IP match
+        if (options.KnownProxies.Contains(remoteIp, StringComparer.OrdinalIgnoreCase))
+            return true;
+
+        // CIDR network match
+        if (System.Net.IPAddress.TryParse(remoteIp, out var ip))
+        {
+            foreach (var cidr in options.KnownNetworks)
+            {
+                if (IsInCidr(ip, cidr))
+                    return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsInCidr(System.Net.IPAddress ip, string cidr)
+    {
+        var parts = cidr.Split('/');
+        if (parts.Length != 2) return false;
+        if (!System.Net.IPAddress.TryParse(parts[0], out var network)) return false;
+        if (!int.TryParse(parts[1], out var prefixLen)) return false;
+
+        var ipBytes = ip.GetAddressBytes();
+        var netBytes = network.GetAddressBytes();
+        if (ipBytes.Length != netBytes.Length) return false;
+
+        int fullBytes = prefixLen / 8;
+        int remainBits = prefixLen % 8;
+
+        for (int i = 0; i < fullBytes; i++)
+            if (ipBytes[i] != netBytes[i]) return false;
+
+        if (remainBits > 0 && fullBytes < ipBytes.Length)
+        {
+            int mask = 0xFF << (8 - remainBits);
+            if ((ipBytes[fullBytes] & mask) != (netBytes[fullBytes] & mask)) return false;
+        }
+
+        return true;
     }
 }

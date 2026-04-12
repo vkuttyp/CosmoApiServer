@@ -154,6 +154,12 @@ Key design decisions:
 - Security Middlewares (CSRF, HSTS, HTTPS Redirection)
 - Model Validation via DataAnnotations (Controllers & Components)
 - **Rate Limiting** — `UseRateLimiting()`, fixed-window per-IP limiter, configurable limit/window/status code, `Retry-After` header, proxy-trust mode (`TrustProxy`) for X-Forwarded-For
+- **Server-Sent Events** — `MapSse()`, `BeginSseAsync()`, `WriteSseAsync()`, `SendSseHeartbeatsAsync()` — first-class SSE with per-event names, IDs, retry hints, and keepalive ping helpers
+- **Content Security Policy** — `UseCsp()`, per-request nonce generation, `{nonce}` placeholder injection into inline scripts, optional report-only mode
+- **Vite Dev Proxy** — `UseViteDevProxy()` forwards `/@vite`, `/_nuxt`, `/@fs` etc. to the Vite dev server so the browser loads the Vue app from the same origin as the API
+- **Vite Dev Server** — `UseViteDevServer()` spawns `npm run dev` as a managed child process and waits for the dev server to be ready before accepting connections
+- **Nuxt Integrated** — `UseNuxtIntegrated()` serves a built Nuxt SPA from `.output/public` with cache tiers, response compression, and SPA fallback in a single call
+- **Reverse Proxy** — `UseReverseProxy()`, multi-route HTTP proxy with path-prefix matching, excluded-prefix pass-through, hop-by-hop header filtering, and WebSocket relay
 
 ---
 
@@ -272,6 +278,128 @@ builder.UseViteFrontend(options =>
 
 ---
 
+## Nuxt Integrated Deployment
+
+`UseNuxtIntegrated()` is a single-call convenience for serving a production Nuxt SPA out of `.output/public`. It composes static file serving with correct cache headers, Brotli/GZip response compression, and SPA history-mode fallback:
+
+```csharp
+builder.UseNuxtIntegrated(
+    outputPath: "frontend/.output/public",
+    configureFallback: o => o.ExcludedPrefixes = ["/api", "/health"]);
+```
+
+Cache tiers applied automatically:
+- HTML files → `Cache-Control: no-cache`
+- Fingerprinted assets (e.g. `main-Bx9kQp12.js`) → `public, max-age=31536000, immutable`
+- Everything else → `public, max-age=3600`
+
+---
+
+## Vite Dev Server
+
+`UseViteDevServer()` registers a managed `IHostedService` that spawns the Vite/Nuxt dev process and blocks server startup until the dev server signals it is ready — no more race-condition `sleep` calls in shell scripts:
+
+```csharp
+builder.UseViteDevServer(o =>
+{
+    o.WorkingDirectory = "frontend";
+    o.Command          = "npm";
+    o.Arguments        = "run dev";
+    o.ReadyPattern     = "Local:";       // string to watch for in stdout/stderr
+    o.ReadyTimeout     = TimeSpan.FromSeconds(45);
+    o.LogPrefix        = "[nuxt]";
+});
+```
+
+The process is killed with `entireProcessTree: true` on server shutdown.
+
+---
+
+## Vite Dev Proxy
+
+`UseViteDevProxy()` forwards Vite/Nuxt module-graph requests (`/@vite`, `/_nuxt`, `/@fs`, `/@id`, `/__nuxt`, `/__vite_ping`) from the browser through the Cosmo backend to the Vite dev server. This means the browser only ever talks to one origin — no CORS configuration needed during development:
+
+```csharp
+builder.UseViteDevProxy(o =>
+{
+    o.DevServerUrl    = "http://127.0.0.1:3000";
+    o.ProxiedPrefixes = ["/@vite", "/@fs", "/@id", "/_nuxt", "/__nuxt", "/__vite_ping"];
+});
+```
+
+---
+
+## Server-Sent Events
+
+`MapSse()` registers an SSE endpoint. The framework sets the `text/event-stream` headers and opens the stream before your handler runs. Extension methods on `HttpResponse` cover the full SSE protocol:
+
+```csharp
+app.MapSse("/api/live/metrics", async ctx =>
+{
+    using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+    while (!ctx.RequestAborted.IsCancellationRequested &&
+           await timer.WaitForNextTickAsync(ctx.RequestAborted))
+    {
+        var json = JsonSerializer.Serialize(new { cpu = 42.1, memory = 68.3 });
+        await ctx.Response.WriteSseAsync(json, eventName: "metric",
+            cancellationToken: ctx.RequestAborted);
+    }
+});
+```
+
+Available helpers:
+
+| Method | Description |
+|---|---|
+| `BeginSseAsync()` | Sets headers, writes `: stream-open` comment |
+| `WriteSseAsync(data, eventName, id, retry)` | Writes a complete SSE event; splits multi-line data |
+| `WriteSseCommentAsync(comment)` | Writes a keepalive `: comment` line |
+| `SendSseHeartbeatsAsync(interval, ct)` | Fires comment pings on an interval; run concurrently |
+
+---
+
+## Content Security Policy
+
+`UseCsp()` generates a cryptographically unique nonce per request and injects it into every inline `<script>` emitted by `ViteFrontendMiddleware`. Use the `{nonce}` placeholder in your directive values:
+
+```csharp
+builder.UseCsp(o =>
+{
+    o.DefaultSrc = ["'self'"];
+    o.ScriptSrc  = ["'self'", "'nonce-{nonce}'"];
+    o.StyleSrc   = ["'self'", "'unsafe-inline'"];
+    o.ConnectSrc = ["'self'"];
+    o.ImgSrc     = ["'self'", "data:"];
+});
+```
+
+The generated nonce is available at `context.Items[CspMiddleware.NonceItemKey]` for custom middleware and renderers. Set `ReportOnly = true` to emit `Content-Security-Policy-Report-Only` instead.
+
+---
+
+## Reverse Proxy
+
+`UseReverseProxy()` is a full HTTP reverse proxy with multi-route support. Each route matches by path prefix, with optional excluded prefixes for pass-through:
+
+```csharp
+builder.UseReverseProxy(o =>
+    o.Routes.Add(new ProxyRoute
+    {
+        PathPrefix       = "/",
+        Destination      = "http://127.0.0.1:3000",   // e.g. nuxt start
+        ExcludedPrefixes = ["/api", "/health"]
+    }));
+```
+
+Features:
+- First-match-wins route selection
+- Hop-by-hop header filtering (`Connection`, `Transfer-Encoding`, `Keep-Alive`, `Upgrade`, `Proxy-*`)
+- Optional `PreserveHost` — rewrite or keep the `Host` header
+- WebSocket relay: bidirectional tunnel via `System.Net.WebSockets.ClientWebSocket`; requires the transport to accept the WebSocket handshake and store the socket in `context.Items["WebSocket"]` before the proxy middleware runs
+- Returns `502` when the upstream is unreachable; `501` when a WebSocket upgrade is requested but the transport socket is missing
+
+---
+
 ## Recommended Starting Point
 
 For new frontend work in this repo:
@@ -280,11 +408,20 @@ For new frontend work in this repo:
 - use `UseViteFrontend()` for production assets and SSR integration
 - use the template's `run-dev.sh` for the local three-process dev loop
 - use `samples/NuxtUiSample` when you want a ready-made Nuxt 4 + Nuxt UI example backed by Cosmo APIs
+- use `samples/LiveOpsSample` for a complete real-time operations dashboard demonstrating SSE, CSP, Vite dev server management, and the integrated deployment pattern
 
 Quick start for the Nuxt UI sample:
 
 ```bash
 cd samples/NuxtUiSample
+npm run dev
+```
+
+Quick start for the LiveOps sample:
+
+```bash
+cd samples/LiveOpsSample
+npm run frontend:install
 npm run dev
 ```
 
@@ -667,6 +804,7 @@ Share values with all descendant components without explicit parameter passing:
 | `Core/` | Core framework library (`CosmoApiServer.Core`) |
 | `templates/CosmoVueServerTemplate` | Preferred Vue + Vite + SSR starter template with `run-dev.sh` |
 | `samples/NuxtUiSample` | Nuxt 4 + Nuxt UI sample app backed by Cosmo JSON APIs |
+| `samples/LiveOpsSample` | Real-time operations dashboard demonstrating SSE, CSP, Vite dev server, Vite dev proxy, Nuxt integrated deployment, and reverse proxy |
 | `samples/CosmoApiBenchHost` | HTTP/1.1 benchmark host (used by `run_benchmark.sh` and `tools/run_windows_benchmark.ps1`) |
 | `samples/AspNetBenchHost` | ASP.NET Core benchmark host for head-to-head comparison |
 | `samples/CosmoKitchenSink` | Kitchen-sink sample covering most backend features |
@@ -676,7 +814,7 @@ Share values with all descendant components without explicit parameter passing:
 | `samples/CosmoBlazorSample` | Blazor-style SSR sample with Razor components |
 | `samples/BlazorSqlSample` | SQL streaming + components sample |
 | `templates/CosmoRazorServerTemplate` | `dotnet new cosmorazor` project template |
-| `tests/CosmoApiServer.Core.Tests` | 320 tests covering routing, middleware, HTTP/3, SignalR, gRPC, Vue hosting, Razor, output cache, antiforgery, and more |
+| `tests/CosmoApiServer.Core.Tests` | 373 tests covering routing, middleware, HTTP/3, SignalR, gRPC, Vue hosting, Razor, output cache, antiforgery, SSE, CSP, Vite dev proxy, and reverse proxy |
 | `tests/ApiServer.Benchmark` | BenchmarkDotNet suite for HTTP/1.1 and HTTP/3 scenarios |
 | `tools/H3Interop/` | .NET HTTP/3 interop validation tool (32-scenario end-to-end client) |
 | `tools/run_windows_benchmark.ps1` | Windows benchmark script (builds, starts hosts, runs all scenarios) |
@@ -1073,6 +1211,17 @@ public sealed class MetricsCollector : IHostedService
 ---
 
 ## Changelog
+
+### v3.1.0
+- **Server-Sent Events** — `MapSse()`, `BeginSseAsync()`, `WriteSseAsync()`, `WriteSseCommentAsync()`, `SendSseHeartbeatsAsync()` — first-class SSE with per-event names, IDs, retry hints, and keepalive ping helpers
+- **Content Security Policy** — `UseCsp()` with per-request nonce generation, `{nonce}` placeholder injection into `ViteFrontendMiddleware` inline scripts, and optional report-only mode
+- **Vite Dev Proxy** — `UseViteDevProxy()` forwards Vite/Nuxt module-graph paths (`/@vite`, `/_nuxt`, `/@fs`, etc.) to the dev server so the browser can use a single origin
+- **Vite Dev Server** — `UseViteDevServer()` manages the frontend dev process as an `IHostedService`, blocking server startup until the ready pattern is matched in output
+- **Nuxt Integrated** — `UseNuxtIntegrated()` composes static file serving with tiered cache headers, Brotli/GZip compression, and SPA fallback in a single builder call
+- **Reverse Proxy** — `UseReverseProxy()` with multi-route HTTP proxy, hop-by-hop header filtering, optional host rewriting, and WebSocket relay
+- **LiveOpsSample** — new `samples/LiveOpsSample` real-time operations dashboard demonstrating all 6 new features with a Nuxt 4 + Nuxt UI frontend and SSE metric/log streams
+- **Bug fixes** — CORS origin spoofing guard, CSRF path bypass removed, `Retry-After` off-by-one fixed, `ForwardedHeaders` trusted-proxy gate, `AntiforgeryMiddleware` Content-Type guard, `SpaFallback` cache-control, `StaticFileMiddleware` MIME types and ETag improvements
+- 373 tests (up from 320).
 
 ### v3.0.3
 - **Vue frontend hosting** — added `ViteFrontendMiddleware` for hosting Vite/Vue/Nuxt applications directly within CosmoApiServer.
