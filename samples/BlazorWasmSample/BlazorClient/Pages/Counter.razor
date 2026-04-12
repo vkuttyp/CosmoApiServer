@@ -1,0 +1,25 @@
+@page "/counter"
+
+<PageTitle>Counter</PageTitle>
+
+<h1>Counter</h1>
+<p class="subtitle">C# running in the browser via WebAssembly — no JavaScript required.</p>
+
+<div class="counter-card">
+    <span class="counter-value">@count</span>
+    <div class="counter-actions">
+        <button @onclick="() => count--" class="btn-secondary" disabled="@(count == 0)">−</button>
+        <button @onclick="() => count++" class="btn-primary">+</button>
+        <button @onclick="() => count = 0" class="btn-ghost">Reset</button>
+    </div>
+</div>
+
+<div class="info-box">
+    <strong>How it works:</strong> this component is pure C#. The <code>@count</code> binding,
+    click handlers, and disabled logic all run in the browser on the .NET WebAssembly runtime.
+    No JavaScript, no API call — just C# compiled to WASM.
+</div>
+
+@code {
+    private int count = 0;
+}

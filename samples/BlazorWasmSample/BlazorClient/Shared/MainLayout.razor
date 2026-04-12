@@ -1,0 +1,14 @@
+@inherits LayoutComponentBase
+
+<div class="layout">
+    <nav class="sidebar">
+        <div class="sidebar-brand">BlazorWasm</div>
+        <NavMenu />
+        <div class="sidebar-footer">
+            Powered by CosmoApiServer
+        </div>
+    </nav>
+    <main class="content">
+        @Body
+    </main>
+</div>

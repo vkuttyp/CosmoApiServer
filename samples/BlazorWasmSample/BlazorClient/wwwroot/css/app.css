@@ -1,0 +1,316 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 14px;
+    color: #1a1a2e;
+    background: #f5f6fa;
+}
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+
+.layout {
+    display: flex;
+    min-height: 100vh;
+}
+
+.sidebar {
+    width: 220px;
+    background: #1a1a2e;
+    color: white;
+    display: flex;
+    flex-direction: column;
+    flex-shrink: 0;
+}
+
+.sidebar-brand {
+    padding: 20px 16px 18px;
+    font-size: 17px;
+    font-weight: 700;
+    letter-spacing: -0.3px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+
+.sidebar-footer {
+    margin-top: auto;
+    padding: 12px 16px;
+    font-size: 11px;
+    color: rgba(255,255,255,0.3);
+}
+
+.content {
+    flex: 1;
+    padding: 36px 40px;
+    max-width: 780px;
+}
+
+/* ── Nav ─────────────────────────────────────────────────────────────────── */
+
+.nav-list {
+    list-style: none;
+    padding: 8px 0;
+}
+
+.nav-list a {
+    display: block;
+    padding: 9px 16px;
+    color: rgba(255,255,255,0.6);
+    text-decoration: none;
+    border-radius: 7px;
+    margin: 2px 8px;
+    font-size: 13.5px;
+    transition: background 0.12s, color 0.12s;
+}
+
+.nav-list a:hover { background: rgba(255,255,255,0.08); color: white; }
+.nav-list a.active { background: rgba(255,255,255,0.13); color: white; }
+
+/* ── Typography ──────────────────────────────────────────────────────────── */
+
+h1 { font-size: 22px; font-weight: 700; color: #1a1a2e; margin-bottom: 4px; }
+
+.subtitle { color: #888; font-size: 13px; margin-bottom: 22px; }
+
+.muted { color: #aaa; font-style: italic; margin-top: 12px; }
+
+/* ── Notes ───────────────────────────────────────────────────────────────── */
+
+.add-row {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 20px;
+}
+
+.text-input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1.5px solid #e2e5ec;
+    border-radius: 9px;
+    font-size: 14px;
+    background: white;
+    outline: none;
+    transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.text-input:focus {
+    border-color: #6c63ff;
+    box-shadow: 0 0 0 3px rgba(108,99,255,0.12);
+}
+
+.note-list {
+    list-style: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.note-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    background: white;
+    padding: 13px 16px;
+    border-radius: 10px;
+    border: 1px solid #eaecf0;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+
+.note-text { flex: 1; line-height: 1.4; }
+
+.note-date { font-size: 12px; color: #b0b5c0; flex-shrink: 0; }
+
+/* ── Counter ─────────────────────────────────────────────────────────────── */
+
+.counter-card {
+    background: white;
+    border: 1px solid #eaecf0;
+    border-radius: 14px;
+    padding: 36px;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.05);
+    margin-bottom: 24px;
+}
+
+.counter-value {
+    font-size: 64px;
+    font-weight: 700;
+    color: #6c63ff;
+    line-height: 1;
+    min-width: 80px;
+    text-align: center;
+}
+
+.counter-actions { display: flex; gap: 10px; }
+
+.info-box {
+    background: #f0effe;
+    border: 1px solid #d6d3fb;
+    border-radius: 10px;
+    padding: 14px 18px;
+    font-size: 13px;
+    line-height: 1.6;
+    color: #4a4580;
+    max-width: 540px;
+}
+
+.info-box code {
+    background: rgba(108,99,255,0.15);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-family: 'SF Mono', Consolas, monospace;
+    font-size: 12px;
+}
+
+/* ── Weather ─────────────────────────────────────────────────────────────── */
+
+.weather-table {
+    width: 100%;
+    border-collapse: collapse;
+    background: white;
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid #eaecf0;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.05);
+}
+
+.weather-table th {
+    background: #f8f9fb;
+    padding: 11px 16px;
+    text-align: left;
+    font-size: 12px;
+    font-weight: 600;
+    color: #888;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid #eaecf0;
+}
+
+.weather-table td {
+    padding: 11px 16px;
+    border-bottom: 1px solid #f0f2f5;
+    font-size: 14px;
+}
+
+.weather-table tr:last-child td { border-bottom: none; }
+
+.weather-table .temp { font-weight: 600; }
+.weather-table .hot  { color: #e53e3e; }
+.weather-table .warm { color: #dd6b20; }
+.weather-table .cold { color: #3182ce; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn-primary {
+    padding: 9px 20px;
+    background: #6c63ff;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.btn-primary:hover:not(:disabled) { background: #5b53e8; }
+.btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-secondary {
+    padding: 9px 20px;
+    background: white;
+    color: #6c63ff;
+    border: 1.5px solid #6c63ff;
+    border-radius: 8px;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.btn-secondary:hover:not(:disabled) { background: #f5f4ff; }
+.btn-secondary:disabled { opacity: 0.45; cursor: not-allowed; }
+
+.btn-ghost {
+    padding: 9px 16px;
+    background: none;
+    color: #999;
+    border: 1.5px solid #e2e5ec;
+    border-radius: 8px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+}
+.btn-ghost:hover { background: #f5f5f5; color: #555; }
+
+.btn-delete {
+    padding: 4px 10px;
+    background: none;
+    border: 1px solid #e2e5ec;
+    border-radius: 6px;
+    color: #c0c4cc;
+    cursor: pointer;
+    font-size: 16px;
+    line-height: 1;
+    transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.btn-delete:hover {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #dc2626;
+}
+
+/* ── Blazor loading splash ───────────────────────────────────────────────── */
+
+.splash {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 16px;
+    color: #888;
+}
+
+.loading-progress {
+    display: block;
+    width: 80px;
+    height: 80px;
+}
+
+.loading-progress circle {
+    fill: none;
+    stroke: #e8e8f0;
+    stroke-width: 5px;
+    transform-origin: 50% 50%;
+    transform: rotate(-90deg);
+}
+
+.loading-progress circle:last-child {
+    stroke: #6c63ff;
+    stroke-dasharray: calc(3.141 * var(--blazor-load-percentage, 0%) * 0.75), 500%;
+    transition: stroke-dasharray 0.05s ease-in-out;
+}
+
+.loading-progress-text::after {
+    content: var(--blazor-load-percentage-text, "Loading");
+    font-size: 13px;
+}
+
+#blazor-error-ui {
+    background: #fff0f0;
+    border: 1px solid #fca5a5;
+    border-radius: 10px;
+    padding: 12px 18px;
+    margin: 12px;
+    display: none;
+    position: fixed;
+    bottom: 16px;
+    left: 16px;
+    right: 16px;
+    z-index: 1000;
+    font-size: 13px;
+}
+
+#blazor-error-ui .reload { color: #dc2626; font-weight: 600; margin: 0 8px; }
+#blazor-error-ui .dismiss { float: right; cursor: pointer; color: #999; }

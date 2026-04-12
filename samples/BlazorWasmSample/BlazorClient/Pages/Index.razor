@@ -1,0 +1,78 @@
+@page "/"
+@inject HttpClient Http
+
+<PageTitle>Notes</PageTitle>
+
+<h1>Notes</h1>
+<p class="subtitle">Stored in the CosmoApiServer backend. C# on both sides.</p>
+
+<div class="add-row">
+    <input @bind="newText"
+           @bind:event="oninput"
+           @onkeydown="OnKeyDown"
+           placeholder="What's on your mind?"
+           class="text-input" />
+    <button @onclick="AddNote"
+            disabled="@(string.IsNullOrWhiteSpace(newText) || saving)"
+            class="btn-primary">
+        @(saving ? "Adding…" : "Add")
+    </button>
+</div>
+
+@if (notes is null)
+{
+    <p class="muted">Loading…</p>
+}
+else if (notes.Length == 0)
+{
+    <p class="muted">No notes yet. Add one above.</p>
+}
+else
+{
+    <ul class="note-list">
+        @foreach (var note in notes)
+        {
+            <li class="note-item">
+                <span class="note-text">@note.Text</span>
+                <time class="note-date">@note.CreatedAt.ToLocalTime().ToString("g")</time>
+                <button @onclick="() => DeleteNote(note.Id)" class="btn-delete" title="Delete">×</button>
+            </li>
+        }
+    </ul>
+}
+
+@code {
+    private NoteDto[]? notes;
+    private string newText = "";
+    private bool saving;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        notes = await Http.GetFromJsonAsync<NoteDto[]>("/api/notes") ?? [];
+    }
+
+    private async Task AddNote()
+    {
+        if (string.IsNullOrWhiteSpace(newText) || saving) return;
+        saving = true;
+        await Http.PostAsJsonAsync("/api/notes", new { Text = newText.Trim() });
+        newText = "";
+        saving = false;
+        await Reload();
+    }
+
+    private async Task DeleteNote(string id)
+    {
+        await Http.DeleteAsync($"/api/notes/{id}");
+        await Reload();
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await AddNote();
+    }
+
+    private record NoteDto(string Id, string Text, DateTime CreatedAt);
+}

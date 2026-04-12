@@ -1,0 +1,55 @@
+@page "/weather"
+@inject HttpClient Http
+
+<PageTitle>Weather</PageTitle>
+
+<h1>Weather Forecast</h1>
+<p class="subtitle">Generated server-side in C# and fetched by the Blazor client.</p>
+
+@if (forecasts is null)
+{
+    <p class="muted">Loading…</p>
+}
+else
+{
+    <table class="weather-table">
+        <thead>
+            <tr>
+                <th>Date</th>
+                <th>°C</th>
+                <th>°F</th>
+                <th>Summary</th>
+            </tr>
+        </thead>
+        <tbody>
+            @foreach (var f in forecasts)
+            {
+                <tr>
+                    <td>@f.Date.ToString("ddd d MMM")</td>
+                    <td class="temp @TempClass(f.TemperatureC)">@f.TemperatureC</td>
+                    <td>@f.TemperatureF</td>
+                    <td>@f.Summary</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <button @onclick="Reload" class="btn-secondary" style="margin-top:16px">Refresh</button>
+}
+
+@code {
+    private ForecastDto[]? forecasts;
+
+    protected override async Task OnInitializedAsync() => await Reload();
+
+    private async Task Reload()
+    {
+        forecasts = null;
+        forecasts = await Http.GetFromJsonAsync<ForecastDto[]>("/api/weather") ?? [];
+    }
+
+    private static string TempClass(int c) =>
+        c >= 30 ? "hot" : c >= 15 ? "warm" : "cold";
+
+    private record ForecastDto(DateOnly Date, int TemperatureC, int TemperatureF, string Summary);
+}

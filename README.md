@@ -321,6 +321,19 @@ builder.UseBlazorWasm(
 
 The SPA fallback returns `index.html` for all routes not matched by the API, enabling Blazor's client-side router.
 
+**Project structure**
+
+Keep the Blazor client project in a subdirectory (e.g. `BlazorClient/`) of the server project. Because `Microsoft.NET.Sdk` includes all `*.cs` files recursively by default, you must exclude the client's source files from the server build:
+
+```xml
+<!-- BlazorWasmSample.csproj -->
+<ItemGroup>
+  <Compile Remove="BlazorClient\**\*.cs" />
+</ItemGroup>
+```
+
+Without this, the server compiler picks up Blazor client code (e.g. `WebAssemblyHostBuilder`) and fails with `CS0234`.
+
 **Co-hosting API + Blazor WASM**
 
 ```csharp
@@ -680,6 +693,16 @@ ctx.MarkAsUnmodified();
 | `samples/NuxtUiSample` | Nuxt 4 + Nuxt UI frontend backed by Cosmo APIs |
 | `samples/LiveOpsSample` | Real-time dashboard: SSE, CSP, Vite dev server, Nuxt integrated deployment |
 | `samples/CosmoBlazorSample` | SSR with Razor components |
+| `samples/BlazorWasmSample` | Blazor WebAssembly co-hosted with a CosmoApiServer API |
+
+### BlazorWasmSample
+
+```bash
+cd samples/BlazorWasmSample
+./run.sh
+```
+
+Publishes the Blazor WASM client to `blazor/wwwroot`, then starts the CosmoApiServer backend on `http://localhost:5050`. Includes Notes (CRUD via `/api/notes`), Counter, and Weather pages.
 
 ### LiveOpsSample
 
@@ -770,6 +793,10 @@ Cloudflare is suitable for frontends that are mostly static or read-heavy withou
 ---
 
 ## Changelog
+
+### v3.2.3
+- `BlazorWasmSample` — new sample: Notes CRUD + Counter + Weather, Blazor WASM co-hosted with CosmoApiServer
+- `UseBlazorWasm` project structure: document `<Compile Remove="BlazorClient\**\*.cs" />` requirement when client lives in a subdirectory of the server project
 
 ### v3.2.2
 - `UseBlazorWasm` — hosts published Blazor WebAssembly apps with pre-compressed `_framework/` file serving and `application/wasm` MIME type
