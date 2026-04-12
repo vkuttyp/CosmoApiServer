@@ -17,7 +17,10 @@
 </template>
 
 <script setup lang="ts">
-const { data } = await useFetch<{ environment: string; region: string }>('/api/status')
+const config = useRuntimeConfig()
+const { data } = await useFetch<{ environment: string; region: string }>('/api/status', {
+  baseURL: config.public.apiBase
+})
 const env    = computed(() => data.value?.environment ?? '—')
 const region = computed(() => data.value?.region ?? '—')
 </script>

@@ -66,7 +66,10 @@
 <script setup lang="ts">
 import type { StatusResponse } from '~/types/liveops'
 
-const { data: status } = await useFetch<StatusResponse>('/api/status')
+const config = useRuntimeConfig()
+const { data: status } = await useFetch<StatusResponse>('/api/status', {
+  baseURL: config.public.apiBase
+})
 const { latest }       = useMetricStream()
 const { entries: logEntries } = useLogStream()
 
