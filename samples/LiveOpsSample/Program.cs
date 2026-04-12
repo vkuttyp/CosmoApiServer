@@ -20,7 +20,7 @@ var builder = CosmoWebApplicationBuilder.Create()
     .UseCors(o =>
     {
         if (isDev) o.AllowAnyOrigin();
-        else o.AllowOrigins(["https://liveops.example.com"]);
+        else o.WithOrigins(["https://liveops.example.com"]);
         o.AllowAnyMethod();
         o.AllowAnyHeader();
     })
@@ -166,7 +166,7 @@ app.MapSse("/api/live/metrics", async ctx =>
             Timestamp: DateTime.UtcNow);
 
         await ctx.Response.WriteSseAsync(
-            System.Text.Json.JsonSerializer.Serialize(snapshot, JsonOptions),
+            System.Text.Json.JsonSerializer.Serialize(snapshot, JsonOptions.Default),
             eventName: "metric",
             cancellationToken: ctx.RequestAborted);
     }
@@ -197,7 +197,7 @@ app.MapSse("/api/live/logs", async ctx =>
 
         var entry = new LogEntry(level, service, message, DateTime.UtcNow);
         await ctx.Response.WriteSseAsync(
-            System.Text.Json.JsonSerializer.Serialize(entry, JsonOptions),
+            System.Text.Json.JsonSerializer.Serialize(entry, JsonOptions.Default),
             eventName: "log",
             cancellationToken: ctx.RequestAborted);
     }
