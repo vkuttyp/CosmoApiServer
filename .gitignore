@@ -3,3 +3,7 @@ obj/
 *.user
 .DS_Store
 .vs/
+node_modules/
+.nuxt/
+.output/
+package-lock.json
