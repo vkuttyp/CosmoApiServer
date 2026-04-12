@@ -708,6 +708,15 @@ Cloudflare is suitable for frontends that are mostly static or read-heavy withou
 
 ## Changelog
 
+### v3.2.0
+- Frontend integration for React + Vite, Angular, Next.js, and SvelteKit
+- `UseStaticFrontend(outputPath)` — generic base for all static SPA deployments
+- `UseAngularFrontend`, `UseNextStaticExport`, `UseSvelteKitStatic` — framework-specific wrappers
+- `UseReactDevProxy`, `UseNextDevProxy`, `UseAngularDevProxy` — pre-configured dev proxies per framework
+- `UseAngularDevServer`, `UseNextDevServer` — pre-configured dev server process management
+- LiveOpsSample: benchmark scripts (`run-benchmark.sh`, `run-nuxt-benchmark.sh`)
+- Documentation rewrite — structured, framework-agnostic
+
 ### v3.1.0
 - Server-Sent Events, Content Security Policy, Vite Dev Proxy, Vite Dev Server, Nuxt Integrated, Reverse Proxy
 - `samples/LiveOpsSample` demonstrating all six features
