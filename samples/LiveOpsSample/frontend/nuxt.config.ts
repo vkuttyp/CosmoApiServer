@@ -8,8 +8,7 @@ export default defineNuxtConfig({
     devProxy: {
       '/api': {
         target: process.env.NUXT_API_BASE || 'http://127.0.0.1:9092',
-        changeOrigin: true,
-        prependPath: false
+        changeOrigin: true
       }
     }
   },

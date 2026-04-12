@@ -17,6 +17,10 @@ public class GlobalExceptionHandlerMiddleware : IMiddleware
         {
             await next(context);
         }
+        catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected — not an error.
+        }
         catch (Exception ex)
         {
             await HandleExceptionAsync(context, ex);
