@@ -51,8 +51,10 @@ class Program
             "AspNetCore"     => "http://127.0.0.1:9103",
             "CosmoRazor"     => "http://127.0.0.1:9003",
             "BlazorSSR"      => "http://127.0.0.1:9004",
-            "LiveOpsSample"  => "http://127.0.0.1:9092",
-            _                => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
+            "LiveOpsSample"          => "http://127.0.0.1:9092",
+            "CosmoNuxtIntegrated"    => "http://127.0.0.1:9092",
+            "NuxtNative"             => "http://127.0.0.1:3001",
+            _                        => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
         };
         useHttp3 = target == "CosmoApiServerHttp3";
 
@@ -107,11 +109,17 @@ class Program
 
         var scenarios = new List<(string name, Func<Task<HttpResponseMessage>> fn)>();
         
-        if (target == "LiveOpsSample")
+        if (target == "LiveOpsSample" || target == "CosmoNuxtIntegrated")
         {
             scenarios.Add(("GET /ping",       () => http.GetAsync("/ping")));
             scenarios.Add(("GET /health",     () => http.GetAsync("/health")));
             scenarios.Add(("GET /api/status", () => http.GetAsync("/api/status")));
+            scenarios.Add(("GET / (SPA shell)", () => http.GetAsync("/")));
+        }
+        else if (target == "NuxtNative")
+        {
+            scenarios.Add(("GET /ping",   () => http.GetAsync("/ping")));
+            scenarios.Add(("GET / (SSR)", () => http.GetAsync("/")));
         }
         else if (target == "CosmoRazor" || target == "BlazorSSR" || target.StartsWith("http"))
         {

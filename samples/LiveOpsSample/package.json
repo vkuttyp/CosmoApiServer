@@ -6,7 +6,9 @@
     "backend:dev": "dotnet run --project LiveOpsSample.csproj",
     "frontend:dev": "npm run dev --prefix frontend",
     "frontend:build": "npm run build:integrated --prefix frontend",
-    "frontend:install": "npm install --prefix frontend"
+    "frontend:install": "npm install --prefix frontend",
+    "benchmark": "bash run-benchmark.sh",
+    "benchmark:nuxt": "bash run-nuxt-benchmark.sh"
   },
   "devDependencies": {}
 }
