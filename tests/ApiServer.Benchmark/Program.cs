@@ -51,6 +51,7 @@ class Program
             "AspNetCore"     => "http://127.0.0.1:9103",
             "CosmoRazor"     => "http://127.0.0.1:9003",
             "BlazorSSR"      => "http://127.0.0.1:9004",
+            "LiveOpsSample"  => "http://127.0.0.1:9092",
             _                => args[0].StartsWith("http") ? args[0] : "http://127.0.0.1:9001"
         };
         useHttp3 = target == "CosmoApiServerHttp3";
@@ -106,7 +107,13 @@ class Program
 
         var scenarios = new List<(string name, Func<Task<HttpResponseMessage>> fn)>();
         
-        if (target == "CosmoRazor" || target == "BlazorSSR" || target.StartsWith("http"))
+        if (target == "LiveOpsSample")
+        {
+            scenarios.Add(("GET /ping",       () => http.GetAsync("/ping")));
+            scenarios.Add(("GET /health",     () => http.GetAsync("/health")));
+            scenarios.Add(("GET /api/status", () => http.GetAsync("/api/status")));
+        }
+        else if (target == "CosmoRazor" || target == "BlazorSSR" || target.StartsWith("http"))
         {
             scenarios.Add(("GET /ping", () => http.GetAsync("/ping")));
             scenarios.Add(("GET /bench (100 rows)", () => http.GetAsync("/bench")));

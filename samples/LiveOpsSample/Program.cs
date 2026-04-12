@@ -70,7 +70,7 @@ if (isDev)
     {
         o.DevServerUrl      = "http://127.0.0.1:3000";
         o.HtmlTemplatePath  = "frontend/app/app.html";
-        o.ExcludedPrefixes  = ["/api", "/health"];
+        o.ExcludedPrefixes  = ["/api", "/health", "/ping"];
     });
 }
 else
@@ -80,7 +80,7 @@ else
     // with correct cache headers, response compression, and SPA fallback.
     builder.UseNuxtIntegrated(
         outputPath: "frontend/.output/public",
-        configureFallback: o => o.ExcludedPrefixes = ["/api", "/health"]);
+        configureFallback: o => o.ExcludedPrefixes = ["/api", "/health", "/ping"]);
 
     // Production SSR alternative (not used here but shown for reference):
     // builder.UseReverseProxy(o =>
@@ -117,6 +117,14 @@ var logPool = new[]
     ("warn",  "api-gateway",            "P99 latency at {ms}ms — above 150ms threshold"),
     ("info",  "analytics-pipeline",     "Compaction run finished, freed {n}MB"),
 };
+
+// ── API: ping (used by benchmark runner) ─────────────────────────────────────
+
+app.MapGet("/ping", ctx =>
+{
+    ctx.Response.WriteText("pong");
+    return ValueTask.CompletedTask;
+});
 
 // ── API: status snapshot ──────────────────────────────────────────────────────
 
