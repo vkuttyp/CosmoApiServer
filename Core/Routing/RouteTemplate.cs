@@ -13,6 +13,7 @@ public sealed class RouteTemplate
 
     private readonly string[] _segments;  // pre-split template segments
     private readonly bool _hasParams;     // fast-path: no params → no dict needed
+    private readonly bool _hasCatchAll;   // last segment is {**name}
 
     public string Template { get; }
     public bool HasParams => _hasParams;
@@ -22,6 +23,7 @@ public sealed class RouteTemplate
         Template = template;
         _segments = template.Trim('/').Split('/', StringSplitOptions.RemoveEmptyEntries);
         _hasParams = Array.Exists(_segments, s => s.StartsWith('{'));
+        _hasCatchAll = _segments.Length > 0 && _segments[^1].StartsWith("{**");
     }
 
     /// <summary>
@@ -34,19 +36,40 @@ public sealed class RouteTemplate
 
         // Count path segments without allocating
         int segCount = CountSegments(span);
-        if (segCount != _segments.Length)
-            return null;
+
+        // Catch-all routes require at least (template segments - 1) path segments;
+        // exact routes require exact count.
+        if (_hasCatchAll)
+        {
+            if (segCount < _segments.Length - 1)
+                return null;
+        }
+        else
+        {
+            if (segCount != _segments.Length)
+                return null;
+        }
 
         Dictionary<string, string>? values = null;
 
         for (int i = 0; i < _segments.Length; i++)
         {
+            var tmpl = _segments[i];
+
+            // Catch-all parameter: consume entire remainder of the path
+            if (tmpl.StartsWith("{**"))
+            {
+                values ??= RouteValuePool.Rent();
+                var key = tmpl[3..^1]; // strip {** and }
+                values[key] = span.Length > 0 ? span.ToString() : string.Empty;
+                break;
+            }
+
             // Advance span to current segment
             int slash = span.IndexOf('/');
             var seg = slash < 0 ? span : span[..slash];
             span = slash < 0 ? ReadOnlySpan<char>.Empty : span[(slash + 1)..];
 
-            var tmpl = _segments[i];
             if (tmpl[0] == '{')
             {
                 // Route parameter — capture value (only borrow from pool when needed)
