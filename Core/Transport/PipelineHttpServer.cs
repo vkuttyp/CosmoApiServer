@@ -139,8 +139,12 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         // Compute Alt-Svc value once; null when HTTP/3 is not enabled.
         string? altSvcValue = enableHttp3 ? $"h3=\":{port}\"; ma=86400" : null;
 
+        // When a separate HTTPS port is configured, the primary (cleartext) listener
+        // should NOT use h2c — HTTP/2 is negotiated via ALPN on the TLS listener only.
+        var cleartextHttp2 = httpsPort > 0 ? false : enableHttp2;
+
         // Accept loop runs in background — fire and forget (bounded by OS)
-        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token);
+        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, cleartextHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token);
 
         // Optional second listener for HTTPS on a separate port (SNI-based cert selection)
         if (httpsPort > 0 && (cert is not null || certificateSelector is not null))
