@@ -1,5 +1,7 @@
+using System.Net.Sockets;
 using System.Net.WebSockets;
 using CosmoApiServer.Core.Http;
+using CosmoApiServer.Core.Transport;
 
 namespace CosmoApiServer.Core.Middleware;
 
@@ -19,6 +21,12 @@ public sealed class ProxyRoute
     /// When false (default), <c>Host</c> is rewritten to the upstream host.
     /// </summary>
     public bool PreserveHost { get; set; } = false;
+
+    /// <summary>
+    /// When true, uses the legacy HttpClient-based forwarder instead of the pipeline-based forwarder.
+    /// Default is false (pipeline-based).
+    /// </summary>
+    public bool UseLegacyHttpClient { get; set; } = false;
 }
 
 public sealed class ReverseProxyOptions
@@ -28,6 +36,10 @@ public sealed class ReverseProxyOptions
 
 /// <summary>
 /// Routes-based reverse proxy supporting both HTTP and WebSocket connections.
+///
+/// Uses pipeline-based zero-copy forwarding by default. The request is written directly
+/// to the upstream socket via PipeWriter, and the response body is spliced from the
+/// upstream PipeReader to the downstream response — no intermediate buffer copies.
 ///
 /// Typical use case — Nuxt SSR production architecture:
 /// <code>
@@ -45,6 +57,9 @@ public sealed class ReverseProxyOptions
 /// </summary>
 public sealed class ReverseProxyMiddleware : IMiddleware
 {
+    private static readonly PipelineHttpForwarder _pipelineForwarder = new();
+
+    // Legacy fallback for routes that opt in to HttpClient
     private static readonly HttpClient _httpClient = new(new HttpClientHandler
     {
         AllowAutoRedirect = false,
@@ -80,12 +95,71 @@ public sealed class ReverseProxyMiddleware : IMiddleware
             return;
         }
 
-        await ProxyHttpAsync(context, route);
+        if (route.UseLegacyHttpClient)
+        {
+            await ProxyHttpLegacyAsync(context, route);
+            return;
+        }
+
+        await ProxyHttpPipelineAsync(context, route);
     }
 
-    // ── HTTP proxy ────────────────────────────────────────────────────────────
+    // ── Pipeline-based HTTP proxy (zero-copy) ─────────────────────────────────
 
-    private static async Task ProxyHttpAsync(HttpContext context, ProxyRoute route)
+    private static async Task ProxyHttpPipelineAsync(HttpContext context, ProxyRoute route)
+    {
+        var destination = route.Destination.TrimEnd('/');
+        var uri = new Uri(destination);
+        var qs = context.Request.QueryString;
+        var pathAndQuery = context.Request.Path +
+                           (string.IsNullOrEmpty(qs) ? "" : "?" + qs.TrimStart('?'));
+
+        Dictionary<string, string>? extraHeaders = null;
+        if (route.PreserveHost && !string.IsNullOrEmpty(context.Request.Host))
+        {
+            extraHeaders = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["Host"] = context.Request.Host
+            };
+        }
+
+        try
+        {
+            await _pipelineForwarder.ForwardAsync(
+                context,
+                uri.Scheme,
+                uri.Host,
+                uri.Port,
+                pathAndQuery,
+                extraHeaders,
+                null,
+                context.RequestAborted);
+        }
+        catch (IOException)
+        {
+            if (!context.Response.IsStarted)
+            {
+                context.Response.StatusCode = 502;
+                context.Response.WriteText($"Upstream '{route.Destination}' is not reachable.");
+            }
+        }
+        catch (SocketException)
+        {
+            if (!context.Response.IsStarted)
+            {
+                context.Response.StatusCode = 502;
+                context.Response.WriteText($"Upstream '{route.Destination}' is not reachable.");
+            }
+        }
+        catch (TaskCanceledException) when (context.RequestAborted.IsCancellationRequested)
+        {
+            // Client disconnected.
+        }
+    }
+
+    // ── Legacy HttpClient-based proxy ─────────────────────────────────────────
+
+    private static async Task ProxyHttpLegacyAsync(HttpContext context, ProxyRoute route)
     {
         var destination = route.Destination.TrimEnd('/');
         var qs          = context.Request.QueryString;
@@ -122,12 +196,28 @@ public sealed class ReverseProxyMiddleware : IMiddleware
             context.Response.StatusCode = (int)response.StatusCode;
 
             foreach (var (name, values) in response.Headers)
-                if (!HopByHop.Contains(name))
-                    context.Response.Headers[name] = string.Join(", ", values);
+            {
+                if (HopByHop.Contains(name)) continue;
+                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var v in values)
+                        context.Response.SetCookieHeaders.Add(v);
+                    continue;
+                }
+                context.Response.Headers[name] = string.Join(", ", values);
+            }
 
             foreach (var (name, values) in response.Content.Headers)
-                if (!HopByHop.Contains(name))
-                    context.Response.Headers[name] = string.Join(", ", values);
+            {
+                if (HopByHop.Contains(name)) continue;
+                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var v in values)
+                        context.Response.SetCookieHeaders.Add(v);
+                    continue;
+                }
+                context.Response.Headers[name] = string.Join(", ", values);
+            }
 
             context.Response.Headers.Remove("Content-Length");
 

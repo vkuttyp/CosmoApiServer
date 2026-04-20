@@ -348,7 +348,8 @@ internal static class HpackEncoder
     ];
 
     /// <summary>Encode response status + headers into a byte[] HEADERS block.</summary>
-    public static byte[] EncodeResponse(int statusCode, IReadOnlyDictionary<string, string> headers)
+    public static byte[] EncodeResponse(int statusCode, IReadOnlyDictionary<string, string> headers,
+        IReadOnlyList<string>? setCookieHeaders = null)
     {
         using var ms = new System.IO.MemoryStream(256);
         // :status
@@ -386,6 +387,18 @@ internal static class HpackEncoder
                 WriteString(ms, name.ToLowerInvariant());
             }
             WriteString(ms, value);
+        }
+
+        // Set-Cookie headers must be emitted as individual entries (RFC 6265 §3)
+        if (setCookieHeaders is { Count: > 0 })
+        {
+            // set-cookie is static table index 55
+            const int setCookieStaticIdx = 55;
+            foreach (var cookie in setCookieHeaders)
+            {
+                ms.WriteByte(0x40 | setCookieStaticIdx); // literal with incremental indexing
+                WriteString(ms, cookie);
+            }
         }
 
         return ms.ToArray();

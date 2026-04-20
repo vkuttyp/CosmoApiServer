@@ -23,7 +23,7 @@ public sealed class HttpRequest
     // Pre-parsed "well-known" headers for zero-dictionary access
     public long ContentLength { get; internal set; }
     public string? ContentType { get; internal set; }
-    public string? Host { get; internal set; }
+    public string? Host { get; set; }
     public string? Authorization { get; internal set; }
 
     // Populated by router after route match

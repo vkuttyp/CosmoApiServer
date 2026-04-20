@@ -17,6 +17,14 @@ public sealed class HttpResponse
     public string ReasonPhrase { get; set; } = "OK";
     public Dictionary<string, string> Headers { get; } = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, string> Trailers { get; } = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// Set-Cookie headers that must be emitted as individual header lines.
+    /// Unlike other headers, Set-Cookie MUST NOT be comma-joined (RFC 6265 §3).
+    /// Proxy middlewares should populate this list instead of joining cookie
+    /// values into <see cref="Headers"/>.
+    /// </summary>
+    public List<string> SetCookieHeaders { get; } = [];
     public HttpContext HttpContext { get; internal set; } = null!;
 
     /// <summary>
@@ -367,6 +375,7 @@ public sealed class HttpResponse
         ReasonPhrase = "OK";
         Headers.Clear();
         Trailers.Clear();
+        SetCookieHeaders.Clear();
         BodyWriter = null;
         StreamingResponseWriter = null;
         _body = null;

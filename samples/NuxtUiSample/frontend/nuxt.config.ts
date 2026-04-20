@@ -1,5 +1,5 @@
 export default defineNuxtConfig({
-  modules: ['@nuxt/ui', '@nuxt/eslint'],
+  modules: ['@nuxt/ui', '@nuxt/eslint', 'nuxt-auth-utils'],
   devtools: { enabled: true },
 
   vite: {

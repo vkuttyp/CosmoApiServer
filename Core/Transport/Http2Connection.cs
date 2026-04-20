@@ -397,7 +397,7 @@ internal sealed class Http2Connection
         if (_altSvcValue is not null && !responseHeaders.ContainsKey("alt-svc"))
             responseHeaders["alt-svc"] = _altSvcValue;
 
-        var headersBlock = HpackEncoder.EncodeResponse(response.StatusCode, responseHeaders);
+        var headersBlock = HpackEncoder.EncodeResponse(response.StatusCode, responseHeaders, response.SetCookieHeaders);
 
         bool hasBody = response.Body.Length > 0;
 

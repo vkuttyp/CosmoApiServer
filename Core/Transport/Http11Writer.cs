@@ -67,6 +67,14 @@ internal static class Http11Writer
             writer.Write(CrLf);
         }
 
+        // Set-Cookie headers must be emitted as individual header lines (RFC 6265 §3).
+        foreach (var cookie in response.SetCookieHeaders)
+        {
+            writer.Write("Set-Cookie: "u8);
+            WriteStringUtf8(writer, cookie);
+            writer.Write(CrLf);
+        }
+
         // Alt-Svc: advertise HTTP/3 endpoint so browsers can upgrade automatically.
         if (altSvcValue is not null && !response.Headers.ContainsKey("Alt-Svc"))
         {

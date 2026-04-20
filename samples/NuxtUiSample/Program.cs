@@ -1,5 +1,9 @@
+using System.Security.Claims;
 using System.Text.Json.Serialization;
+using CosmoApiServer.Core.Auth;
 using CosmoApiServer.Core.Hosting;
+using CosmoApiServer.Core.Http;
+using Microsoft.Extensions.DependencyInjection;
 
 var builder = CosmoWebApplicationBuilder.Create()
     .ListenOn(9091)
@@ -14,7 +18,7 @@ var builder = CosmoWebApplicationBuilder.Create()
         if (!string.IsNullOrWhiteSpace(originsEnv))
         {
             var origins = originsEnv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            options.AllowOrigins(origins);
+            options.AllowedOrigins = origins;
         }
         else
         {
@@ -22,6 +26,14 @@ var builder = CosmoWebApplicationBuilder.Create()
         }
         options.AllowAnyMethod();
         options.AllowAnyHeader();
+    })
+    .UseSession()
+    .UseJwtAuthentication(opts =>
+    {
+        opts.Secret = Environment.GetEnvironmentVariable("JWT_SECRET") ?? "CosmoNuxtSample-DevOnly-Key-32chars!";
+        opts.Issuer = "CosmoNuxtUiSample";
+        opts.Audience = "CosmoNuxtUiSample";
+        opts.ExpiryMinutes = 60;
     });
 
 var app = builder.Build();
@@ -155,6 +167,78 @@ app.MapPost("/api/feedback", ctx =>
     return ValueTask.CompletedTask;
 });
 
+// ── Auth endpoints ───────────────────────────────────────────────────────
+
+// Demo users — replace with a real user store in production
+var users = new Dictionary<string, (string Password, string Role)>(StringComparer.OrdinalIgnoreCase)
+{
+    ["admin"]  = ("admin123",  "Admin"),
+    ["viewer"] = ("viewer123", "Viewer")
+};
+
+app.MapPost("/api/auth/login", ctx =>
+{
+    var body = ctx.Request.ReadJson<LoginRequest>();
+    if (body is null || string.IsNullOrWhiteSpace(body.Username) || string.IsNullOrWhiteSpace(body.Password))
+    {
+        ctx.Response.StatusCode = 400;
+        ctx.Response.WriteJson(new { error = "Username and password are required." });
+        return ValueTask.CompletedTask;
+    }
+
+    if (!users.TryGetValue(body.Username, out var user) || user.Password != body.Password)
+    {
+        ctx.Response.StatusCode = 401;
+        ctx.Response.WriteJson(new { error = "Invalid username or password." });
+        return ValueTask.CompletedTask;
+    }
+
+    // Stamp the session so the backend knows who this session belongs to
+    ctx.Session!.SetString("username", body.Username);
+    ctx.Session!.SetString("role", user.Role);
+
+    // Also return a JWT so the frontend can use Bearer auth for API calls
+    var jwtService = ctx.RequestServices.GetRequiredService<JwtService>();
+    var claims = new[]
+    {
+        new Claim(ClaimTypes.Name, body.Username),
+        new Claim(ClaimTypes.Role, user.Role),
+        new Claim("sub", body.Username)
+    };
+    var token = jwtService.GenerateToken(claims);
+
+    ctx.Response.WriteJson(new
+    {
+        token,
+        tokenType = "Bearer",
+        expiresIn = 3600,
+        user = new { username = body.Username, role = user.Role }
+    });
+    return ValueTask.CompletedTask;
+});
+
+app.MapGet("/api/auth/session", ctx =>
+{
+    var username = ctx.Session?.GetString("username");
+    if (string.IsNullOrEmpty(username))
+    {
+        ctx.Response.StatusCode = 401;
+        ctx.Response.WriteJson(new { authenticated = false });
+        return ValueTask.CompletedTask;
+    }
+
+    var role = ctx.Session!.GetString("role") ?? "Viewer";
+    ctx.Response.WriteJson(new { authenticated = true, user = new { username, role } });
+    return ValueTask.CompletedTask;
+});
+
+app.MapPost("/api/auth/logout", ctx =>
+{
+    ctx.Session?.Clear();
+    ctx.Response.WriteJson(new { success = true });
+    return ValueTask.CompletedTask;
+});
+
 Console.WriteLine("NuxtUiSample backend running on http://127.0.0.1:9091");
 app.Run();
 
@@ -192,3 +276,7 @@ internal sealed record FeedbackRequest(
     [property: JsonPropertyName("message")] string? Message);
 
 internal sealed record FeedbackResponse(string Status, string Message, string Preview);
+
+internal sealed record LoginRequest(
+    [property: JsonPropertyName("username")] string? Username,
+    [property: JsonPropertyName("password")] string? Password);

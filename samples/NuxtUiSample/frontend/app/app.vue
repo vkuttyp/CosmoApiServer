@@ -1,5 +1,13 @@
 <script setup lang="ts">
 import './assets/css/main.css'
+
+const { loggedIn, user, clear: clearSession } = useUserSession()
+
+async function logout() {
+  await $fetch('/api/auth/logout', { method: 'POST' })
+  await clearSession()
+  await navigateTo('/login')
+}
 </script>
 
 <template>
@@ -17,6 +25,14 @@ import './assets/css/main.css'
               <UButton color="neutral" variant="ghost" to="/">Dashboard</UButton>
               <UButton color="neutral" variant="ghost" to="/workspaces">Workspaces</UButton>
             </nav>
+
+            <template v-if="loggedIn">
+              <UBadge color="success" variant="soft">{{ user?.username }} ({{ user?.role }})</UBadge>
+              <UButton color="neutral" variant="soft" size="sm" @click="logout">Sign out</UButton>
+            </template>
+            <template v-else>
+              <UButton color="primary" variant="soft" size="sm" to="/login">Sign in</UButton>
+            </template>
 
             <UBadge color="neutral" variant="subtle">Nuxt UI</UBadge>
             <UBadge color="primary" variant="soft">Cosmo API backend</UBadge>

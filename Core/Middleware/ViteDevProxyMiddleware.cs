@@ -112,12 +112,28 @@ public sealed class ViteDevProxyMiddleware : IMiddleware
 
             // Copy response headers, excluding hop-by-hop.
             foreach (var (name, values) in response.Headers)
-                if (!HopByHop.Contains(name))
-                    context.Response.Headers[name] = string.Join(", ", values);
+            {
+                if (HopByHop.Contains(name)) continue;
+                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var v in values)
+                        context.Response.SetCookieHeaders.Add(v);
+                    continue;
+                }
+                context.Response.Headers[name] = string.Join(", ", values);
+            }
 
             foreach (var (name, values) in response.Content.Headers)
-                if (!HopByHop.Contains(name))
-                    context.Response.Headers[name] = string.Join(", ", values);
+            {
+                if (HopByHop.Contains(name)) continue;
+                if (name.Equals("Set-Cookie", StringComparison.OrdinalIgnoreCase))
+                {
+                    foreach (var v in values)
+                        context.Response.SetCookieHeaders.Add(v);
+                    continue;
+                }
+                context.Response.Headers[name] = string.Join(", ", values);
+            }
 
             // Remove Content-Length so the response writer switches to chunked mode,
             // allowing us to stream without knowing the total size up front.

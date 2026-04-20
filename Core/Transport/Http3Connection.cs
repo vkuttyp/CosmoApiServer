@@ -1108,6 +1108,10 @@ internal static class Http3Connection
             }
         }
 
+        // Set-Cookie headers must be emitted as individual entries (RFC 6265 §3)
+        foreach (var cookie in response.SetCookieHeaders)
+            WriteHeaderField(fieldWriter, "set-cookie", cookie);
+
         long requiredInsertCount = maxAbsoluteIndex >= 0 ? maxAbsoluteIndex + 1 : 0;
         long encodedRic = encoderState.EncodeRequiredInsertCount(requiredInsertCount);
 
@@ -1185,6 +1189,10 @@ internal static class Http3Connection
         WriteHeaderField(writer, ":status", response.StatusCode.ToString());
         foreach (var header in response.Headers)
             WriteHeaderField(writer, header.Key.ToLowerInvariant(), header.Value);
+
+        // Set-Cookie headers must be emitted as individual entries (RFC 6265 §3)
+        foreach (var cookie in response.SetCookieHeaders)
+            WriteHeaderField(writer, "set-cookie", cookie);
 
         return writer.WrittenMemory;
     }
