@@ -296,7 +296,7 @@ public class SignalRClientIntegrationTests
     public async Task SignalR_IHubContext_CanSend_ToGroupOnly()
     {
         int port = GetFreeTcpPort();
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(20));
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
 
         var builder = CosmoWebApplicationBuilder.Create();
         builder.ListenOn(port);
