@@ -143,8 +143,8 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         // should NOT use h2c — HTTP/2 is negotiated via ALPN on the TLS listener only.
         var cleartextHttp2 = httpsPort > 0 ? false : enableHttp2;
 
-        // Accept loop runs in background — fire and forget (bounded by OS)
-        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, cleartextHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token);
+        // Accept loop for cleartext HTTP — never uses TLS even if a cert selector exists
+        _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, cleartextHttp2, connectionTimeoutSeconds, altSvcValue, useTls: cert is not null, _cts.Token);
 
         // Optional second listener for HTTPS on a separate port (SNI-based cert selection)
         if (httpsPort > 0 && (cert is not null || certificateSelector is not null))
@@ -159,7 +159,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             _logger?.LogInformation(httpsMsg);
             if (_logger is null) Console.WriteLine(httpsMsg);
 
-            _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token, _httpsListener);
+            _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, useTls: true, _cts.Token, _httpsListener);
         }
     }
 
@@ -171,6 +171,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         bool enableHttp2,
         int connectionTimeoutSeconds,
         string? altSvcValue,
+        bool useTls,
         CancellationToken ct,
         Socket? overrideListener = null)
     {
@@ -182,8 +183,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             catch (OperationCanceledException) { break; }
             catch { continue; } // transient accept errors
 
-            // Handle each connection independently; don't await (keep accepting)
-            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, ct);
+            _ = HandleConnectionAsync(client, pipeline, services, maxBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, useTls, ct);
         }
     }
 
@@ -225,6 +225,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         bool enableHttp2,
         int connectionTimeoutSeconds,
         string? altSvcValue,
+        bool useTls,
         CancellationToken ct)
     {
         _activeSockets.TryAdd(socket, 0);
@@ -241,7 +242,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         try
         {
-            if (cert is not null || _certSelector is not null)
+            if (useTls)
             {
                 // TLS: negotiate protocol via ALPN
                 var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
