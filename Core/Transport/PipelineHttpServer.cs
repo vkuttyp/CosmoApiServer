@@ -40,6 +40,9 @@ public sealed class PipelineHttpServer : IAsyncDisposable
     private static bool SupportsQuicPlatform() =>
         OperatingSystem.IsLinux() || OperatingSystem.IsMacOS() || OperatingSystem.IsWindows();
 
+    private Socket? _httpsListener;
+    private Func<string?, X509Certificate2?>? _certSelector;
+
     public async Task StartAsync(
         int port,
         RequestDelegate pipeline,
@@ -55,11 +58,14 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         int http3IdleTimeoutSeconds = 30,
         int http3MaxUnidirectionalStreams = 10,
         int http3MaxFieldSectionSize = 16 * 1024,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<string?, X509Certificate2?>? certificateSelector = null,
+        int httpsPort = 0)
     {
         _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer");
         _certPath = certPath;
         _certPassword = certPassword;
+        _certSelector = certificateSelector;
 
 #pragma warning disable SYSLIB0057
         X509Certificate2? cert = certPath is not null
@@ -135,6 +141,22 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         // Accept loop runs in background — fire and forget (bounded by OS)
         _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token);
+
+        // Optional second listener for HTTPS on a separate port (SNI-based cert selection)
+        if (httpsPort > 0 && (cert is not null || certificateSelector is not null))
+        {
+            _httpsListener = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+            _httpsListener.DualMode = true;
+            _httpsListener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+            _httpsListener.Bind(new IPEndPoint(IPAddress.IPv6Any, httpsPort));
+            _httpsListener.Listen(backlog: 512);
+
+            var httpsMsg = $"CosmoApiServer HTTPS listening on https://0.0.0.0:{httpsPort}";
+            _logger?.LogInformation(httpsMsg);
+            if (_logger is null) Console.WriteLine(httpsMsg);
+
+            _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, _cts.Token, _httpsListener);
+        }
     }
 
     private async ValueTask AcceptLoopAsync(
@@ -145,12 +167,14 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         bool enableHttp2,
         int connectionTimeoutSeconds,
         string? altSvcValue,
-        CancellationToken ct)
+        CancellationToken ct,
+        Socket? overrideListener = null)
     {
+        var listener = overrideListener ?? _listener!;
         while (!ct.IsCancellationRequested)
         {
             Socket client;
-            try { client = await _listener!.AcceptAsync(ct); }
+            try { client = await listener.AcceptAsync(ct); }
             catch (OperationCanceledException) { break; }
             catch { continue; } // transient accept errors
 
@@ -213,18 +237,28 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         try
         {
-            if (cert is not null)
+            if (cert is not null || _certSelector is not null)
             {
                 // TLS: negotiate protocol via ALPN
                 var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
                 var sslOptions = new SslServerAuthenticationOptions
                 {
-                    ServerCertificate      = cert,
                     ClientCertificateRequired = false,
                     ApplicationProtocols   = enableHttp2
                         ? [SslApplicationProtocol.Http2, SslApplicationProtocol.Http11]
                         : [SslApplicationProtocol.Http11],
                 };
+
+                if (_certSelector is not null)
+                {
+                    var selector = _certSelector;
+                    sslOptions.ServerCertificateSelectionCallback = (_, hostname) => selector(hostname);
+                }
+                else
+                {
+                    sslOptions.ServerCertificate = cert;
+                }
+
                 await ssl.AuthenticateAsServerAsync(sslOptions, connectionCt);
                 stream = ssl;
 
@@ -318,6 +352,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         await StopAsync();
         _certWatcher?.Dispose();
         _listener?.Dispose();
+        _httpsListener?.Dispose();
         _cts?.Dispose();
     }
 

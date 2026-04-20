@@ -10,6 +10,18 @@ public sealed class ServerOptions
     public string? CertificatePassword { get; set; }
 
     /// <summary>
+    /// Optional SNI callback for selecting a certificate per hostname.
+    /// When set, takes precedence over <see cref="CertificatePath"/>.
+    /// </summary>
+    public Func<string?, System.Security.Cryptography.X509Certificates.X509Certificate2?>? CertificateSelector { get; set; }
+
+    /// <summary>
+    /// When set to a non-zero value, starts a second TLS listener on this port.
+    /// The primary listener on <see cref="Port"/> remains cleartext.
+    /// </summary>
+    public int HttpsPort { get; set; }
+
+    /// <summary>
     /// When true, advertise HTTP/2 (h2) via ALPN alongside HTTP/1.1.
     /// Requires <see cref="EnableTls"/> to be true.
     /// </summary>
@@ -21,8 +33,8 @@ public sealed class ServerOptions
     /// </summary>
     public bool EnableHttp3 { get; set; } = false;
 
-    /// <summary>True when a certificate path has been configured.</summary>
-    public bool EnableTls => CertificatePath is not null;
+    /// <summary>True when a certificate path or SNI selector has been configured.</summary>
+    public bool EnableTls => CertificatePath is not null || CertificateSelector is not null;
 
     /// <summary>
     /// Maximum lifetime of a single HTTP/1.1 connection in seconds.

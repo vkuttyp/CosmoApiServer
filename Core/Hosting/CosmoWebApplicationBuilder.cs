@@ -479,6 +479,18 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseHttps(Func<string?, System.Security.Cryptography.X509Certificates.X509Certificate2?> certificateSelector)
+    {
+        _options.CertificateSelector = certificateSelector;
+        return this;
+    }
+
+    public CosmoWebApplicationBuilder ListenHttpsOn(int port)
+    {
+        _options.HttpsPort = port;
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseHttp2()
     {
         _options.EnableHttp2 = true;

@@ -175,7 +175,9 @@ public sealed class CosmoWebApplication
             _options.Http3IdleTimeoutSeconds,
             _options.Http3MaxUnidirectionalStreams,
             _options.Http3MaxFieldSectionSize,
-            cancellationToken);
+            cancellationToken,
+            _options.CertificateSelector,
+            _options.HttpsPort);
 
         // Wait until cancelled
         var tcs = new TaskCompletionSource();
