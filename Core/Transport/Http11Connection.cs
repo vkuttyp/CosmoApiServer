@@ -103,31 +103,27 @@ internal static class Http11Connection
 
         try
         {
-            // h2c detection: peek the first bytes (non-blocking — use ReadAsync,
-            // not ReadAtLeastAsync, to avoid blocking when the first TCP segment
-            // is smaller than the 24-byte HTTP/2 connection preface)
-            if (enableHttp2)
-            {
-                var result = await reader.ReadAsync(ct);
-                var buf = result.Buffer;
-
-                bool isH2c = buf.Length >= H2cPreface.Length &&
-                             StartsWithPreface(buf);
-
-                reader.AdvanceTo(buf.Start, buf.End); // don't consume — let Http2 or Http11 read it
-
-                if (isH2c)
-                {
-                    await Http2Connection.RunAsync(reader, writer, pipeline, services, ct, altSvcValue);
-                    return null;
-                }
-            }
+            // HTTP/2 over cleartext (h2c) detection is handled inline during
+            // the first HTTP/1.1 read — see the StartsWithPreface check below.
 
             // HTTP/1.1 keep-alive loop
+            bool h2cChecked = !enableHttp2; // skip h2c check when HTTP/2 is disabled
             while (!ct.IsCancellationRequested)
             {
                 var result = await reader.ReadAsync(ct);
                 var buffer = result.Buffer;
+
+                // Inline h2c detection on the first read
+                if (!h2cChecked)
+                {
+                    h2cChecked = true;
+                    if (buffer.Length >= H2cPreface.Length && StartsWithPreface(buffer))
+                    {
+                        reader.AdvanceTo(buffer.Start); // leave all data for Http2Connection
+                        await Http2Connection.RunAsync(reader, writer, pipeline, services, ct, altSvcValue);
+                        return null;
+                    }
+                }
 
                 bool parsed = Http11Parser.TryParse(ref buffer, out var req);
 
