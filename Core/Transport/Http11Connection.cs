@@ -103,10 +103,12 @@ internal static class Http11Connection
 
         try
         {
-            // h2c detection: peek the first bytes
-                if (enableHttp2)
-                {
-                    var result = await reader.ReadAtLeastAsync(H2cPreface.Length, ct);
+            // h2c detection: peek the first bytes (non-blocking — use ReadAsync,
+            // not ReadAtLeastAsync, to avoid blocking when the first TCP segment
+            // is smaller than the 24-byte HTTP/2 connection preface)
+            if (enableHttp2)
+            {
+                var result = await reader.ReadAsync(ct);
                 var buf = result.Buffer;
 
                 bool isH2c = buf.Length >= H2cPreface.Length &&
