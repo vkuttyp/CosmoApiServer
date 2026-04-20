@@ -149,17 +149,26 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         // Optional second listener for HTTPS on a separate port (SNI-based cert selection)
         if (httpsPort > 0 && (cert is not null || certificateSelector is not null))
         {
-            _httpsListener = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
-            _httpsListener.DualMode = true;
-            _httpsListener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
-            _httpsListener.Bind(new IPEndPoint(IPAddress.IPv6Any, httpsPort));
-            _httpsListener.Listen(backlog: 512);
+            try
+            {
+                _httpsListener = new Socket(AddressFamily.InterNetworkV6, SocketType.Stream, ProtocolType.Tcp);
+                _httpsListener.DualMode = true;
+                _httpsListener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
+                _httpsListener.Bind(new IPEndPoint(IPAddress.IPv6Any, httpsPort));
+                _httpsListener.Listen(backlog: 512);
 
-            var httpsMsg = $"CosmoApiServer HTTPS listening on https://0.0.0.0:{httpsPort}";
-            _logger?.LogInformation(httpsMsg);
-            if (_logger is null) Console.WriteLine(httpsMsg);
+                var httpsMsg = $"CosmoApiServer HTTPS listening on https://0.0.0.0:{httpsPort}";
+                _logger?.LogInformation(httpsMsg);
+                if (_logger is null) Console.WriteLine(httpsMsg);
 
-            _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, useTls: true, _cts.Token, _httpsListener);
+                _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, enableHttp2, connectionTimeoutSeconds, altSvcValue, useTls: true, _cts.Token, _httpsListener);
+            }
+            catch (Exception ex)
+            {
+                var errMsg = $"[HTTPS] Failed to start HTTPS listener on port {httpsPort}: {ex.Message}";
+                _logger?.LogError(ex, errMsg);
+                if (_logger is null) Console.Error.WriteLine(errMsg);
+            }
         }
     }
 
@@ -269,13 +278,13 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
                 if (enableHttp2 && ssl.NegotiatedApplicationProtocol == SslApplicationProtocol.Http2)
                 {
-                    await Http2Connection.RunAsync(ssl, pipeline, services, connectionCt, altSvcValue);
+                    await Http2Connection.RunAsync(ssl, pipeline, services, connectionCt, altSvcValue, isHttps: true);
                     return;
                 }
             }
 
             // HTTP/1.1 (with optional h2c upgrade detection inside)
-            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, remoteIp, connectionCt, altSvcValue);
+            await Http11Connection.RunAsync(stream, pipeline, services, maxBodySize, enableHttp2, remoteIp, connectionCt, altSvcValue, isHttps: useTls);
         }
         catch (AuthenticationException ex)
         {

@@ -28,7 +28,8 @@ internal static class Http11Connection
         bool enableHttp2,
         string? remoteIp,
         CancellationToken ct,
-        string? altSvcValue = null)
+        string? altSvcValue = null,
+        bool isHttps = false)
     {
         // Linked CTS lets either side cancel the other when the connection shuts down.
         using var cts = CancellationTokenSource.CreateLinkedTokenSource(ct);
@@ -39,7 +40,7 @@ internal static class Http11Connection
             resumeWriterThreshold: maxBodySize / 2));
 
         var fillTask = FillPipeAsync(stream, pipe.Writer, cts.Token);
-        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token, altSvcValue);
+        var processTask = ProcessAsync(stream, pipe.Reader, pipeline, services, enableHttp2, remoteIp, cts.Token, altSvcValue, isHttps);
 
         // When either side finishes, cancel the other half of the connection.
         await Task.WhenAny(fillTask.AsTask(), processTask.AsTask());
@@ -96,7 +97,8 @@ internal static class Http11Connection
         bool enableHttp2,
         string? remoteIp,
         CancellationToken ct,
-        string? altSvcValue = null)
+        string? altSvcValue = null,
+        bool isHttps = false)
     {
         // Create a PipeWriter for the outbound stream (response side)
         var writer = PipeWriter.Create(stream, new StreamPipeWriterOptions(leaveOpen: true));
@@ -153,6 +155,7 @@ internal static class Http11Connection
                 await PopulateContextAsync(httpContext, req, reader, services, remoteIp, ct);
                 
                 httpContext.Items["__RawStream"] = stream;
+                if (isHttps) httpContext.Items["__IsHttps"] = true;
                 httpContext.Response.BodyWriter = writer;
                 httpContext.Response.AltSvcValue = altSvcValue;
 

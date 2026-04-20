@@ -68,9 +68,10 @@ internal sealed class Http2Connection
         RequestDelegate pipeline,
         IServiceProvider services,
         CancellationToken ct,
-        string? altSvcValue = null)
+        string? altSvcValue = null,
+        bool isHttps = false)
     {
-        var conn = new Http2Connection(reader, writer, pipeline, services, ct, altSvcValue);
+        var conn = new Http2Connection(reader, writer, pipeline, services, ct, altSvcValue, isHttps);
         await conn.RunAsync();
     }
 
@@ -79,19 +80,23 @@ internal sealed class Http2Connection
         RequestDelegate pipeline,
         IServiceProvider services,
         CancellationToken ct,
-        string? altSvcValue = null)
+        string? altSvcValue = null,
+        bool isHttps = false)
     {
         var reader = PipeReader.Create(stream);
         var writer = PipeWriter.Create(stream);
-        await RunAsync(reader, writer, pipeline, services, ct, altSvcValue);
+        await RunAsync(reader, writer, pipeline, services, ct, altSvcValue, isHttps);
     }
 
+    private readonly bool _isHttps;
+
     private Http2Connection(PipeReader reader, PipeWriter writer,
-        RequestDelegate pipeline, IServiceProvider services, CancellationToken ct, string? altSvcValue = null)
+        RequestDelegate pipeline, IServiceProvider services, CancellationToken ct, string? altSvcValue = null, bool isHttps = false)
     {
         _reader = reader; _writer = writer;
         _pipeline = pipeline; _services = services; _ct = ct;
         _altSvcValue = altSvcValue;
+        _isHttps = isHttps;
         _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer.Http2");
     }
 
@@ -366,6 +371,7 @@ internal sealed class Http2Connection
         if (headersDict.TryGetValue("Host", out var host)) ctx.Request.Host = host;
         if (headersDict.TryGetValue("Authorization", out var auth)) ctx.Request.Authorization = auth;
 
+        if (_isHttps) ctx.Items["__IsHttps"] = true;
         ctx.Initialize(_services, _ct);
         var scope = new Http11Connection.LazyScopeProvider(_services);
         ctx._disposeScope = scope;
