@@ -42,6 +42,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
     private Socket? _httpsListener;
     private Func<string?, X509Certificate2?>? _certSelector;
+    private Func<string?, SslStreamCertificateContext?>? _certContextSelector;
 
     public async Task StartAsync(
         int port,
@@ -60,12 +61,14 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         int http3MaxFieldSectionSize = 16 * 1024,
         CancellationToken cancellationToken = default,
         Func<string?, X509Certificate2?>? certificateSelector = null,
-        int httpsPort = 0)
+        int httpsPort = 0,
+        Func<string?, SslStreamCertificateContext?>? certificateContextSelector = null)
     {
         _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer");
         _certPath = certPath;
         _certPassword = certPassword;
         _certSelector = certificateSelector;
+        _certContextSelector = certificateContextSelector;
 
 #pragma warning disable SYSLIB0057
         X509Certificate2? cert = certPath is not null
@@ -96,18 +99,37 @@ public sealed class PipelineHttpServer : IAsyncDisposable
 
         if (enableHttp3)
         {
-            if (cert is null)
-                throw new InvalidOperationException("HTTP/3 requires TLS. Configure UseHttps(...) before UseHttp3().");
+            // Resolve a cert for QUIC from certPath, context selector, cert selector, or fallback
+            if (cert is null && certificateContextSelector is not null)
+                cert = certificateContextSelector(null)?.TargetCertificate;
+            if (cert is null && certificateSelector is not null)
+                cert = certificateSelector(null);
 
-            if (!SupportsQuicPlatform() || !QuicListener.IsSupported || !QuicConnection.IsSupported)
-                throw new PlatformNotSupportedException("HTTP/3 requires runtime QUIC support on this platform.");
+            if (cert is null)
+            {
+                var msg = "HTTP/3 disabled: no TLS certificate available. Falling back to HTTP/2.";
+                _logger?.LogWarning(msg);
+                if (_logger is null) Console.WriteLine($"[warn] {msg}");
+                enableHttp3 = false;
+            }
+            else if (!SupportsQuicPlatform() || !QuicListener.IsSupported || !QuicConnection.IsSupported)
+            {
+                var msg = "HTTP/3 disabled: QUIC not supported (install libmsquic). Falling back to HTTP/2.";
+                _logger?.LogWarning(msg);
+                if (_logger is null) Console.WriteLine($"[warn] {msg}");
+                enableHttp3 = false;
+            }
+        }
+
+        if (enableHttp3)
+        {
 
 #pragma warning disable CA1416
             _quicListener = await QuicListener.ListenAsync(new QuicListenerOptions
             {
                 ApplicationProtocols = [Http3Protocol],
                 ListenBacklog = 512,
-                ListenEndPoint = new IPEndPoint(IPAddress.IPv6Any, port),
+                ListenEndPoint = new IPEndPoint(Socket.OSSupportsIPv6 ? IPAddress.IPv6Any : IPAddress.Any, httpsPort > 0 ? httpsPort : port),
                 ConnectionOptionsCallback = (_, _, callbackCt) =>
                 {
                     var options = new QuicServerConnectionOptions
@@ -130,14 +152,14 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             }, _cts.Token);
 #pragma warning restore CA1416
 
-            var h3Msg = $"CosmoApiServer experimental HTTP/3 listener on https://0.0.0.0:{port}";
+            var h3Msg = $"CosmoApiServer HTTP/3 listener on https://0.0.0.0:{(httpsPort > 0 ? httpsPort : port)} (UDP/QUIC)";
             _logger?.LogInformation(h3Msg);
             if (_logger is null) Console.WriteLine(h3Msg);
             _ = AcceptQuicLoopAsync(pipeline, services, connectionTimeoutSeconds, http3MaxRequestsPerConnection, http3MaxFieldSectionSize, _cts.Token);
         }
 
         // Compute Alt-Svc value once; null when HTTP/3 is not enabled.
-        string? altSvcValue = enableHttp3 ? $"h3=\":{port}\"; ma=86400" : null;
+        string? altSvcValue = enableHttp3 ? $"h3=\":{(httpsPort > 0 ? httpsPort : port)}\"; ma=86400" : null;
 
         // When a separate HTTPS port is configured, the primary (cleartext) listener
         // should NOT use h2c — HTTP/2 is negotiated via ALPN on the TLS listener only.
@@ -147,7 +169,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _ = AcceptLoopAsync(pipeline, services, maxRequestBodySize, cert, cleartextHttp2, connectionTimeoutSeconds, altSvcValue, useTls: cert is not null, _cts.Token);
 
         // Optional second listener for HTTPS on a separate port (SNI-based cert selection)
-        if (httpsPort > 0 && (cert is not null || certificateSelector is not null))
+        if (httpsPort > 0 && (cert is not null || certificateSelector is not null || certificateContextSelector is not null))
         {
             try
             {
@@ -263,7 +285,18 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                         : [SslApplicationProtocol.Http11],
                 };
 
-                if (_certSelector is not null)
+                if (_certContextSelector is not null)
+                {
+                    // Workaround for .NET 10 bug: ServerCertificateSelectionCallback can't use
+                    // PEM-loaded certs. Use ServerCertificateContext only (no callback).
+                    // See: https://github.com/dotnet/runtime/issues/127207
+                    //
+                    // Peek at TLS ClientHello via Socket.Receive(MSG_PEEK) to extract SNI
+                    // without consuming bytes, then select the right SslStreamCertificateContext.
+                    var sni = PeekSniFromSocket(socket);
+                    sslOptions.ServerCertificateContext = _certContextSelector(sni);
+                }
+                else if (_certSelector is not null)
                 {
                     var selector = _certSelector;
                     sslOptions.ServerCertificateSelectionCallback = (_, hostname) => selector(hostname);
@@ -368,6 +401,61 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _listener?.Dispose();
         _httpsListener?.Dispose();
         _cts?.Dispose();
+    }
+
+    /// <summary>
+    /// Peeks at the TLS ClientHello via Socket.Receive(MSG_PEEK) to extract the SNI hostname
+    /// without consuming bytes. Returns null if SNI cannot be extracted.
+    /// </summary>
+    private static string? PeekSniFromSocket(Socket socket)
+    {
+        try
+        {
+            var buf = new byte[4096];
+            var len = socket.Receive(buf, 0, buf.Length, SocketFlags.Peek);
+            if (len < 43) return null; // Too short for a ClientHello
+
+            // TLS record: type(1) + version(2) + length(2) + handshake
+            if (buf[0] != 0x16) return null; // Not a TLS Handshake
+            int recordLen = (buf[3] << 8) | buf[4];
+            if (len < 5 + recordLen) { /* partial, continue with what we have */ }
+
+            // Handshake: type(1) + length(3) + clientVersion(2) + random(32) = offset 43
+            if (buf[5] != 0x01) return null; // Not ClientHello
+            int pos = 43; // skip to session ID
+
+            if (pos >= len) return null;
+            int sessionIdLen = buf[pos]; pos += 1 + sessionIdLen; // skip session ID
+            if (pos + 2 > len) return null;
+            int cipherSuitesLen = (buf[pos] << 8) | buf[pos + 1]; pos += 2 + cipherSuitesLen;
+            if (pos + 1 > len) return null;
+            int compMethodsLen = buf[pos]; pos += 1 + compMethodsLen;
+
+            // Extensions
+            if (pos + 2 > len) return null;
+            int extensionsLen = (buf[pos] << 8) | buf[pos + 1]; pos += 2;
+            int extensionsEnd = pos + extensionsLen;
+
+            while (pos + 4 <= len && pos < extensionsEnd)
+            {
+                int extType = (buf[pos] << 8) | buf[pos + 1];
+                int extLen = (buf[pos + 2] << 8) | buf[pos + 3];
+                pos += 4;
+
+                if (extType == 0x0000) // SNI extension
+                {
+                    if (pos + 5 > len) return null;
+                    // SNI list: listLen(2) + type(1) + nameLen(2) + name
+                    int nameLen = (buf[pos + 3] << 8) | buf[pos + 4];
+                    if (pos + 5 + nameLen > len) return null;
+                    return System.Text.Encoding.ASCII.GetString(buf, pos + 5, nameLen);
+                }
+
+                pos += extLen;
+            }
+        }
+        catch { }
+        return null;
     }
 
     private void SetupCertificateHotReload(string certFilePath)

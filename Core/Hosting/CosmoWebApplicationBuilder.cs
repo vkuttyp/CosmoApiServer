@@ -485,6 +485,12 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    public CosmoWebApplicationBuilder UseHttpsContext(Func<string?, System.Net.Security.SslStreamCertificateContext?> contextSelector)
+    {
+        _options.CertificateContextSelector = contextSelector;
+        return this;
+    }
+
     public CosmoWebApplicationBuilder ListenHttpsOn(int port)
     {
         _options.HttpsPort = port;

@@ -16,6 +16,13 @@ public sealed class ServerOptions
     public Func<string?, System.Security.Cryptography.X509Certificates.X509Certificate2?>? CertificateSelector { get; set; }
 
     /// <summary>
+    /// Optional SNI callback that returns an SslStreamCertificateContext per hostname.
+    /// Workaround for .NET 10 bug where PEM-loaded certs fail in ServerCertificateSelector.
+    /// When set, takes precedence over <see cref="CertificateSelector"/>.
+    /// </summary>
+    public Func<string?, System.Net.Security.SslStreamCertificateContext?>? CertificateContextSelector { get; set; }
+
+    /// <summary>
     /// When set to a non-zero value, starts a second TLS listener on this port.
     /// The primary listener on <see cref="Port"/> remains cleartext.
     /// </summary>
@@ -34,7 +41,7 @@ public sealed class ServerOptions
     public bool EnableHttp3 { get; set; } = false;
 
     /// <summary>True when a certificate path or SNI selector has been configured.</summary>
-    public bool EnableTls => CertificatePath is not null || CertificateSelector is not null;
+    public bool EnableTls => CertificatePath is not null || CertificateSelector is not null || CertificateContextSelector is not null;
 
     /// <summary>
     /// Maximum lifetime of a single HTTP/1.1 connection in seconds.

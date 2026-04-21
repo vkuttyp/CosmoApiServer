@@ -75,6 +75,12 @@ public sealed class CosmoWebApplication
         return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.PATCH, template, handler);
     }
 
+    public RouteHandlerBuilder MapOptions(string template, RequestDelegate handler)
+    {
+        _routeTable.Add(Http.HttpMethod.OPTIONS, template, handler);
+        return new RouteHandlerBuilder(_routeTable, Http.HttpMethod.OPTIONS, template, handler);
+    }
+
     /// <summary>
     /// Maps a Server-Sent Events endpoint. Sets the required SSE headers and delegates
     /// to <paramref name="handler"/> which should call
@@ -177,7 +183,8 @@ public sealed class CosmoWebApplication
             _options.Http3MaxFieldSectionSize,
             cancellationToken,
             _options.CertificateSelector,
-            _options.HttpsPort);
+            _options.HttpsPort,
+            _options.CertificateContextSelector);
 
         // Wait until cancelled
         var tcs = new TaskCompletionSource();

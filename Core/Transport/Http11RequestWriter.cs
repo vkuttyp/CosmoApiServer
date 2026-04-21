@@ -46,6 +46,8 @@ internal static class Http11RequestWriter
                     continue;
                 if (name.Equals("Transfer-Encoding", StringComparison.OrdinalIgnoreCase))
                     continue;
+                if (name.Equals("Content-Length", StringComparison.OrdinalIgnoreCase))
+                    continue;
 
                 WriteAscii(writer, name);
                 writer.Write(HeaderSep);
