@@ -97,15 +97,19 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _logger?.LogInformation(startMsg);
         if (_logger is null) Console.WriteLine(startMsg);
 
+        // QUIC needs a cert; resolve into a separate local so we don't pollute
+        // the cleartext-vs-TLS detection below (the primary `cert` is null when
+        // only an SNI selector is configured, and the cleartext listener uses
+        // `cert is not null` as its TLS gate).
+        X509Certificate2? quicCert = cert;
         if (enableHttp3)
         {
-            // Resolve a cert for QUIC from certPath, context selector, cert selector, or fallback
-            if (cert is null && certificateContextSelector is not null)
-                cert = certificateContextSelector(null)?.TargetCertificate;
-            if (cert is null && certificateSelector is not null)
-                cert = certificateSelector(null);
+            if (quicCert is null && certificateContextSelector is not null)
+                quicCert = certificateContextSelector(null)?.TargetCertificate;
+            if (quicCert is null && certificateSelector is not null)
+                quicCert = certificateSelector(null);
 
-            if (cert is null)
+            if (quicCert is null)
             {
                 var msg = "HTTP/3 disabled: no TLS certificate available. Falling back to HTTP/2.";
                 _logger?.LogWarning(msg);
@@ -118,6 +122,12 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                 _logger?.LogWarning(msg);
                 if (_logger is null) Console.WriteLine($"[warn] {msg}");
                 enableHttp3 = false;
+            }
+            else if (_quicCertContext is null)
+            {
+#pragma warning disable CA1416
+                _quicCertContext = SslStreamCertificateContext.Create(quicCert, additionalCertificates: null);
+#pragma warning restore CA1416
             }
         }
 
