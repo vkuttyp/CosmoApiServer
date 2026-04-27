@@ -374,10 +374,18 @@ public sealed class ReverseProxyMiddleware : IMiddleware
 
             if (excluded) continue;
 
-            if (!string.IsNullOrEmpty(route.OnlyIfHeader)
-                && !context.Request.Headers.ContainsKey(route.OnlyIfHeader))
+            if (!string.IsNullOrEmpty(route.OnlyIfHeader))
             {
-                continue;
+                // Require a non-empty value, not just key presence. SSR layers
+                // that loop back into the same port often clear the gating
+                // header by sending it as an empty string (h3's proxyRequest
+                // does this when we pass `{ 'x-forwarded-for': '' }` to break
+                // the recursion). ContainsKey alone would still match.
+                if (!context.Request.Headers.TryGetValue(route.OnlyIfHeader, out var hv)
+                    || string.IsNullOrEmpty(hv))
+                {
+                    continue;
+                }
             }
 
             return route;
