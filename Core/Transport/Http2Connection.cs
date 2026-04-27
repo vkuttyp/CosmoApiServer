@@ -57,8 +57,17 @@ internal sealed class Http2Connection
     // Active streams: streamId → accumulated headers/data
     private readonly ConcurrentDictionary<int, Http2Stream> _streams = new();
 
+    // Tracks in-flight RunStreamAsync tasks so the connection finally can wait
+    // for them to drain before disposing the stream. Without this the frame
+    // loop sees the client FIN, exits, and the network stream is disposed
+    // while pipeline forwarders are mid-await — the socket stays in CLOSE-WAIT
+    // until the OS GC's it (observed: 100+ stuck connections under retry storms).
+    private readonly ConcurrentDictionary<Task, byte> _streamTasks = new();
+    private readonly CancellationTokenSource _connCts;
+
     // Connection-level flow control (simplified — sends WINDOW_UPDATE proactively)
     private const int InitialWindowSize = 65535;
+    private static readonly TimeSpan StreamDrainTimeout = TimeSpan.FromSeconds(3);
 
     // ── Entry point ───────────────────────────────────────────────────────
 
@@ -94,7 +103,9 @@ internal sealed class Http2Connection
         RequestDelegate pipeline, IServiceProvider services, CancellationToken ct, string? altSvcValue = null, bool isHttps = false)
     {
         _reader = reader; _writer = writer;
-        _pipeline = pipeline; _services = services; _ct = ct;
+        _pipeline = pipeline; _services = services;
+        _connCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        _ct = _connCts.Token;
         _altSvcValue = altSvcValue;
         _isHttps = isHttps;
         _logger = services.GetService<ILoggerFactory>()?.CreateLogger("CosmoApiServer.Http2");
@@ -128,8 +139,29 @@ internal sealed class Http2Connection
         }
         finally
         {
+            // Frame loop is done — either client FIN'd, we hit an error, or _ct
+            // fired. Cancel pending stream pipelines so they unwind instead of
+            // continuing to await upstream I/O on a connection that's about to
+            // be disposed. Then wait briefly for tasks to drain before
+            // completing the pipes; without this we'd leak the inbound socket
+            // into CLOSE-WAIT until the upstream eventually responded.
+            try { _connCts.Cancel(); } catch { }
+
+            var pending = _streamTasks.Keys.ToArray();
+            if (pending.Length > 0)
+            {
+                try
+                {
+                    await Task.WhenAny(
+                        Task.WhenAll(pending),
+                        Task.Delay(StreamDrainTimeout));
+                }
+                catch { }
+            }
+
             await _reader.CompleteAsync();
             await _writer.CompleteAsync();
+            _connCts.Dispose();
         }
     }
 
@@ -253,11 +285,18 @@ internal sealed class Http2Connection
         if (endStream)
         {
             // No body — dispatch immediately
-            _ = RunStreamAsync(stream);
+            TrackStream(RunStreamAsync(stream));
         }
 
         // Send connection WINDOW_UPDATE to allow client to send more data
         await SendWindowUpdateAsync(0, InitialWindowSize);
+    }
+
+    private void TrackStream(Task streamTask)
+    {
+        _streamTasks.TryAdd(streamTask, 0);
+        streamTask.ContinueWith(t => _streamTasks.TryRemove(t, out _),
+            TaskContinuationOptions.ExecuteSynchronously);
     }
 
     private void HandleDataFrame(Http2Frame frame)
@@ -278,7 +317,7 @@ internal sealed class Http2Connection
 
         if (endStream)
         {
-            _ = RunStreamAsync(stream);
+            TrackStream(RunStreamAsync(stream));
         }
     }
 

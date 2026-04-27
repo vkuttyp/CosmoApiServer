@@ -344,6 +344,15 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         finally
         {
             _activeSockets.TryRemove(socket, out _);
+
+            // Send a FIN explicitly before disposing. Without this,
+            // SslStream.DisposeAsync occasionally defers the underlying socket
+            // shutdown when there's pending TLS write state, leaving the kernel
+            // socket in CLOSE-WAIT until the OS times it out. Forcing a Send
+            // shutdown is idempotent and safe — a second close from
+            // stream.DisposeAsync is a no-op.
+            try { socket.Shutdown(SocketShutdown.Both); } catch { }
+
             await stream.DisposeAsync();
         }
     }
