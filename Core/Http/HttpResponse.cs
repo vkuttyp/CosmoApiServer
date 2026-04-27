@@ -309,12 +309,19 @@ public sealed class HttpResponse
     /// <summary>
     /// Starts a chunked streaming response and executes the body writer.
     /// </summary>
-    public async Task WriteStreamingResponseAsync(int statusCode, Func<Stream, Task> bodyWriter, CancellationToken ct = default)
+    /// <param name="flushImmediate">
+    /// When <c>true</c> (default) each <see cref="Stream.FlushAsync"/> call from
+    /// <paramref name="bodyWriter"/> pushes the staged bytes to the socket — the
+    /// behaviour callers expect from a streaming API. Set <c>false</c> to opt into
+    /// pipe-buffer-only flushes (single end-of-body syscall — slightly faster when
+    /// the body is produced fast and per-event delivery doesn't matter).
+    /// </param>
+    public async Task WriteStreamingResponseAsync(int statusCode, Func<Stream, Task> bodyWriter, CancellationToken ct = default, bool flushImmediate = true)
     {
         this.StatusCode = statusCode;
         if (BodyWriter is System.IO.Pipelines.PipeWriter pw)
         {
-            await Http11Writer.WriteStreamingResponseAsync(pw, statusCode, bodyWriter, ct);
+            await Http11Writer.WriteStreamingResponseAsync(pw, statusCode, bodyWriter, ct, altSvcValue: null, flushImmediate: flushImmediate);
             _hasStarted = true;
             _headersWritten = true; // prevents EnsureHeadersWritten from appending duplicate headers
             _transportHandled = true;

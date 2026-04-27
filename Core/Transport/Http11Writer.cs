@@ -131,12 +131,24 @@ internal static class Http11Writer
     /// are coalesced into a single chunk per <see cref="Stream.FlushAsync"/> call,
     /// keeping the connection alive for subsequent requests.
     /// </summary>
+    /// <param name="flushImmediate">
+    /// When <c>true</c> (default) every <see cref="Stream.FlushAsync"/> call from
+    /// <paramref name="bodyWriter"/> immediately writes the staged bytes to the socket —
+    /// the behaviour callers naturally expect from a "streaming" API and what real-time
+    /// scenarios (live logs, NDJSON event feeds, slow per-row producers like a remote
+    /// Postgres cursor) need to make rows visible as they arrive.
+    /// When <c>false</c> intermediate FlushAsync calls only stage chunks into the pipe
+    /// buffer; the socket flush happens once at the end of the body. That trades
+    /// real-time visibility for throughput — useful when the body is produced fast and
+    /// the only goal is amortising syscalls.
+    /// </param>
     public static async Task WriteStreamingResponseAsync(
         PipeWriter writer,
         int statusCode,
         Func<Stream, Task> bodyWriter,
         CancellationToken ct,
-        string? altSvcValue = null)
+        string? altSvcValue = null,
+        bool flushImmediate = true)
     {
         // Response headers — chunked keep-alive to amortise TCP setup across requests.
         writer.Write(Http11Ok);
@@ -152,20 +164,22 @@ internal static class Http11Writer
         }
         writer.Write(CrLf);
 
-        // Stage all writes between FlushAsync calls into a single chunk each.
-        // flushToSocket:false — intermediate FlushAsync calls write chunks into the pipe
-        // buffer only; a single writer.FlushAsync at the end sends everything in one syscall.
-        var chunkStream = new ChunkedBodyStream(writer, flushToSocket: false);
+        // Each FlushAsync from the body writer flushes both pipe and socket when
+        // flushImmediate is true. The default flipped from false → true in this
+        // change: previously every FlushAsync was a no-op syscall-wise and rows
+        // landed in one final burst, which made the API feel non-streaming.
+        var chunkStream = new ChunkedBodyStream(writer, flushToSocket: flushImmediate);
         try
         {
             await bodyWriter(chunkStream);
         }
         finally
         {
-            // Drain any unflushed staged bytes into the pipe buffer (no syscall).
+            // Drain any unflushed staged bytes into the pipe buffer.
             await chunkStream.FlushAsync(ct);
             writer.Write(ChunkTerminator);
-            // Single syscall: all chunks + terminator sent together.
+            // Final syscall: ensures the terminator (and any trailing bytes when
+            // flushImmediate=false) reaches the wire before the connection rests.
             await writer.FlushAsync(ct);
         }
     }
