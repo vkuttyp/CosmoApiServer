@@ -88,6 +88,34 @@ public sealed class CosmoWebApplicationBuilder
         return this;
     }
 
+    /// <summary>
+    /// Registers an inline middleware that runs in pipeline order — i.e. before
+    /// the terminal router that dispatches MapPost/MapGet endpoints. Use this
+    /// when you need a request-time decision (host check, header inspection,
+    /// short-circuit) that must run *before* endpoint matching, since ASP.NET-
+    /// style endpoint routing prefers specific paths over wildcards regardless
+    /// of registration order.
+    /// </summary>
+    /// <example>
+    /// <code>
+    /// builder.Use(async (ctx, next) =>
+    /// {
+    ///     if (ctx.Request.Host == "tenant-a.example.com")
+    ///     {
+    ///         await HandleTenantA(ctx);
+    ///         return;
+    ///     }
+    ///     await next(ctx);
+    /// });
+    /// </code>
+    /// </example>
+    public CosmoWebApplicationBuilder Use(Func<HttpContext, RequestDelegate, ValueTask> middleware)
+    {
+        ArgumentNullException.ThrowIfNull(middleware);
+        _middlewarePipeline.UseInstance(new InlineMiddleware(middleware));
+        return this;
+    }
+
     public CosmoWebApplicationBuilder UseExceptionHandler()
     {
         _middlewarePipeline.UseInstance(new GlobalExceptionHandlerMiddleware());
