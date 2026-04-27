@@ -27,6 +27,19 @@ public sealed class ProxyRoute
     /// Default is false (pipeline-based).
     /// </summary>
     public bool UseLegacyHttpClient { get; set; } = false;
+
+    /// <summary>
+    /// If set, this route only matches when the request carries the named
+    /// header (any value). Lets a single port host BOTH a public-facing
+    /// reverse-proxy and a backend API for an SSR layer that calls back into
+    /// itself: gate the forward route on <c>X-Forwarded-For</c> (cosmoproxy
+    /// adds it; loopback <c>$fetch</c>/HttpClient calls don't), so externally-
+    /// originated requests get forwarded to the SSR upstream while the SSR
+    /// runtime's own backend calls fall through to local endpoint dispatch.
+    /// Without this, the SSR layer's <c>$fetch(baseURL=http://127.0.0.1:port)</c>
+    /// loops back through the reverse-proxy infinitely.
+    /// </summary>
+    public string? OnlyIfHeader { get; set; }
 }
 
 public sealed class ReverseProxyOptions
@@ -82,7 +95,7 @@ public sealed class ReverseProxyMiddleware : IMiddleware
 
     public async ValueTask InvokeAsync(HttpContext context, RequestDelegate next)
     {
-        var route = FindRoute(context.Request.Path);
+        var route = FindRoute(context);
         if (route is null)
         {
             await next(context);
@@ -341,8 +354,9 @@ public sealed class ReverseProxyMiddleware : IMiddleware
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    private ProxyRoute? FindRoute(string path)
+    private ProxyRoute? FindRoute(HttpContext context)
     {
+        var path = context.Request.Path;
         foreach (var route in _routes)
         {
             if (!path.StartsWith(route.PathPrefix, StringComparison.OrdinalIgnoreCase))
@@ -358,7 +372,15 @@ public sealed class ReverseProxyMiddleware : IMiddleware
                 }
             }
 
-            if (!excluded) return route;
+            if (excluded) continue;
+
+            if (!string.IsNullOrEmpty(route.OnlyIfHeader)
+                && !context.Request.Headers.ContainsKey(route.OnlyIfHeader))
+            {
+                continue;
+            }
+
+            return route;
         }
         return null;
     }
