@@ -228,8 +228,12 @@ internal static class Http3Connection
                 stream.Id,
                 httpContext.Request), services, remoteIp, ct);
             bool headOnly = requestHead.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD;
+            // HTTP/3 emits one DATA frame per Stream.WriteAsync naturally, so the
+            // flushImmediate hint is implicit — there's no pipe-buffer-vs-socket
+            // distinction to honour. We accept the parameter for delegate-shape
+            // parity with the HTTP/1.1 writer.
             httpContext.Response.StreamingResponseWriter =
-                (statusCode, bodyWriter, writeCt) => WriteStreamingResponseAsync(stream, httpContext.Response, headOnly, statusCode, bodyWriter, writeCt, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter);
+                (statusCode, bodyWriter, writeCt, _flushImmediate) => WriteStreamingResponseAsync(stream, httpContext.Response, headOnly, statusCode, bodyWriter, writeCt, headerWriter, fieldWriter, encoderInstructionsWriter, encoderState, encoderWriter);
 
             try
             {

@@ -32,7 +32,14 @@ public sealed class HttpResponse
     /// If set, data is written directly to the transport instead of being buffered.
     /// </summary>
     public IBufferWriter<byte>? BodyWriter { get; set; }
-    internal Func<int, Func<Stream, Task>, CancellationToken, Task>? StreamingResponseWriter { get; set; }
+    /// <summary>
+    /// Optional alternate streaming writer installed by non-HTTP/1.1 transports
+    /// (HTTP/2, HTTP/3). Receives the body-writer plus a <c>flushImmediate</c> hint
+    /// describing whether the caller wants per-FlushAsync delivery to the wire.
+    /// Transports that already write per data-frame may safely ignore the hint;
+    /// transports that buffer should honour it.
+    /// </summary>
+    internal Func<int, Func<Stream, Task>, CancellationToken, bool, Task>? StreamingResponseWriter { get; set; }
 
     private byte[]? _body;
     private bool _headersWritten;
@@ -328,14 +335,19 @@ public sealed class HttpResponse
         }
         else if (StreamingResponseWriter is not null)
         {
-            await StreamingResponseWriter(statusCode, bodyWriter, ct);
+            await StreamingResponseWriter(statusCode, bodyWriter, ct, flushImmediate);
             _hasStarted = true;
             _headersWritten = true;
             _transportHandled = true;
         }
         else
         {
-            // Fallback for non-piped writers (e.g. testing)
+            // Fallback for non-piped writers (e.g. tests with TestBufferWriter, or any
+            // transport that hasn't installed a streaming writer). The body is fully
+            // buffered through MemoryStream, so flushImmediate has nothing to flush
+            // against — the test/buffer-only path always behaves as if flushImmediate
+            // were false. Documented here so the parameter's behaviour is consistent
+            // across transports.
             using var ms = new MemoryStream();
             await bodyWriter(ms);
             Write(ms.ToArray());
