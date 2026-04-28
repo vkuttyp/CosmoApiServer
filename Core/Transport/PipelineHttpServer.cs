@@ -273,20 +273,29 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         bool useTls,
         CancellationToken ct)
     {
+        // EVERYTHING that touches `socket` goes inside this try/finally so the
+        // cleanup runs even if early setup (e.g. socket.NoDelay on an
+        // already-disconnected socket, NetworkStream constructor on a faulted
+        // socket, CTS creation under disposed parent) throws. Pre-fix paths
+        // that escaped HandleConnectionAsync via an exception leaked the FD —
+        // _activeSockets still held it but nobody disposed it.
         _activeSockets.TryAdd(socket, 0);
-        socket.NoDelay = true;
-        var remoteIp = (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? "unknown";
-        Stream stream = new NetworkStream(socket, ownsSocket: true);
-
-        // Per-connection timeout — prevents slowloris and idle connection exhaustion
-        using var connectionCts = connectionTimeoutSeconds > 0
-            ? CancellationTokenSource.CreateLinkedTokenSource(ct)
-            : null;
-        connectionCts?.CancelAfter(TimeSpan.FromSeconds(connectionTimeoutSeconds));
-        var connectionCt = connectionCts?.Token ?? ct;
+        Stream? stream = null;
+        CancellationTokenSource? connectionCts = null;
 
         try
         {
+            socket.NoDelay = true;
+            var remoteIp = (socket.RemoteEndPoint as System.Net.IPEndPoint)?.Address.ToString() ?? "unknown";
+            stream = new NetworkStream(socket, ownsSocket: true);
+
+            // Per-connection timeout — prevents slowloris and idle connection exhaustion
+            connectionCts = connectionTimeoutSeconds > 0
+                ? CancellationTokenSource.CreateLinkedTokenSource(ct)
+                : null;
+            connectionCts?.CancelAfter(TimeSpan.FromSeconds(connectionTimeoutSeconds));
+            var connectionCt = connectionCts?.Token ?? ct;
+
             if (useTls)
             {
                 // TLS: negotiate protocol via ALPN
@@ -348,6 +357,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         finally
         {
             _activeSockets.TryRemove(socket, out _);
+            connectionCts?.Dispose();
 
             // Bounded dispose: SslStream.DisposeAsync can hang indefinitely
             // when the underlying TCP is half-closed. Its dispose path writes
@@ -364,19 +374,22 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             // doesn't finish, abandon the close-notify and abortive-close the
             // socket (RST, linger=0) so the kernel reclaims the FD
             // immediately. The peer already FIN'd so it doesn't care that we
-            // skipped the polite close-notify.
-            try
+            // skipped the polite close-notify. If we never even got to wrap
+            // the socket in a stream (an exception escaped during early setup)
+            // the socket itself is still held and must be force-closed here.
+            if (stream is not null)
             {
-                await stream.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+                try
+                {
+                    await stream.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+                }
+                catch
+                {
+                    try { socket.Close(0); } catch { }
+                }
             }
-            catch (TimeoutException)
+            else
             {
-                try { socket.Close(0); } catch { }
-            }
-            catch
-            {
-                // Other dispose exceptions (already-disposed, etc.) — still
-                // make sure the underlying socket is gone.
                 try { socket.Close(0); } catch { }
             }
         }
