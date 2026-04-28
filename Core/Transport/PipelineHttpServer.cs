@@ -90,7 +90,11 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _listener.DualMode = true;  // accept both IPv4 and IPv6
         _listener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
         _listener.Bind(new IPEndPoint(IPAddress.IPv6Any, port));
-        _listener.Listen(backlog: 512);
+        // Listen backlog is capped at kernel net.core.somaxconn (typically 4096
+        // on modern Linux). 4096 raises the headroom before SYNs are silently
+        // dropped under listener-accept latency spikes — observed scenario:
+        // iOS retry storm filling a 512-deep queue and starving new clients.
+        _listener.Listen(backlog: 4096);
 
         var scheme = cert is not null ? "https" : "http";
         var startMsg = $"CosmoApiServer listening on {scheme}://0.0.0.0:{port}";
@@ -187,7 +191,7 @@ public sealed class PipelineHttpServer : IAsyncDisposable
                 _httpsListener.DualMode = true;
                 _httpsListener.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
                 _httpsListener.Bind(new IPEndPoint(IPAddress.IPv6Any, httpsPort));
-                _httpsListener.Listen(backlog: 512);
+                _httpsListener.Listen(backlog: 4096);
 
                 var httpsMsg = $"CosmoApiServer HTTPS listening on https://0.0.0.0:{httpsPort}";
                 _logger?.LogInformation(httpsMsg);
