@@ -349,15 +349,36 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         {
             _activeSockets.TryRemove(socket, out _);
 
-            // Send a FIN explicitly before disposing. Without this,
-            // SslStream.DisposeAsync occasionally defers the underlying socket
-            // shutdown when there's pending TLS write state, leaving the kernel
-            // socket in CLOSE-WAIT until the OS times it out. Forcing a Send
-            // shutdown is idempotent and safe — a second close from
-            // stream.DisposeAsync is a no-op.
-            try { socket.Shutdown(SocketShutdown.Both); } catch { }
-
-            await stream.DisposeAsync();
+            // Bounded dispose: SslStream.DisposeAsync can hang indefinitely
+            // when the underlying TCP is half-closed. Its dispose path writes
+            // a TLS close_notify alert; if the peer has FIN'd and stopped
+            // ACKing (typical for clients that abandon the connection), that
+            // write blocks forever, the await never returns, the
+            // fire-and-forget connection-handler task stays alive, the
+            // _activeSockets entry persists, and the kernel keeps the FD in
+            // CLOSE-WAIT until process death. Symptom: hundreds of CLOSE-WAITs
+            // accumulating slowly and eventually overflowing the listener
+            // accept queue.
+            //
+            // Race the graceful dispose against a hard 3 s budget. If it
+            // doesn't finish, abandon the close-notify and abortive-close the
+            // socket (RST, linger=0) so the kernel reclaims the FD
+            // immediately. The peer already FIN'd so it doesn't care that we
+            // skipped the polite close-notify.
+            try
+            {
+                await stream.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(3));
+            }
+            catch (TimeoutException)
+            {
+                try { socket.Close(0); } catch { }
+            }
+            catch
+            {
+                // Other dispose exceptions (already-disposed, etc.) — still
+                // make sure the underlying socket is gone.
+                try { socket.Close(0); } catch { }
+            }
         }
     }
 
