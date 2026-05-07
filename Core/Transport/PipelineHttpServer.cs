@@ -300,36 +300,51 @@ public sealed class PipelineHttpServer : IAsyncDisposable
             {
                 // TLS: negotiate protocol via ALPN
                 var ssl = new SslStream(stream, leaveInnerStreamOpen: false);
-                var sslOptions = new SslServerAuthenticationOptions
-                {
-                    ClientCertificateRequired = false,
-                    ApplicationProtocols   = enableHttp2
-                        ? [SslApplicationProtocol.Http2, SslApplicationProtocol.Http11]
-                        : [SslApplicationProtocol.Http11],
-                };
+                var alpn = enableHttp2
+                    ? new List<SslApplicationProtocol> { SslApplicationProtocol.Http2, SslApplicationProtocol.Http11 }
+                    : new List<SslApplicationProtocol> { SslApplicationProtocol.Http11 };
 
                 if (_certContextSelector is not null)
                 {
                     // Workaround for .NET 10 bug: ServerCertificateSelectionCallback can't use
-                    // PEM-loaded certs. Use ServerCertificateContext only (no callback).
-                    // See: https://github.com/dotnet/runtime/issues/127207
-                    //
-                    // Peek at TLS ClientHello via Socket.Receive(MSG_PEEK) to extract SNI
-                    // without consuming bytes, then select the right SslStreamCertificateContext.
-                    var sni = PeekSniFromSocket(socket);
-                    sslOptions.ServerCertificateContext = _certContextSelector(sni);
-                }
-                else if (_certSelector is not null)
-                {
-                    var selector = _certSelector;
-                    sslOptions.ServerCertificateSelectionCallback = (_, hostname) => selector(hostname);
+                    // PEM-loaded certs (https://github.com/dotnet/runtime/issues/127207). The
+                    // async ServerOptionsSelectionCallback overload lets us set
+                    // ServerCertificateContext per-handshake and have the runtime parse the
+                    // ClientHello (so SNI extraction respects connectionCt and never blocks
+                    // the thread pool on a TCP half-open with no ClientHello).
+                    var contextSelector = _certContextSelector;
+                    await ssl.AuthenticateAsServerAsync(
+                        optionsCallback: (_, clientHello, _, _) => ValueTask.FromResult(
+                            new SslServerAuthenticationOptions
+                            {
+                                ClientCertificateRequired = false,
+                                ApplicationProtocols = alpn,
+                                ServerCertificateContext = contextSelector(clientHello.ServerName)
+                            }),
+                        state: null,
+                        cancellationToken: connectionCt);
                 }
                 else
                 {
-                    sslOptions.ServerCertificate = cert;
+                    var sslOptions = new SslServerAuthenticationOptions
+                    {
+                        ClientCertificateRequired = false,
+                        ApplicationProtocols = alpn,
+                    };
+
+                    if (_certSelector is not null)
+                    {
+                        var selector = _certSelector;
+                        sslOptions.ServerCertificateSelectionCallback = (_, hostname) => selector(hostname);
+                    }
+                    else
+                    {
+                        sslOptions.ServerCertificate = cert;
+                    }
+
+                    await ssl.AuthenticateAsServerAsync(sslOptions, connectionCt);
                 }
 
-                await ssl.AuthenticateAsServerAsync(sslOptions, connectionCt);
                 stream = ssl;
 
                 if (enableHttp2 && ssl.NegotiatedApplicationProtocol == SslApplicationProtocol.Http2)
@@ -458,61 +473,6 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         _listener?.Dispose();
         _httpsListener?.Dispose();
         _cts?.Dispose();
-    }
-
-    /// <summary>
-    /// Peeks at the TLS ClientHello via Socket.Receive(MSG_PEEK) to extract the SNI hostname
-    /// without consuming bytes. Returns null if SNI cannot be extracted.
-    /// </summary>
-    private static string? PeekSniFromSocket(Socket socket)
-    {
-        try
-        {
-            var buf = new byte[4096];
-            var len = socket.Receive(buf, 0, buf.Length, SocketFlags.Peek);
-            if (len < 43) return null; // Too short for a ClientHello
-
-            // TLS record: type(1) + version(2) + length(2) + handshake
-            if (buf[0] != 0x16) return null; // Not a TLS Handshake
-            int recordLen = (buf[3] << 8) | buf[4];
-            if (len < 5 + recordLen) { /* partial, continue with what we have */ }
-
-            // Handshake: type(1) + length(3) + clientVersion(2) + random(32) = offset 43
-            if (buf[5] != 0x01) return null; // Not ClientHello
-            int pos = 43; // skip to session ID
-
-            if (pos >= len) return null;
-            int sessionIdLen = buf[pos]; pos += 1 + sessionIdLen; // skip session ID
-            if (pos + 2 > len) return null;
-            int cipherSuitesLen = (buf[pos] << 8) | buf[pos + 1]; pos += 2 + cipherSuitesLen;
-            if (pos + 1 > len) return null;
-            int compMethodsLen = buf[pos]; pos += 1 + compMethodsLen;
-
-            // Extensions
-            if (pos + 2 > len) return null;
-            int extensionsLen = (buf[pos] << 8) | buf[pos + 1]; pos += 2;
-            int extensionsEnd = pos + extensionsLen;
-
-            while (pos + 4 <= len && pos < extensionsEnd)
-            {
-                int extType = (buf[pos] << 8) | buf[pos + 1];
-                int extLen = (buf[pos + 2] << 8) | buf[pos + 3];
-                pos += 4;
-
-                if (extType == 0x0000) // SNI extension
-                {
-                    if (pos + 5 > len) return null;
-                    // SNI list: listLen(2) + type(1) + nameLen(2) + name
-                    int nameLen = (buf[pos + 3] << 8) | buf[pos + 4];
-                    if (pos + 5 + nameLen > len) return null;
-                    return System.Text.Encoding.ASCII.GetString(buf, pos + 5, nameLen);
-                }
-
-                pos += extLen;
-            }
-        }
-        catch { }
-        return null;
     }
 
     private void SetupCertificateHotReload(string certFilePath)
