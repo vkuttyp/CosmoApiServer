@@ -130,7 +130,17 @@ internal static class Http11Connection
                 bool parsed = Http11Parser.TryParse(ref buffer, out var req);
 
                 // ── Expect: 100-continue ──────────────────────────────────────
-                if (!parsed && Http11Parser.TryDetectExpect100(result.Buffer))
+                // Send the interim 100 Continue speculatively whenever the
+                // client signals Expect: 100-continue. Without this the
+                // request handler can deadlock: it tries to read the body,
+                // but the client is still waiting for our 100 Continue and
+                // hasn't sent any body bytes yet. The old check only fired
+                // when the parser hadn't yet consumed the headers (`!parsed`);
+                // if the entire request line + headers arrived in one packet
+                // (typical for small AWS S3 PUTs over loopback), parsed flips
+                // to true on the first ReadAsync and we'd silently skip the
+                // 100 Continue. Now we send it on either path.
+                if (Http11Parser.TryDetectExpect100(result.Buffer))
                 {
                     writer.Write(Continue100);
                     await writer.FlushAsync(ct);
