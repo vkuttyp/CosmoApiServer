@@ -75,6 +75,51 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
 
             long requestContentLength = context.Request.ContentLength;
             bool requestChunked = context.Request.IsChunked;
+            byte[]? bufferedBody = null;
+
+            // For chunked inbound requests we buffer the (chunked-decoded)
+            // body in memory and forward as a fixed-length request instead of
+            // re-emitting HTTP chunks. The chunked-to-chunked passthrough is
+            // fragile because we'd have to faithfully replicate inbound
+            // boundaries — and AWS S3 SigV4 streaming uploads layer their own
+            // aws-chunked framing inside the HTTP chunks, expecting the
+            // outermost framing to behave a specific way. Re-chunking can
+            // cause the origin (CosmoS3) to wait indefinitely for body bytes
+            // it thinks are missing. Buffering removes that class of bug.
+            // Cap at 100 MiB so a hostile or runaway upload can't OOM the
+            // proxy; beyond that we leave the body un-forwarded (the origin
+            // will see headers only and respond accordingly).
+            const int BufferedBodyCap = 100 * 1024 * 1024;
+            if (requestChunked && context.Request.BodyStream != Stream.Null)
+            {
+                using var ms = new MemoryStream();
+                var buf = ArrayPool<byte>.Shared.Rent(8192);
+                try
+                {
+                    int read;
+                    while ((read = await context.Request.BodyStream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false)) > 0)
+                    {
+                        if (ms.Length + read > BufferedBodyCap)
+                        {
+                            // Body exceeds cap; drain remaining bytes but discard them
+                            // so the inbound pipe is left in a clean state for keep-alive.
+                            // The origin will see an incomplete body but that's better than
+                            // OOMing the proxy.
+                            while (await context.Request.BodyStream.ReadAsync(buf.AsMemory(0, buf.Length), ct).ConfigureAwait(false) > 0) { }
+                            break;
+                        }
+                        ms.Write(buf, 0, read);
+                    }
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(buf);
+                }
+
+                bufferedBody = ms.ToArray();
+                requestContentLength = bufferedBody.Length;
+                requestChunked = false;
+            }
 
             // Pick the Host header sent to the upstream. Default is the
             // upstream's own host:port (preserves existing behaviour and keeps
@@ -107,14 +152,10 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
                 requestChunked);
 
             // Write request body if present
-            if (requestChunked && context.Request.BodyStream != Stream.Null)
+            if (bufferedBody is { Length: > 0 })
             {
-                // Inbound request used Transfer-Encoding: chunked. The body was
-                // de-chunked into HttpBodyStream; re-chunk it onto the upstream
-                // socket. CopyChunkedBodyAsync flushes per chunk so streaming
-                // uploads (e.g. AWS S3 SigV4 chunked PUTs) progress as they
-                // arrive instead of being buffered to completion.
-                await Http11RequestWriter.CopyChunkedBodyAsync(conn.Writer, context.Request.BodyStream, ct);
+                // Chunked inbound was buffered above; emit as raw bytes with Content-Length.
+                conn.Writer.Write(bufferedBody);
             }
             else if (requestContentLength > 0 && context.Request.BodyReader is not null)
             {
