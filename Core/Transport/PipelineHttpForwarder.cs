@@ -74,6 +74,7 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
             forwardHeaders["Connection"] = "keep-alive";
 
             long requestContentLength = context.Request.ContentLength;
+            bool requestChunked = context.Request.IsChunked;
 
             // Write request to upstream pipe
             Http11RequestWriter.WriteRequest(
@@ -82,10 +83,20 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
                 pathAndQuery,
                 $"{upstreamHost}:{upstreamPort}",
                 forwardHeaders,
-                requestContentLength);
+                requestContentLength,
+                requestChunked);
 
             // Write request body if present
-            if (requestContentLength > 0 && context.Request.BodyReader is not null)
+            if (requestChunked && context.Request.BodyStream != Stream.Null)
+            {
+                // Inbound request used Transfer-Encoding: chunked. The body was
+                // de-chunked into HttpBodyStream; re-chunk it onto the upstream
+                // socket. CopyChunkedBodyAsync flushes per chunk so streaming
+                // uploads (e.g. AWS S3 SigV4 chunked PUTs) progress as they
+                // arrive instead of being buffered to completion.
+                await Http11RequestWriter.CopyChunkedBodyAsync(conn.Writer, context.Request.BodyStream, ct);
+            }
+            else if (requestContentLength > 0 && context.Request.BodyReader is not null)
             {
                 await Http11RequestWriter.CopyBodyAsync(conn.Writer, context.Request.BodyReader, requestContentLength, ct);
             }

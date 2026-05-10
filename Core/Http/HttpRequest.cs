@@ -26,6 +26,9 @@ public sealed class HttpRequest
     public string? Host { get; set; }
     public string? Authorization { get; internal set; }
 
+    /// <summary>True when the request used Transfer-Encoding: chunked (no Content-Length).</summary>
+    public bool IsChunked { get; internal set; }
+
     // Populated by router after route match
     public IReadOnlyDictionary<string, string> RouteValues { get; set; } = new Dictionary<string, string>();
 
@@ -126,6 +129,7 @@ public sealed class HttpRequest
         ContentType = null;
         Host = null;
         Authorization = null;
+        IsChunked = false;
     }
 
     private Dictionary<string, string> ParseCookies()

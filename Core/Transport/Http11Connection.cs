@@ -339,6 +339,7 @@ internal static class Http11Connection
         ctx.Request.ContentType = req.ContentType;
         ctx.Request.Host = req.Host;
         ctx.Request.Authorization = req.Authorization;
+        ctx.Request.IsChunked = req.Chunked;
 
         if (req.ContentLength > 0 || req.Chunked)
         {

@@ -24,7 +24,8 @@ internal static class Http11RequestWriter
         string pathAndQuery,
         string host,
         IReadOnlyDictionary<string, string>? headers,
-        long contentLength)
+        long contentLength,
+        bool chunked = false)
     {
         // Request line: METHOD /path HTTP/1.1\r\n
         WriteAscii(writer, method);
@@ -56,8 +57,14 @@ internal static class Http11RequestWriter
             }
         }
 
-        // Content-Length
-        if (contentLength > 0)
+        // Framing: Transfer-Encoding: chunked when the inbound request was chunked,
+        // otherwise Content-Length when known. We must never emit both — RFC 7230 §3.3.3
+        // rejects messages that carry both framings.
+        if (chunked)
+        {
+            writer.Write("Transfer-Encoding: chunked\r\n"u8);
+        }
+        else if (contentLength > 0)
         {
             writer.Write("Content-Length: "u8);
             WriteLong(writer, contentLength);
@@ -66,6 +73,59 @@ internal static class Http11RequestWriter
 
         // End of headers
         writer.Write(CrLf);
+    }
+
+    /// <summary>
+    /// Re-frame a decoded body stream as HTTP/1.1 chunked encoding on the upstream pipe.
+    /// Each Read from the source becomes one chunk; we flush per-chunk so streaming
+    /// uploads (e.g. AWS S3 SigV4 chunked PUTs) progress to the upstream without
+    /// buffering the whole body.
+    /// </summary>
+    public static async Task CopyChunkedBodyAsync(PipeWriter writer, Stream bodyStream, CancellationToken ct)
+    {
+        byte[] buffer = ArrayPool<byte>.Shared.Rent(8192);
+        try
+        {
+            while (true)
+            {
+                int read = await bodyStream.ReadAsync(buffer.AsMemory(0, buffer.Length), ct);
+                if (read <= 0) break;
+
+                // chunk-size in hex
+                WriteHex(writer, read);
+                writer.Write(CrLf);
+                writer.Write(buffer.AsSpan(0, read));
+                writer.Write(CrLf);
+                await writer.FlushAsync(ct);
+            }
+
+            // last-chunk (size 0) + trailing CRLF (no trailers)
+            writer.Write("0\r\n\r\n"u8);
+        }
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(buffer);
+        }
+    }
+
+    private static void WriteHex(PipeWriter writer, int value)
+    {
+        Span<byte> buf = stackalloc byte[16];
+        int pos = buf.Length;
+        if (value == 0)
+        {
+            buf[--pos] = (byte)'0';
+        }
+        else
+        {
+            while (value > 0)
+            {
+                int nibble = value & 0xF;
+                buf[--pos] = (byte)(nibble < 10 ? '0' + nibble : 'a' + nibble - 10);
+                value >>= 4;
+            }
+        }
+        writer.Write(buf[pos..]);
     }
 
     /// <summary>
