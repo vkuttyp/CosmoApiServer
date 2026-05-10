@@ -76,12 +76,32 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
             long requestContentLength = context.Request.ContentLength;
             bool requestChunked = context.Request.IsChunked;
 
+            // Pick the Host header sent to the upstream. Default is the
+            // upstream's own host:port (preserves existing behaviour and keeps
+            // upstream backends — including HttpListener-style hosts that
+            // bind to a specific prefix — working). Operators who need the
+            // original inbound Host (e.g. S3-compatible upstreams that verify
+            // SigV4 signatures over the Host header) can opt in via
+            // extraRequestHeaders["Host"], populated by the Caddyfile
+            // `header_up Host=<value>` directive. The token "$host" expands
+            // to the original inbound Host header.
+            string forwardedHost = $"{upstreamHost}:{upstreamPort}";
+            if (extraRequestHeaders is not null
+                && extraRequestHeaders.TryGetValue("Host", out var hostOverride)
+                && !string.IsNullOrWhiteSpace(hostOverride))
+            {
+                forwardedHost = hostOverride.Equals("$host", StringComparison.OrdinalIgnoreCase)
+                                && !string.IsNullOrWhiteSpace(context.Request.Host)
+                    ? context.Request.Host!
+                    : hostOverride;
+            }
+
             // Write request to upstream pipe
             Http11RequestWriter.WriteRequest(
                 conn.Writer,
                 context.Request.Method.ToString(),
                 pathAndQuery,
-                $"{upstreamHost}:{upstreamPort}",
+                forwardedHost,
                 forwardHeaders,
                 requestContentLength,
                 requestChunked);
