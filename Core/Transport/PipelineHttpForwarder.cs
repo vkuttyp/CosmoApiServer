@@ -33,6 +33,18 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
     /// directly to the downstream context. The response body is spliced via PipeReader/PipeWriter
     /// with no intermediate buffer copies.
     /// </summary>
+    public Task ForwardAsync(
+        HttpContext context,
+        string upstreamScheme,
+        string upstreamHost,
+        int upstreamPort,
+        string pathAndQuery,
+        IReadOnlyDictionary<string, string>? extraRequestHeaders,
+        IReadOnlyDictionary<string, string>? extraResponseHeaders,
+        CancellationToken ct)
+        => ForwardAsync(context, upstreamScheme, upstreamHost, upstreamPort, pathAndQuery,
+            extraRequestHeaders, extraResponseHeaders, compressionCodec: null, ct);
+
     public async Task ForwardAsync(
         HttpContext context,
         string upstreamScheme,
@@ -41,6 +53,7 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
         string pathAndQuery,
         IReadOnlyDictionary<string, string>? extraRequestHeaders,
         IReadOnlyDictionary<string, string>? extraResponseHeaders,
+        string? compressionCodec,
         CancellationToken ct)
     {
         var poolKey = $"{upstreamHost}:{upstreamPort}";
@@ -209,10 +222,49 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
                 parsedResponse.StatusCode == 204 ||
                 parsedResponse.StatusCode == 304;
 
+            // Optional response compression — gzip only at runtime, opt-in
+            // per-route via `encode gzip`. We compress only when:
+            //   • the upstream didn't already send Content-Encoding
+            //   • the response actually has a body
+            //   • Content-Length is known AND within the 10 MiB cap
+            // (Chunked / unknown-length responses fall through to streaming
+            // splice unchanged — those are rare for the API/JSON workloads
+            // where compression buys the most, and streaming-safe compositing
+            // on top of the existing splice is more complex than v1 needs.)
+            const long CompressionMaxBytes = 10L * 1024 * 1024;
+            bool compress = !responseHasNoBody
+                && !string.IsNullOrEmpty(compressionCodec)
+                && string.Equals(compressionCodec, "gzip", StringComparison.OrdinalIgnoreCase)
+                && !HasResponseHeader(parsedResponse, "Content-Encoding")
+                && parsedResponse.ContentLength is > 0 and <= CompressionMaxBytes;
+
             if (responseHasNoBody)
             {
                 if (parsedResponse.ContentLength >= 0)
                     context.Response.Headers["Content-Length"] = parsedResponse.ContentLength.ToString();
+            }
+            else if (compress)
+            {
+                var raw = await ReadFixedBodyToBufferAsync(conn.Reader, parsedResponse.ContentLength, ct);
+                if (raw is null)
+                {
+                    // Upstream cut off before sending full body — propagate by
+                    // closing the downstream connection rather than corrupting.
+                    context.Response.Headers["Content-Length"] = "0";
+                }
+                else
+                {
+                    using var ms = new MemoryStream();
+                    using (var gz = new System.IO.Compression.GZipStream(ms, System.IO.Compression.CompressionLevel.Fastest, leaveOpen: true))
+                    {
+                        gz.Write(raw, 0, raw.Length);
+                    }
+                    var compressed = ms.ToArray();
+                    context.Response.Headers["Content-Encoding"] = "gzip";
+                    context.Response.Headers["Content-Length"] = compressed.Length.ToString();
+                    context.Response.Headers["Vary"] = "Accept-Encoding";
+                    context.Response.Write(compressed);
+                }
             }
             else if (parsedResponse.Chunked)
             {
@@ -290,6 +342,34 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
     /// <summary>
     /// Splice a fixed-length response body from upstream PipeReader directly into the downstream response.
     /// </summary>
+    private static bool HasResponseHeader(ParsedResponse response, string name)
+    {
+        foreach (var h in response.Headers)
+        {
+            if (h.Name.Equals(name, StringComparison.OrdinalIgnoreCase)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Read exactly contentLength bytes from the upstream reader into a buffer. Used by the compression path which needs a full payload before gzipping.</summary>
+    private static async Task<byte[]?> ReadFixedBodyToBufferAsync(PipeReader reader, long contentLength, CancellationToken ct)
+    {
+        var buffer = new byte[contentLength];
+        long offset = 0;
+        while (offset < contentLength)
+        {
+            var result = await reader.ReadAsync(ct);
+            var seq = result.Buffer;
+            if (seq.IsEmpty && result.IsCompleted) return null;
+
+            var toCopy = (int)Math.Min(seq.Length, contentLength - offset);
+            seq.Slice(0, toCopy).CopyTo(buffer.AsSpan((int)offset));
+            reader.AdvanceTo(seq.GetPosition(toCopy));
+            offset += toCopy;
+        }
+        return buffer;
+    }
+
     private static async Task SpliceFixedBodyAsync(PipeReader reader, HttpResponse response, long contentLength, CancellationToken ct)
     {
         long remaining = contentLength;
