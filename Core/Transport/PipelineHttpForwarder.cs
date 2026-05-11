@@ -196,8 +196,25 @@ public sealed class PipelineHttpForwarder : IAsyncDisposable
                     context.Response.Headers[name] = value;
             }
 
-            // Splice response body: upstream PipeReader → downstream response
-            if (parsedResponse.Chunked)
+            // Splice response body: upstream PipeReader → downstream response.
+            // Per RFC 7230 §3.3.3, responses to HEAD and 1xx/204/304 carry no
+            // message body even when Content-Length or Transfer-Encoding say
+            // otherwise. Without this guard we'd block in SpliceFixedBodyAsync
+            // waiting for N bytes that the upstream will never send, hanging
+            // every HEAD-via-aws-cli call (HeadObject precedes every PUT/GET
+            // in modern AWS SDKs) until the proxy's 30s end-to-end timeout.
+            bool responseHasNoBody =
+                context.Request.Method == CosmoApiServer.Core.Http.HttpMethod.HEAD ||
+                (parsedResponse.StatusCode >= 100 && parsedResponse.StatusCode < 200) ||
+                parsedResponse.StatusCode == 204 ||
+                parsedResponse.StatusCode == 304;
+
+            if (responseHasNoBody)
+            {
+                if (parsedResponse.ContentLength >= 0)
+                    context.Response.Headers["Content-Length"] = parsedResponse.ContentLength.ToString();
+            }
+            else if (parsedResponse.Chunked)
             {
                 await SpliceChunkedBodyAsync(conn.Reader, context.Response, ct);
             }
