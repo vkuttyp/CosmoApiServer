@@ -359,7 +359,13 @@ public sealed class PipelineHttpServer : IAsyncDisposable
         }
         catch (AuthenticationException ex)
         {
-            _logger?.LogWarning(ex, "[TLS] {Message}", ex.Message);
+            // Downgraded to Debug: TLS handshake failures are downstream-of-
+            // environment (client rejected our cert, sent bad TLS framing,
+            // port scanner with broken validator). They're not actionable
+            // from the server side, and one big stack-trace warning per
+            // bad probe drowns the log. Operators who want to investigate
+            // can crank the level for this logger.
+            _logger?.LogDebug(ex, "[TLS] {Message}", ex.Message);
             if (_logger is null) Console.Error.WriteLine($"[TLS] {ex.Message}");
         }
         catch (OperationCanceledException) { }
