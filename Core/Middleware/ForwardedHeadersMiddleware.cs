@@ -45,7 +45,8 @@ public sealed class ForwardedHeadersMiddleware(ForwardedHeadersOptions options) 
         // Only process forwarded headers when the direct connection comes from a
         // trusted proxy. If KnownProxies and KnownNetworks are both empty we skip
         // all processing — callers must explicitly configure trusted proxies.
-        if (!IsTrustedProxy(context.Items["RemoteIpAddress"] as string))
+        context.Items.TryGetValue("RemoteIpAddress", out var remoteIp);
+        if (!IsTrustedProxy(remoteIp as string))
         {
             await next(context);
             return;
